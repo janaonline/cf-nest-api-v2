@@ -56,6 +56,8 @@ interface V3View {
   /** FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) */
   jobId?: string;
   error?: string;
+  /** Digitized by the old flow (no detectedDocTypes): shown as digitized, but contents unknown and can be re-queued */
+  isLegacy?: boolean;
 }
 
 type V3Record = V3View | undefined;
@@ -73,7 +75,11 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.noOfPages': 1,
   'ulbFile.excelUrl': 1,
   'ulbFile.requestId': 1,
+  'ulbFile.createdAt': 1,
 };
+
+/** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
+const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
 
 export interface DigitizationV3Metrics {
   total: number;
@@ -858,7 +864,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     for (const row of rows) {
       if (row.pdfUrl) metrics.withPdf++;
       const record = records.get(row.ulb.toString());
-      metrics[byStatus[record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED]]++;
+      metrics[byStatus[this.displayStatus(record)]]++;
       if (record?.isConsolidated) metrics.consolidated++;
       if (record?.isMismatch) metrics.mismatch++;
       if (row.isDuplicate) metrics.duplicate++;
@@ -868,8 +874,9 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   /** "Single type" and "matches" only make sense once a file has been digitized, so they require that. */
   private matchesFilters(record: V3Record, query: AfsDigitizationV3QueryDto): boolean {
-    const status = record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
-    const isDigitized = status === DigitizationV3Statuses.DIGITIZED;
+    const status = this.displayStatus(record);
+    // consolidated / mismatch are unknown for legacy files, so those filters only match v3-digitized ones
+    const isDigitized = status === DigitizationV3Statuses.DIGITIZED && !record?.isLegacy;
 
     if (query.digitizationV3Status && status !== query.digitizationV3Status) return false;
     if (query.isConsolidated === true && !record?.isConsolidated) return false;
@@ -894,10 +901,18 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     noOfPages?: number;
     excelUrl?: string;
     requestId?: string;
+    createdAt?: Date;
   }): V3Record {
     if (!item) return undefined;
 
     let status = DigitizationV3Statuses.NOT_DIGITIZED;
+    // Legacy = digitized before the cutoff. `createdAt` is set once, so a v3 re-run of an old record keeps its old date:
+    // `detectedDocTypes` (written only by v3) rules those out.
+    const isLegacy =
+      item.digitizationStatus === DigitizationStatuses.DIGITIZED &&
+      !Array.isArray(item.detectedDocTypes) &&
+      !!item.createdAt &&
+      new Date(item.createdAt) < LEGACY_CUTOFF;
     if (item.digitizationStatus === DigitizationStatuses.QUEUED) {
       status =
         item.queue?.status === QueueStatus.PROCESSING
@@ -919,11 +934,22 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       excelUrl: item.excelUrl || undefined,
       jobId: item.requestId || undefined,
       error: item.digitizationMsg,
+      isLegacy: isLegacy || undefined,
     };
   }
 
+  /**
+   * Status shown on the page: like the raw v3 status, except files the old flow digitized count as digitized.
+   * Queueing and the overall counters keep using the raw status (`record.status`), so legacy files stay re-queueable
+   * and the counters are not skewed.
+   */
+  private displayStatus(record: V3Record): DigitizationV3Statuses {
+    if (record?.isLegacy) return DigitizationV3Statuses.DIGITIZED;
+    return record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
+  }
+
   private shapeRow(row: UlbRow, docType: string, record: V3Record) {
-    const excelUrl = record?.status === DigitizationV3Statuses.DIGITIZED ? record.excelUrl : undefined;
+    const excelUrl = this.displayStatus(record) === DigitizationV3Statuses.DIGITIZED ? record?.excelUrl : undefined;
     return {
       _id: row._id,
       ulb: row.ulb,
@@ -942,7 +968,9 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,
       excelUrlSigned: excelUrl ? this.fileTokenService.signFileUrl(excelUrl) : null,
-      digitization: record ?? { status: DigitizationV3Statuses.NOT_DIGITIZED },
+      digitization: record
+        ? { ...record, status: this.displayStatus(record) }
+        : { status: DigitizationV3Statuses.NOT_DIGITIZED },
     };
   }
 }

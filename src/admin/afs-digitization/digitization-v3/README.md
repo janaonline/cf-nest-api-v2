@@ -79,8 +79,10 @@ Rules worth knowing:
 - `unknown` (FastAPI could not identify a page range) is kept in `segments` but is not a type: it does not count as
   present and does not make a file consolidated. A file whose only content is unknown is a mismatch.
 - `data[]` (the old flow's parsed Excel rows) is **not** written. The extraction is read from FastAPI by job id.
-- The page shows a derived status: `not-digitized`, `queued`, `processing`, `digitized`, `failed`. A file the old flow
-  digitized has no `detectedDocTypes`, so it shows as not digitized and can be queued again.
+- The page shows a derived status: `not-digitized`, `queued`, `processing`, `digitized`, `failed`. A file is legacy when it is
+  `digitized`, has no `detectedDocTypes` and `ulbFile.createdAt` is before 1 September 2026 (`LEGACY_CUTOFF`): it shows as `digitized` with `digitization.isLegacy: true` and its old Excel link,
+  but is left out of the consolidated / mismatch filters (contents unknown). Queueing and the `afs_metrics` counters use
+  the raw v3 status, so a legacy file can still be queued again.
 
 Doc type mapping (`afs-digitization-v3.constants.ts`):
 
@@ -259,8 +261,8 @@ redis-cli -u "$REDIS_URL" get appq:afsDigitizationV3:id        # jobs ever added
 
 - Auditor's report is not supported.
 - Only the ULB's PDF (`ulbFile`) is handled, not AFS-uploaded files (`afsFile`).
-- Files digitized by the old flow show as not digitized here. Files digitized before the Excel moved to `S3_BUCKET_CF` have no
-  usable Excel link. Re-queue both.
+- Files digitized by the old flow show as digitized (`isLegacy`) with no contents or flags. Files digitized before the Excel
+  moved to `S3_BUCKET_CF` have no usable Excel link. Re-queue them to get v3 results.
 - The extraction is not stored in Mongo. Anything that needs the table data must read it from FastAPI by job id.
 - The job log is FastAPI's job record, not a step-by-step history.
 
