@@ -56,4 +56,6 @@ export interface AfsDigitizationV3JobData {
   ulbName?: string;
   /** Shared by every file queued in one enqueue-by-filter call; sent to FastAPI as `batch_id` */
   batchId?: string;
+  /** Optional correlation id sent to FastAPI as `request_id`; generated at submit time when absent */
+  requestId?: string;
 }

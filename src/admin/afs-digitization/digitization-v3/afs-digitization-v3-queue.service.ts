@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
 import { Job, UnrecoverableError } from 'bullmq';
 import FormData from 'form-data';
+import { randomUUID } from 'crypto';
 import { setTimeout as sleep } from 'timers/promises';
 import { firstValueFrom } from 'rxjs';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -236,6 +237,13 @@ export class AfsDigitizationV3QueueService {
     form.append('doc_type', fastApiDocType);
     form.append('source', '15thfc');
     if (data.batchId) form.append('batch_id', data.batchId);
+    // Correlation id: lets a FastAPI job be traced back to this Nest call in both services' logs.
+    // Format matches the legacy digitization queues, e.g. req-20261026-2505d8.
+    const requestId =
+      data.requestId ||
+      `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${randomUUID().substring(0, 6)}`;
+    form.append('request_id', requestId);
+    this.logger.log(`Submitting ${data.pdfUrl} to FastAPI, requestId: ${requestId}`);
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
