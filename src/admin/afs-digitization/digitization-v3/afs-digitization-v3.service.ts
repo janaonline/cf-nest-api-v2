@@ -380,9 +380,13 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * Saves the FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) as soon as FastAPI accepts the job,
    * so a running or failed job can still be traced in FastAPI.
    */
-  async markSubmitted(data: AfsDigitizationV3JobData, afsDigitizationJobId: string) {
+  async markSubmitted(data: AfsDigitizationV3JobData, afsDigitizationJobId: string, version?: string) {
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
-      $set: { 'ulbFile.requestId': afsDigitizationJobId },
+      $set: {
+        'ulbFile.requestId': afsDigitizationJobId,
+        // Pipeline version FastAPI stamped on the job (e.g. "v3")
+        ...(version && { 'ulbFile.version': version }),
+      },
     });
   }
 

@@ -35,6 +35,8 @@ interface FastApiDocumentClassification {
 
 interface FastApiJobCreated {
   job_id: string;
+  /** Pipeline version FastAPI stamped on the job, e.g. "v3" */
+  version?: string | null;
   status: string;
 }
 
@@ -123,8 +125,8 @@ export class AfsDigitizationV3QueueService {
       const dryRunDelayMs = this.dryRunDelayMs();
       if (dryRunDelayMs > 0) await this.simulateDryRun(dryRunDelayMs);
 
-      const afsDigitizationJobId = await this.submit(data);
-      await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId);
+      const { jobId: afsDigitizationJobId, version } = await this.submit(data);
+      await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId, version);
       this.logger.log(`AFS digitization v3 job ${job.id} submitted to FastAPI as ${afsDigitizationJobId}`);
       await this.waitForCompletion(afsDigitizationJobId);
       const result = await this.fetchResult(afsDigitizationJobId);
@@ -227,7 +229,7 @@ export class AfsDigitizationV3QueueService {
     return Number(this.config.get('AFS_DIGITIZATION_V3_TIMEOUT_MS')) || DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
-  private async submit(data: AfsDigitizationV3JobData): Promise<string> {
+  private async submit(data: AfsDigitizationV3JobData): Promise<{ jobId: string; version?: string }> {
     const fastApiDocType = NEST_TO_FASTAPI_DOC_TYPE[data.docType];
     if (!fastApiDocType) throw new UnrecoverableError(`Unsupported docType ${data.docType}`);
 
@@ -261,7 +263,7 @@ export class AfsDigitizationV3QueueService {
       ),
     );
     if (!created?.job_id) throw new Error('FastAPI did not return a job_id');
-    return created.job_id;
+    return { jobId: created.job_id, version: created.version ?? undefined };
   }
 
   private async waitForCompletion(afsDigitizationJobId: string): Promise<void> {
