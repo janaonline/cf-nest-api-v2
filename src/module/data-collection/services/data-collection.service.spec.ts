@@ -1607,6 +1607,8 @@ describe('DataCollectionService', () => {
       expect(arg['lineItemCount']).toBe(1);
       expectNoRemovedAuditFields(arg);
       expect(arg).not.toHaveProperty('lineItems');
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
     });
 
     it('calls logModified on successful update', async () => {
@@ -1635,6 +1637,7 @@ describe('DataCollectionService', () => {
           templateVersion: '2026.1',
           lineItemCount: 1,
           changedLineItemCodes: ['110'],
+          changedLineItems: [{ code: '110', oldValue: null, newValue: 500 }],
           validationStatus: 'VALID',
         }),
       );
@@ -1658,6 +1661,50 @@ describe('DataCollectionService', () => {
       await service.update(basePayload as never, stateClient);
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg['changedLineItemCodes']).toContain('110');
+      expect(arg['changedLineItems']).toEqual([{ code: '110', oldValue: 999, newValue: 500 }]);
+    });
+
+    it('changedLineItems keeps 0 as a real oldValue', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([
+          ['110', 0],
+          ['120', 1],
+          ['210', 1],
+        ]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      await service.update(basePayload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItems']).toEqual([{ code: '110', oldValue: 0, newValue: 500 }]);
+    });
+
+    it('changedLineItems lists changed and new codes, skips unchanged ones', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([
+          ['110', 999],
+          ['120', 1],
+          ['210', 1],
+        ]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      const payload = { ...basePayload, lineItems: { '110': 500, '120': 1, '130': 50 } };
+      await service.update(payload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItemCodes']).toEqual(['110', '130']);
+      expect(arg['changedLineItems']).toEqual([
+        { code: '110', oldValue: 999, newValue: 500 },
+        { code: '130', oldValue: null, newValue: 50 },
+      ]);
     });
 
     it('changedLineItemCodes omits keys whose values are unchanged', async () => {
@@ -1677,6 +1724,7 @@ describe('DataCollectionService', () => {
       await service.update(basePayload as never, stateClient);
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg['changedLineItemCodes']).toEqual([]);
+      expect(arg['changedLineItems']).toEqual([]);
     });
 
     it('does not pass full merged lineItems to logModified', async () => {

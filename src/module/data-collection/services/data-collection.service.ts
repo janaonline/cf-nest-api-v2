@@ -37,6 +37,7 @@ import {
   type ExternalDataCollectionResponse,
   type SubmittedLineItems,
 } from '../types/data-collection.types';
+import type { ChangedLineItem } from '../types/data-collection-audit-log.types';
 import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
@@ -337,8 +338,6 @@ export class DataCollectionService {
 
     const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
 
-    const changedLineItemCodes = this.getChangedLineItemCodes(existing.lineItems, payloadLineItems);
-
     const mergedLineItems: Record<string, unknown> = Object.fromEntries(existing.lineItems) as Record<string, unknown>;
     for (const [key, value] of Object.entries(payloadLineItems)) {
       mergedLineItems[key] = value;
@@ -378,6 +377,10 @@ export class DataCollectionService {
       });
     }
 
+    // Must run before existing.lineItems is overwritten
+    const changedLineItems = this.getChangedLineItems(existing.lineItems, payloadLineItems, result.submittedLineItems);
+    const changedLineItemCodes = changedLineItems.map((item) => item.code);
+
     existing.templateVersion = templateVersion;
     existing.lineItems = new Map(Object.entries(result.submittedLineItems));
     existing.computed = result.computed;
@@ -394,6 +397,7 @@ export class DataCollectionService {
         yearId,
         templateVersion,
         changedLineItemCodes,
+        changedLineItems,
         lineItemCount,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -1141,8 +1145,19 @@ export class DataCollectionService {
     return Object.keys(lineItems).length;
   }
 
-  private getChangedLineItemCodes(existing: Map<string, number>, incoming: SubmittedLineItems): string[] {
-    return Object.keys(incoming).filter((key) => existing.get(key) !== incoming[key]);
+  /** Incoming codes whose value differs from the saved record; saved holds the validated numbers. */
+  private getChangedLineItems(
+    existing: Map<string, number>,
+    incoming: SubmittedLineItems,
+    saved: Record<string, number>,
+  ): ChangedLineItem[] {
+    const changed: ChangedLineItem[] = [];
+    for (const code of Object.keys(incoming)) {
+      const oldValue = existing.get(code);
+      if (oldValue === incoming[code]) continue;
+      changed.push({ code, oldValue: oldValue ?? null, newValue: saved[code] });
+    }
+    return changed;
   }
 
   private createErrorResponse(error: unknown, functionName: string): never {

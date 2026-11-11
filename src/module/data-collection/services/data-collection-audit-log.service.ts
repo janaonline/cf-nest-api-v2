@@ -44,7 +44,7 @@ export class DataCollectionAuditLogService {
 
   /**
    * Records a successful data collection modification.
-   * Stores changed line item code summary.
+   * Stores changed line item codes with their old and new values.
    */
   async logModified(data: LogDataCollectionModifiedData): Promise<void> {
     await this.write({
@@ -58,6 +58,7 @@ export class DataCollectionAuditLogService {
       templateVersion: data.templateVersion,
       validationStatus: data.validationStatus,
       changedLineItemCodes: data.changedLineItemCodes,
+      changedLineItems: data.changedLineItems,
       lineItemCount: data.lineItemCount,
       ip: data.ip,
       userAgent: data.userAgent,

@@ -10,6 +10,13 @@ type ValidationErrorSummaryEntry = {
   received?: number | null;
 };
 
+/** oldValue is null when the code was not in the record before. */
+export type ChangedLineItem = {
+  code: string;
+  oldValue: number | null;
+  newValue: number;
+};
+
 export type DataCollectionAuditBaseData = {
   dataCollectionId?: Types.ObjectId;
   apiClientId?: Types.ObjectId;
@@ -21,6 +28,7 @@ export type DataCollectionAuditBaseData = {
   validationStatus?: DataCollectionValidationStatus;
   lineItemCount?: number;
   changedLineItemCodes?: string[];
+  changedLineItems?: ChangedLineItem[];
   errorCount?: number;
   validationSummary?: { errors: ValidationErrorSummaryEntry[] };
   reason?: string;
@@ -41,6 +49,7 @@ export type LogDataCollectionModifiedData = DataCollectionAuditBaseData & {
   validationStatus: DataCollectionValidationStatus;
   lineItemCount: number;
   changedLineItemCodes: string[];
+  changedLineItems: ChangedLineItem[];
 };
 
 export type LogDataCollectionValidationFailedData = DataCollectionAuditBaseData & {
