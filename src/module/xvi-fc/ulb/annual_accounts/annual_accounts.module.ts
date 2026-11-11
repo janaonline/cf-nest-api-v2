@@ -32,6 +32,7 @@ import { AnnualAccountsService } from './annual_accounts.service';
 import { AnnualAccountManualReviewService } from './annual-account-manual-review.service';
 import { AnnualAccountOcrApiService } from './annual-account-ocr-api.service';
 import { AnnualAccountOcrProcessor } from './annual-account-ocr.processor';
+import { AnnualAccountOcrResultWriter } from './annual-account-ocr-result.writer';
 import { AnnualAccountStatusSyncService } from './annual-account-status-sync.service';
 import { FormJsonModule } from '../../../../master/form-json/form-json.module';
 import { EmailQueueModule } from '../../../../core/queue/email-queue/email-queue.module';
@@ -72,6 +73,7 @@ import { XviFcCommonModule } from '../../common/xvi-fc-common.module';
     S3Service,
     AnnualAccountOcrApiService,
     AnnualAccountOcrProcessor,
+    AnnualAccountOcrResultWriter,
     AnnualAccountStatusSyncService,
     ExcelService,
   ],
