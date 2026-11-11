@@ -27,8 +27,13 @@ export class FileController {
   @SkipThrottle()
   @Get('download')
   @ApiQuery({ name: 'signature', required: true, type: String })
-  async download(@Query('signature') signature: string, @Res() res: Response) {
-    const { key, stream, headers } = await this.fileService.prepareDownload(signature);
+  @ApiQuery({ name: 'disposition', required: false, enum: ['inline', 'attachment'] })
+  async download(
+    @Query('signature') signature: string,
+    @Res() res: Response,
+    @Query('disposition') disposition?: string,
+  ) {
+    const { key, stream, headers } = await this.fileService.prepareDownload(signature, disposition);
 
     stream.on('error', (err: unknown) => {
       this.logger.error(`S3 stream error for key "${key}": ${getErrorMessage(err)}`);
