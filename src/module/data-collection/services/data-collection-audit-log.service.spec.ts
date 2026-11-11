@@ -183,6 +183,34 @@ describe('DataCollectionAuditLogService', () => {
     });
   });
 
+  // ─── logNoChange ───────────────────────────────────────────────────────────
+
+  describe('logNoChange', () => {
+    it('creates a record with NO_CHANGE action, success=true and no changed values', async () => {
+      await service.logNoChange({ ...baseData, dataCollectionId, validationStatus: 'VALID' });
+      expect(mockModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE,
+          success: true,
+          dataCollectionId,
+          lineItemCount: baseData.lineItemCount,
+        }),
+      );
+      const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['failureReason']).toBeUndefined();
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(arg).not.toHaveProperty('changedLineItemCodes');
+      for (const field of removedFields) {
+        expect(arg).not.toHaveProperty(field);
+      }
+    });
+
+    it('is accepted by the schema action enum', () => {
+      const doc = makeAuditDoc({ action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE });
+      expect(doc.validateSync()).toBeUndefined();
+    });
+  });
+
   // ─── logValidationFailed ───────────────────────────────────────────────────
 
   describe('logValidationFailed', () => {

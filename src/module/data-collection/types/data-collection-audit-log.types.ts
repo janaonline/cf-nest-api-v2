@@ -52,6 +52,13 @@ export type LogDataCollectionModifiedData = DataCollectionAuditBaseData & {
   changedLineItems: ChangedLineItem[];
 };
 
+export type LogDataCollectionNoChangeData = DataCollectionAuditBaseData & {
+  apiClientId: Types.ObjectId;
+  dataCollectionId: Types.ObjectId;
+  validationStatus: DataCollectionValidationStatus;
+  lineItemCount: number;
+};
+
 export type LogDataCollectionValidationFailedData = DataCollectionAuditBaseData & {
   apiClientId: Types.ObjectId;
   lineItemCount: number;

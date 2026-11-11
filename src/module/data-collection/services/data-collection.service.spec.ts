@@ -235,6 +235,7 @@ const mockLineItemsLegendService = {
 const mockAuditLogService = {
   logSubmitted: jest.fn().mockResolvedValue(undefined),
   logModified: jest.fn().mockResolvedValue(undefined),
+  logNoChange: jest.fn().mockResolvedValue(undefined),
   logValidationFailed: jest.fn().mockResolvedValue(undefined),
   logDuplicateSubmit: jest.fn().mockResolvedValue(undefined),
   logModifyNotFound: jest.fn().mockResolvedValue(undefined),
@@ -1707,24 +1708,78 @@ describe('DataCollectionService', () => {
       ]);
     });
 
-    it('changedLineItemCodes omits keys whose values are unchanged', async () => {
-      const existingDoc = {
-        templateVersion: '2026.1',
-        stateId: new Types.ObjectId(validStateId),
-        yearCode: validYearCode,
-        lineItems: new Map<string, number>([
-          ['110', 500],
-          ['120', 1],
-          ['210', 1],
-        ]),
-        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+    // Stored record already holding basePayload's value; computed zeros match mockLegendsFor()
+    const storedAt = new Date('2026-11-01T00:00:00.000Z');
+    const makeUnchangedDoc = (overrides: Record<string, unknown> = {}) => ({
+      _id: new Types.ObjectId(),
+      templateVersion: '2026.1',
+      validationStatus: 'VALID',
+      status: 'ACTIVE',
+      stateId: new Types.ObjectId(validStateId),
+      yearCode: validYearCode,
+      lineItems: new Map<string, number>([
+        ['110', 500],
+        ['120', 1],
+        ['210', 1],
+      ]),
+      computed: { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
+      createdAt: storedAt,
+      updatedAt: storedAt,
+      save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      ...overrides,
+    });
+
+    it('skips the save and logs NO_CHANGE when no value changed', async () => {
+      const existingDoc = makeUnchangedDoc();
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      const result = (await service.update(basePayload as never, stateClient)) as {
+        message: string;
+        data: { updatedAt: Date; lineItems: Record<string, number> };
       };
+
+      expect(existingDoc.save).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logNoChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dataCollectionId: existingDoc._id,
+          lineItemCount: 1,
+          validationStatus: 'VALID',
+          templateVersion: '2026.1',
+        }),
+      );
+      const arg = (mockAuditLogService.logNoChange.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(arg).not.toHaveProperty('changedLineItemCodes');
+      expect(result.message).toBe('No changes detected. Financial data is already up to date.');
+      expect(result.data.updatedAt).toBe(storedAt);
+      expect(result.data.lineItems).toEqual({ '110': 500, '120': 1, '210': 1 });
+    });
+
+    it('still saves and logs MODIFIED when only the computed totals differ', async () => {
+      const existingDoc = makeUnchangedDoc({
+        computed: { totIncome: 9, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
+      });
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLegendsFor();
       await service.update(basePayload as never, stateClient);
+
+      expect(existingDoc.save).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg['changedLineItemCodes']).toEqual([]);
       expect(arg['changedLineItems']).toEqual([]);
+    });
+
+    it('still saves when an old record is missing stateId', async () => {
+      const existingDoc = makeUnchangedDoc({ stateId: undefined });
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      await service.update(basePayload as never, stateClient);
+
+      expect(existingDoc.save).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).toHaveBeenCalledTimes(1);
     });
 
     it('does not pass full merged lineItems to logModified', async () => {

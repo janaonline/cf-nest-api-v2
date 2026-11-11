@@ -6,6 +6,7 @@ import type {
   LogDataCollectionDuplicateSubmitData,
   LogDataCollectionModifiedData,
   LogDataCollectionModifyNotFoundData,
+  LogDataCollectionNoChangeData,
   LogDataCollectionReversedData,
   LogDataCollectionSubmittedData,
   LogDataCollectionValidationFailedData,
@@ -59,6 +60,24 @@ export class DataCollectionAuditLogService {
       validationStatus: data.validationStatus,
       changedLineItemCodes: data.changedLineItemCodes,
       changedLineItems: data.changedLineItems,
+      lineItemCount: data.lineItemCount,
+      ip: data.ip,
+      userAgent: data.userAgent,
+    });
+  }
+
+  /** Records a successful modify call that changed no value; the record was not saved. */
+  async logNoChange(data: LogDataCollectionNoChangeData): Promise<void> {
+    await this.write({
+      dataCollectionId: data.dataCollectionId,
+      action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE,
+      success: true,
+      apiClientId: data.apiClientId,
+      stateId: data.stateId,
+      ulbId: data.ulbId,
+      yearId: data.yearId,
+      templateVersion: data.templateVersion,
+      validationStatus: data.validationStatus,
       lineItemCount: data.lineItemCount,
       ip: data.ip,
       userAgent: data.userAgent,

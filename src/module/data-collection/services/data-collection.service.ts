@@ -26,6 +26,7 @@ import { GetDataCollectionDto } from '../dto/get-data-collection.dto';
 import { ReverseDataCollectionDto } from '../dto/reverse-data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
 import {
+  COMPUTED_VALUES_KEYS,
   extractComputedKey,
   type ActiveDataCollectionFilter,
   type ComputedValues,
@@ -380,6 +381,28 @@ export class DataCollectionService {
     // Must run before existing.lineItems is overwritten
     const changedLineItems = this.getChangedLineItems(existing.lineItems, payloadLineItems, result.submittedLineItems);
     const changedLineItemCodes = changedLineItems.map((item) => item.code);
+    // Old records may lack computed, stateId or yearCode; those still need a save
+    const computedChanged = COMPUTED_VALUES_KEYS.some((key) => existing.computed?.[key] !== result.computed[key]);
+
+    // Nothing to write: skip the save so updatedAt keeps meaning "data last changed"
+    if (!changedLineItems.length && !computedChanged && existing.stateId && existing.yearCode) {
+      await this.auditLogService.logNoChange({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        dataCollectionId: existing._id,
+        validationStatus: existing.validationStatus,
+      });
+      return {
+        message: 'No changes detected. Financial data is already up to date.',
+        data: this.mapToExternalDataCollectionResponse(existing, ulbCode, yearCode),
+      };
+    }
 
     existing.templateVersion = templateVersion;
     existing.lineItems = new Map(Object.entries(result.submittedLineItems));

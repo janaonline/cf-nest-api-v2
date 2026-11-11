@@ -63,6 +63,7 @@ export class DataCollectionAuditLog {
   @Prop({ type: String, enum: ['VALID', 'WARNING'] })
   validationStatus?: 'VALID' | 'WARNING';
 
+  // Number of codes in the request payload, not in the saved record
   @Prop({ type: Number })
   lineItemCount?: number;
 
