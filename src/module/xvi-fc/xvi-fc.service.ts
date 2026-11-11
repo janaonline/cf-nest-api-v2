@@ -253,6 +253,12 @@ export class XviFcService {
       this.ulbModel.findById(ulb).select('state').lean().exec(),
     ]);
 
+    // Likewise a State user may only read the ULBs of its own State (a null on either side never matches).
+    if (user.scope === Scope.STATE) {
+      const ulbState = toObjectIdString(ulbDoc?.state);
+      if (!ulbState || ulbState !== toObjectIdString(user.state)) throw new ForbiddenException('Access denied');
+    }
+
     const stateConditions = ulbDoc?.state
       ? await this.ulbStateConditionsService.resolve(new Types.ObjectId(String(ulbDoc.state)), ulb, designYear)
       : null;

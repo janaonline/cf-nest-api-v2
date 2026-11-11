@@ -288,6 +288,56 @@ describe('DurManualReviewService.getDocumentDownload', () => {
     expect(result.key).toBe('s3/key/tiedGrant.pdf');
   });
 
+  it('serves the live current upload when no uploadId is supplied, even if history lags behind a same-ID re-upload', async () => {
+    mockDurModel.findById.mockReturnValue(
+      mockQuery(durWithDocSlot({ currentUpload: { uploadId: 'upload-1', file: { path: 's3/key/live-now.pdf' } } })),
+    );
+    mockManualReviewRequestModel.findOne.mockReturnValue(mockQuery({ filePath: 's3/key/older-request.pdf' }));
+
+    const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser);
+
+    expect(result.key).toBe('s3/key/live-now.pdf');
+    expect(mockUploadHistoryModel.findOne).not.toHaveBeenCalled();
+    expect(mockManualReviewRequestModel.findOne).not.toHaveBeenCalled();
+  });
+
+  describe('by requestId', () => {
+    const REQUEST_ID = '507f1f77bcf86cd799439099';
+
+    it("serves the file the request was raised on, not a reused upload ID's newer history row", async () => {
+      mockManualReviewRequestModel.findOne.mockReturnValue(
+        mockQuery({ uploadId: 'reused-id', filePath: 's3/key/original-request.pdf' }),
+      );
+
+      const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser, REQUEST_ID);
+
+      expect(mockManualReviewRequestModel.findOne).toHaveBeenCalledWith({
+        _id: expect.anything(),
+        durId: expect.anything(),
+        docId: 'tiedGrant',
+      });
+      expect(result.key).toBe('s3/key/original-request.pdf');
+      expect(mockUploadHistoryModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the history of its own upload when the request kept no filePath', async () => {
+      mockManualReviewRequestModel.findOne.mockReturnValue(mockQuery({ uploadId: 'upload-7', filePath: null }));
+
+      const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser, REQUEST_ID);
+
+      expect(mockUploadHistoryModel.findOne).toHaveBeenCalledWith({ durId: expect.anything(), docId: 'tiedGrant', uploadId: 'upload-7' });
+      expect(result.key).toBe('s3/key/tiedGrant.pdf');
+    });
+
+    it('404s for a request of another form or document', async () => {
+      mockManualReviewRequestModel.findOne.mockReturnValue(mockQuery(null));
+
+      await expect(
+        service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser, REQUEST_ID),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
   it('wraps an S3 "not found" error as NotFoundException', async () => {
     mockS3Service.getObjectStream.mockRejectedValue({ name: 'NoSuchKey' });
 

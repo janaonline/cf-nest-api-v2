@@ -61,6 +61,16 @@ describe('FormReturnedNotificationService.notifyStateFormReturned', () => {
     expect(html).not.toContain('reason-box');
   });
 
+  it('keeps queueing the other recipients when one enqueue fails', async () => {
+    emailQueue.addEmailJob.mockRejectedValueOnce(new Error('queue down')).mockResolvedValueOnce(undefined);
+
+    await expect(
+      service.notifyStateFormReturned({ stateId, formName: 'SFC Status', remarks: null }),
+    ).resolves.toBeUndefined();
+    expect(emailQueue.addEmailJob).toHaveBeenCalledTimes(2);
+    expect((emailQueue.addEmailJob.mock.calls[1][0] as { to: string }).to).toBe('b@state.gov');
+  });
+
   it('sends nothing, and never throws, when the State has no verified users', async () => {
     userModel.find.mockReturnValue(q([]));
 

@@ -129,7 +129,7 @@ export class SfcStatusPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
-    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'SFC_STATUS', id: doc._id });
 
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID);
     if (!formJson.data?.length) throw new NotFoundException('SFC Status form configuration not found');

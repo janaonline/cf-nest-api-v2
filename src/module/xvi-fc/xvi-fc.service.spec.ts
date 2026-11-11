@@ -439,6 +439,17 @@ describe('XviFcService', () => {
     const ulbId = new Types.ObjectId().toString();
     const designYearId = new Types.ObjectId().toString();
 
+    it("refuses a State user reading another State's ULB, and allows its own", async () => {
+      const ownState = new Types.ObjectId();
+      const stateUser: AuthUser = { ...mockUser, role: 'STATE', scope: Scope.STATE, state: ownState };
+
+      mockUlbModel.findById.mockReturnValue(q({ state: new Types.ObjectId() }));
+      await expect(service.getFormStatus(ulbId, designYearId, stateUser)).rejects.toThrow(ForbiddenException);
+
+      mockUlbModel.findById.mockReturnValue(q({ state: ownState }));
+      await expect(service.getFormStatus(ulbId, designYearId, stateUser)).resolves.toBeDefined();
+    });
+
     it('returns xviFcBankAccount as NOT_STARTED using form-status field names when no bank-account record exists', async () => {
       const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
