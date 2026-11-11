@@ -5,6 +5,7 @@ import { DataCollectionAuditLog } from '../entities/data-collection-audit-log.sc
 import type {
   LogDataCollectionDuplicateSubmitData,
   LogDataCollectionModifiedData,
+  LogDataCollectionModifyConflictData,
   LogDataCollectionModifyNotFoundData,
   LogDataCollectionNoChangeData,
   LogDataCollectionReversedData,
@@ -60,6 +61,7 @@ export class DataCollectionAuditLogService {
       validationStatus: data.validationStatus,
       changedLineItemCodes: data.changedLineItemCodes,
       changedLineItems: data.changedLineItems,
+      changedComputed: data.changedComputed,
       lineItemCount: data.lineItemCount,
       ip: data.ip,
       userAgent: data.userAgent,
@@ -134,6 +136,24 @@ export class DataCollectionAuditLogService {
       action: DATA_COLLECTION_AUDIT_ACTION.NOT_FOUND_FOR_MODIFY,
       success: false,
       failureReason: DATA_COLLECTION_FAILURE_REASON.DATA_COLLECTION_NOT_FOUND,
+      apiClientId: data.apiClientId,
+      stateId: data.stateId,
+      ulbId: data.ulbId,
+      yearId: data.yearId,
+      templateVersion: data.templateVersion,
+      lineItemCount: data.lineItemCount,
+      ip: data.ip,
+      userAgent: data.userAgent,
+    });
+  }
+
+  /** Records a modify call rejected because another request changed the record first. */
+  async logModifyConflict(data: LogDataCollectionModifyConflictData): Promise<void> {
+    await this.write({
+      dataCollectionId: data.dataCollectionId,
+      action: DATA_COLLECTION_AUDIT_ACTION.MODIFY_CONFLICT,
+      success: false,
+      failureReason: DATA_COLLECTION_FAILURE_REASON.CONCURRENT_MODIFICATION,
       apiClientId: data.apiClientId,
       stateId: data.stateId,
       ulbId: data.ulbId,

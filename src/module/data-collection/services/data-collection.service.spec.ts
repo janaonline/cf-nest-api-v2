@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Types } from 'mongoose';
+import { Error as MongooseError, Types } from 'mongoose';
 import type { User } from 'src/module/auth/enum/role.enum';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
@@ -236,11 +236,16 @@ const mockAuditLogService = {
   logSubmitted: jest.fn().mockResolvedValue(undefined),
   logModified: jest.fn().mockResolvedValue(undefined),
   logNoChange: jest.fn().mockResolvedValue(undefined),
+  logModifyConflict: jest.fn().mockResolvedValue(undefined),
   logValidationFailed: jest.fn().mockResolvedValue(undefined),
   logDuplicateSubmit: jest.fn().mockResolvedValue(undefined),
   logModifyNotFound: jest.fn().mockResolvedValue(undefined),
   logReversed: jest.fn().mockResolvedValue(undefined),
 };
+
+/** Real Mongoose VersionError, as save() throws when optimistic concurrency loses a race. */
+const makeVersionError = (id: Types.ObjectId) =>
+  new MongooseError.VersionError({ _doc: { _id: id } } as never, 0, ['lineItems']);
 
 const expectNoRemovedAuditFields = (arg: Record<string, unknown>) => {
   for (const field of removedAuditFields) {
@@ -1541,8 +1546,10 @@ describe('DataCollectionService', () => {
     });
 
     it('modify success audit log includes dataCollectionId', async () => {
-      const savedId = new Types.ObjectId();
+      // save() resolves to the same document, so the id is the record's own
+      const docId = new Types.ObjectId();
       const existingDoc = {
+        _id: docId,
         templateVersion: '2026.1',
         stateId: new Types.ObjectId(validStateId),
         yearCode: validYearCode,
@@ -1550,17 +1557,17 @@ describe('DataCollectionService', () => {
           ['120', 1],
           ['210', 1],
         ]),
-        save: jest.fn().mockResolvedValue({ ...makeDocSaveResult(), _id: savedId }),
+        save: jest.fn().mockResolvedValue({ ...makeDocSaveResult(), _id: docId }),
       };
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLegendsFor();
       await service.update(basePayload as never, stateClient);
       expect(mockAuditLogService.logModified).toHaveBeenCalledWith(
-        expect.objectContaining({ dataCollectionId: savedId }),
+        expect.objectContaining({ dataCollectionId: docId }),
       );
     });
 
-    it('response message says Financial data updated successfully', async () => {
+    it('response says Financial data updated successfully with meta.changed true', async () => {
       const existingDoc = {
         templateVersion: '2026.1',
         stateId: new Types.ObjectId(validStateId),
@@ -1576,6 +1583,7 @@ describe('DataCollectionService', () => {
 
       const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
       expect(result['message']).toBe('Financial data updated successfully.');
+      expect(result['meta']).toEqual({ changed: true });
     });
 
     // ─── Audit logging ─────────────────────────────────────────────────────
@@ -1736,8 +1744,10 @@ describe('DataCollectionService', () => {
       const result = (await service.update(basePayload as never, stateClient)) as {
         message: string;
         data: { updatedAt: Date; lineItems: Record<string, number> };
+        meta: { changed: boolean };
       };
 
+      expect(result.meta).toEqual({ changed: false });
       expect(existingDoc.save).not.toHaveBeenCalled();
       expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
       expect(mockAuditLogService.logNoChange).toHaveBeenCalledWith(
@@ -1756,31 +1766,59 @@ describe('DataCollectionService', () => {
       expect(result.data.lineItems).toEqual({ '110': 500, '120': 1, '210': 1 });
     });
 
-    it('still saves and logs MODIFIED when only the computed totals differ', async () => {
+    it('returns 409 and logs MODIFY_CONFLICT when save loses a race (VersionError)', async () => {
+      const existingDoc = makeUnchangedDoc({ lineItems: new Map<string, number>([['110', 999]]) });
+      existingDoc.save.mockRejectedValueOnce(makeVersionError(existingDoc._id));
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+
+      const err = await service.update(basePayload as never, stateClient).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: 'CONCURRENT_MODIFICATION' });
+      expect(mockAuditLogService.logModifyConflict).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+    });
+
+    it('still saves and logs MODIFIED with changedComputed when only the computed totals differ', async () => {
       const existingDoc = makeUnchangedDoc({
         computed: { totIncome: 9, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
       });
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLegendsFor();
-      await service.update(basePayload as never, stateClient);
+      const result = (await service.update(basePayload as never, stateClient)) as { meta: { changed: boolean } };
 
       expect(existingDoc.save).toHaveBeenCalledTimes(1);
       expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg['changedLineItemCodes']).toEqual([]);
       expect(arg['changedLineItems']).toEqual([]);
+      expect(arg['changedComputed']).toEqual([{ code: 'totIncome', oldValue: 9, newValue: 0 }]);
+      expect(result.meta).toEqual({ changed: true });
     });
 
-    it('still saves when an old record is missing stateId', async () => {
-      const existingDoc = makeUnchangedDoc({ stateId: undefined });
-      dcModel.findOne.mockReturnValue(existingDoc);
-      mockLegendsFor();
-      await service.update(basePayload as never, stateClient);
+    it.each([['computed'], ['stateId'], ['yearCode']])(
+      'still saves when an old record is missing %s',
+      async (field) => {
+        const existingDoc = makeUnchangedDoc({ [field]: undefined });
+        dcModel.findOne.mockReturnValue(existingDoc);
+        mockLegendsFor();
+        await service.update(basePayload as never, stateClient);
 
-      expect(existingDoc.save).toHaveBeenCalledTimes(1);
-      expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
-      expect(mockAuditLogService.logModified).toHaveBeenCalledTimes(1);
-    });
+        expect(existingDoc.save).toHaveBeenCalledTimes(1);
+        expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
+        const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        const expectedComputed =
+          field === 'computed'
+            ? ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue'].map((code) => ({
+                code,
+                oldValue: null,
+                newValue: 0,
+              }))
+            : [];
+        expect(arg['changedComputed']).toEqual(expectedComputed);
+      },
+    );
 
     it('does not pass full merged lineItems to logModified', async () => {
       const existingDoc = {
@@ -1850,6 +1888,19 @@ describe('DataCollectionService', () => {
       const err = await service.reverseSubmission(reversePayload, adminUser).catch((e: unknown) => e);
       expect((err as NotFoundException).message).toContain(validUlbCode);
       expect((err as NotFoundException).message).toContain(validYearCode);
+    });
+
+    it('returns 409 without an audit row when reversal loses a race (VersionError)', async () => {
+      const doc = makeActiveDoc();
+      doc.save.mockRejectedValueOnce(makeVersionError(doc._id));
+      dcModel.findOne.mockReturnValue(doc);
+
+      const err = await service.reverseSubmission(reversePayload, adminUser).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: 'CONCURRENT_MODIFICATION' });
+      expect(mockAuditLogService.logReversed).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModifyConflict).not.toHaveBeenCalled();
     });
 
     it('marks the record as reversed', async () => {

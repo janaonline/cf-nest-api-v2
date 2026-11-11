@@ -8,7 +8,8 @@ export const CODE = 'nmamCode';
 export type LineItemKey = string;
 export type LineItemsMap = Record<string, number>;
 
-@Schema({ timestamps: true })
+// optimisticConcurrency: every save checks and bumps __v, so a lost race throws VersionError
+@Schema({ timestamps: true, optimisticConcurrency: true })
 export class DataCollection {
   createdAt!: Date;
   updatedAt!: Date;
