@@ -10,7 +10,10 @@ type ValidationErrorSummaryEntry = {
   received?: number | null;
 };
 
-/** oldValue is null when the code was not in the record before. */
+/**
+ * code is the nmamCode, or the computed key (e.g. totIncome) in changedComputed.
+ * oldValue is null when the value was not in the record before.
+ */
 export type ChangedLineItem = {
   code: string;
   oldValue: number | null;
@@ -29,6 +32,7 @@ export type DataCollectionAuditBaseData = {
   lineItemCount?: number;
   changedLineItemCodes?: string[];
   changedLineItems?: ChangedLineItem[];
+  changedComputed?: ChangedLineItem[];
   errorCount?: number;
   validationSummary?: { errors: ValidationErrorSummaryEntry[] };
   reason?: string;
@@ -50,6 +54,7 @@ export type LogDataCollectionModifiedData = DataCollectionAuditBaseData & {
   lineItemCount: number;
   changedLineItemCodes: string[];
   changedLineItems: ChangedLineItem[];
+  changedComputed: ChangedLineItem[];
 };
 
 export type LogDataCollectionNoChangeData = DataCollectionAuditBaseData & {
@@ -73,6 +78,12 @@ export type LogDataCollectionDuplicateSubmitData = DataCollectionAuditBaseData &
 
 export type LogDataCollectionModifyNotFoundData = DataCollectionAuditBaseData & {
   apiClientId: Types.ObjectId;
+  lineItemCount: number;
+};
+
+export type LogDataCollectionModifyConflictData = DataCollectionAuditBaseData & {
+  apiClientId: Types.ObjectId;
+  dataCollectionId: Types.ObjectId;
   lineItemCount: number;
 };
 

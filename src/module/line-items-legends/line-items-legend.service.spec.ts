@@ -62,6 +62,8 @@ const mockLegendModel = Object.assign(
     deleteMany: jest.fn(),
     bulkWrite: jest.fn(),
     exists: jest.fn(),
+    // Connection the model belongs to; its name is part of the validation cache key
+    db: { name: 'testdb' },
   },
 );
 
@@ -921,17 +923,53 @@ describe('LineItemsLegendService', () => {
 
   describe('getActiveLegendsForValidation — caching', () => {
     const TV = '2026.1';
-    const CACHE_KEY = `line-items-legends:validation:${TV}`;
+    const CACHE_KEY = `line-items-legends:validation:testdb:${TV}`;
     // Use a LineItemLegendForValidation-shaped fixture (no Date fields) to avoid
     // JSON serialisation round-trip mismatches on createdAt/updatedAt.
-    const legends = [
-      { nmamCode: '110', name: 'Tax Revenue', accountHead: 'INCOME', level: 1, parentCode: null, rules: [] },
-    ];
+    const regular = {
+      nmamCode: '110',
+      name: 'Tax Revenue',
+      accountHead: 'INCOME',
+      level: 1,
+      parentCode: null,
+      rules: [],
+    };
+    const computedLegends = ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue'].map((key) => ({
+      nmamCode: `computed.${key}`,
+      name: key,
+      accountHead: 'COMPUTED',
+      isComputed: true,
+      rules: [{ type: 'formula', operation: 'sum', operands: ['110'] }],
+    }));
+    // A complete list: regular legends plus all four computed legends
+    const legends = [regular, ...computedLegends];
+    const withoutComputed = [regular];
 
     beforeEach(() => {
       mockRedisService.get.mockResolvedValue(null);
       mockRedisService.set.mockResolvedValue(undefined);
       mockLegendModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(legends) });
+    });
+
+    it('reloads from MongoDB and re-caches when the cached list lacks computed legends', async () => {
+      mockRedisService.get.mockResolvedValueOnce(JSON.stringify(withoutComputed));
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(legends);
+      expect(mockLegendModel.find).toHaveBeenCalledTimes(1);
+      expect(mockRedisService.set).toHaveBeenCalledWith(CACHE_KEY, legends);
+    });
+
+    it('reloads when the cached list is missing just one computed legend', async () => {
+      mockRedisService.get.mockResolvedValueOnce(JSON.stringify(legends.slice(0, -1)));
+      await service.getActiveLegendsForValidation(TV);
+      expect(mockLegendModel.find).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns an incomplete MongoDB list but does not cache it', async () => {
+      mockLegendModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue(withoutComputed) });
+      const result = await service.getActiveLegendsForValidation(TV);
+      expect(result).toEqual(withoutComputed);
+      expect(mockRedisService.set).not.toHaveBeenCalled();
     });
 
     it('returns cached value on hit without querying MongoDB', async () => {
@@ -981,7 +1019,7 @@ describe('LineItemsLegendService', () => {
 
   describe('cache invalidation', () => {
     const TV = '2026.1';
-    const CACHE_KEY = `line-items-legends:validation:${TV}`;
+    const CACHE_KEY = `line-items-legends:validation:testdb:${TV}`;
 
     beforeEach(() => {
       mockRedisService.del.mockResolvedValue(undefined);
