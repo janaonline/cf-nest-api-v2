@@ -75,5 +75,7 @@ import { MohuaOverviewUlbProgressService } from './mohua-overview-ulb-progress.s
     MohuaStateConditionsService,
     MohuaOverviewUlbProgressService,
   ],
+  // Reused by the State notifications feed (state/notifications) for the five State forms' status.
+  exports: [MohuaStateConditionsService],
 })
 export class MohuaOverviewModule {}

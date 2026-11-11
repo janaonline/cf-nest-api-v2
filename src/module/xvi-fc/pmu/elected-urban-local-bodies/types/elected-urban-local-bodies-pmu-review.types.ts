@@ -14,6 +14,7 @@ export interface EulbPmuFormLean {
   year: Types.ObjectId;
   currentFormStatus: number;
   activeDatasetVersion: number;
+  pmuRemarks?: string | null;
 }
 
 /** Lean row projection used throughout the PMU review domain (list, transitions, snapshots). */

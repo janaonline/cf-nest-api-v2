@@ -18,6 +18,14 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import type { EulbPmuFormLean, EulbPmuRowLean } from '../types/elected-urban-local-bodies-pmu-review.types';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
+const mockUndoEligibility = {
+  canUndo: jest.fn().mockResolvedValue(false),
+  assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined),
+};
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -133,6 +141,8 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: PmuUndoEligibilityService, useValue: mockUndoEligibility },
         ElectedUrbanLocalBodiesPmuReviewService,
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
@@ -310,21 +320,31 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
         canApproveForm: true,
         canRejectForm: true,
         canReviewRows: true,
+        canUndo: false,
       });
     });
 
-    it('withholds mutation permissions for a reviewer-subrole PMU user (REVIEW_STATE_SUBMISSIONS_PMU only)', async () => {
-      const reviewerUser = {
-        _id: userOid.toString(),
-        scope: Scope.PMU,
-        xviFcSubrole: 'reviewer',
-      } as unknown as AuthUser;
+    it('also grants approve/reject/row review to a reviewer-subrole PMU user (reviewers hold APPROVE_STATE_SUBMISSIONS_PMU)', async () => {
+      const reviewerUser = { _id: userOid.toString(), scope: Scope.PMU, xviFcSubrole: 'reviewer' } as unknown as AuthUser;
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), reviewerUser);
+      expect(result.data!.permissions).toEqual({
+        canView: true,
+        canApproveForm: true,
+        canRejectForm: true,
+        canReviewRows: true,
+        canUndo: false,
+      });
+    });
+
+    it('withholds mutation permissions for a viewer-subrole PMU user (REVIEW_STATE_SUBMISSIONS_PMU only)', async () => {
+      const viewerUser = { _id: userOid.toString(), scope: Scope.PMU, xviFcSubrole: 'viewer' } as unknown as AuthUser;
+      const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), viewerUser);
       expect(result.data!.permissions).toEqual({
         canView: true,
         canApproveForm: false,
         canRejectForm: false,
         canReviewRows: false,
+        canUndo: false,
       });
     });
 
