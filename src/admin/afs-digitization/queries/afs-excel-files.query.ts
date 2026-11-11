@@ -105,7 +105,7 @@ function getStateLookup() {
   ];
 }
 
-function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
+export function getUlbsLookupPipeline(query: DigitizationReportQueryDto) {
   const stateObjectIds =
     query.stateId && query.stateId.length > 0 ? query.stateId.map((id) => new Types.ObjectId(id)) : undefined;
   const populationRange = buildPopulationMatch(query.populationCategory || '');

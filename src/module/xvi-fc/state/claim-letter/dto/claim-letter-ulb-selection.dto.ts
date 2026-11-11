@@ -1,13 +1,14 @@
-import { IsInt, IsMongoId, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { IsInt, IsMongoId, IsOptional, Min } from 'class-validator';
 
 export class ClaimLetterUlbSelectionDto {
   @IsMongoId()
   ulbId!: string;
 
-  // Whole Rupees only — matches allocatedAmount's unit.
-  // Server-authoritative ±10% variance check happens in ClaimLetterAssemblyService
-  // — this only guards against a non-positive/sub-₹1 amount.
+  // Whole Rupees. Required only while formjson 26 `meta.claimAmountEditable` is on; otherwise the field is optional and will be ignored.
+  @Transform(({ value }) => (value === null ? undefined : (value as unknown)))
+  @IsOptional()
   @IsInt()
   @Min(1)
-  claimedAmount!: number;
+  claimedAmount?: number;
 }

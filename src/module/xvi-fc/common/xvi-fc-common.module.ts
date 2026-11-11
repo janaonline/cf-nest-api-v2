@@ -6,6 +6,8 @@ import { FileUrlNormalizerService } from './services/file-url-normalizer.service
 import { FileInfoNormalizerService } from './services/file-info-normalizer.service';
 import { FormQuestionHydratorService } from './services/form-question-hydrator.service';
 import { ExpectedUlbSetService } from './services/expected-ulb-set.service';
+import { XviFcUlbOptionsService } from './services/xvi-fc-ulb-options.service';
+import { XviFcUlbOptionsController } from './xvi-fc-ulb-options.controller';
 import { ClaimEligibilityEvaluatorService } from './services/claim-eligibility-evaluator.service';
 import { YearAccessService } from './services/year-access.service';
 import { ExemptionResolverService } from './services/exemption-resolver.service';
@@ -35,6 +37,7 @@ import {
     FormJsonConfigModule,
     RemindersModule,
   ],
+  controllers: [XviFcUlbOptionsController],
   providers: [
     DynamicFormValidationService,
     XvifcFormActorsService,
@@ -42,6 +45,7 @@ import {
     FileInfoNormalizerService,
     FormQuestionHydratorService,
     ExpectedUlbSetService,
+    XviFcUlbOptionsService,
     ClaimEligibilityEvaluatorService,
     YearAccessService,
     ExemptionResolverService,

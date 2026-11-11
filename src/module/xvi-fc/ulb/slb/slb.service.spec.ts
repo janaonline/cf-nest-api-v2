@@ -128,6 +128,7 @@ describe('SlbService', () => {
   let validator: Partial<DynamicFormValidationService>;
   let yearAccessService: { isFormExempt: jest.Mock };
   let exemptionResolverService: { resolveBulk: jest.Mock };
+  let ulbEligibilityService: { assertUlbEligibleForGrantCycle: jest.Mock; getIneligibleUlbTypeIds: jest.Mock };
 
   beforeEach(async () => {
     formModel = {
@@ -167,7 +168,10 @@ describe('SlbService', () => {
         { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
         {
           provide: UlbEligibilityService,
-          useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
+          useValue: (ulbEligibilityService = {
+            assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+            getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
+          }),
         },
         { provide: getModelToken(Year.name), useValue: { findById: jest.fn().mockReturnValue(q({ _id: yearOid, year: '2026-27' })) } },
         { provide: YearAccessService, useValue: (yearAccessService = { isFormExempt: jest.fn().mockResolvedValue(false) }) },
@@ -504,6 +508,16 @@ describe('SlbService', () => {
       expect(pipeline[0].$match.state).toBeUndefined();
     });
 
+    it('excludes XVIFC-ineligible ULB types (e.g. Cantonment Boards) from the $match stage', async () => {
+      const cantonmentTypeId = new Types.ObjectId();
+      ulbEligibilityService.getIneligibleUlbTypeIds.mockResolvedValue([cantonmentTypeId]);
+
+      await service.listUlbSlbForms(baseDto, stateReviewer(stateOid));
+
+      const pipeline = ulbModel.aggregate.mock.calls[0][0];
+      expect(pipeline[0].$match.ulbType).toEqual({ $nin: [cantonmentTypeId] });
+    });
+
     it('includes an EXEMPTED_ACKNOWLEDGED fallback for a documentless-but-exempt ULB in the aggregation pipeline', async () => {
       const exemptUlbId = new Types.ObjectId();
       ulbModel.find.mockReturnValue(q([{ _id: exemptUlbId, startYear: 2026, yearAccess: {} }]));
@@ -552,7 +566,10 @@ describe('SlbService', () => {
           { provide: SlbFormJsonConfigService, useValue: slbFormJsonConfig },
           {
             provide: UlbEligibilityService,
-            useValue: { assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined) },
+            useValue: {
+              assertUlbEligibleForGrantCycle: jest.fn().mockResolvedValue(undefined),
+              getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]),
+            },
           },
           { provide: getModelToken(Year.name), useValue: yearModelMock },
           { provide: YearAccessService, useValue: yearAccessService },

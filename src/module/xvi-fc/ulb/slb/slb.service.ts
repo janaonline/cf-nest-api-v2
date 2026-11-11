@@ -340,7 +340,11 @@ export class SlbService {
 
     const stateId = resolveStateScopeFilter(user, dto.stateId);
 
-    const matchStage: Record<string, unknown> = { isActive: true };
+    const ineligibleUlbTypeIds = await this.ulbEligibilityService.getIneligibleUlbTypeIds('XVIFC');
+    const matchStage: Record<string, unknown> = {
+      isActive: true,
+      ...(ineligibleUlbTypeIds.length ? { ulbType: { $nin: ineligibleUlbTypeIds } } : {}),
+    };
     if (stateId) matchStage.state = stateId;
     if (dto.search?.trim()) {
       const regex = new RegExp(escapeRegex(dto.search.trim()), 'i');

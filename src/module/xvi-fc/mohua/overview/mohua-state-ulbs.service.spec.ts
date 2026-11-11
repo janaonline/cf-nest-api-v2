@@ -1,5 +1,6 @@
 import ExcelJS from 'exceljs';
 import { Types } from 'mongoose';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { MohuaStateUlbsService } from './mohua-state-ulbs.service';
 
 /** Mongoose-style chain: find()/findOne().select().lean().exec() resolving to `value`. */
@@ -26,14 +27,15 @@ describe('MohuaStateUlbsService.list', () => {
   let loadSubmitted: jest.Mock;
   let unspentFormFind: jest.Mock;
 
-  const build = () => {
+  // The State forms' status; the three State-filed columns show at 13 (PMU), 5 (MoHUA) and 7 (acknowledged).
+  const build = (formStatus: number = FORM_STATUS.UNDER_REVIEW_BY_MOHUA) => {
     const formId = new Types.ObjectId();
     const service = new MohuaStateUlbsService(
       {
         exists: jest.fn().mockResolvedValue({ _id: stateId }),
         findById: jest.fn().mockReturnValue(chain({ name: 'Andhra Pradesh' })),
       } as never,
-      { findOne: jest.fn().mockReturnValue(chain({ _id: formId, activeDatasetVersion: 1 })) } as never,
+      { findOne: jest.fn().mockReturnValue(chain({ _id: formId, currentFormStatus: formStatus, activeDatasetVersion: 1 })) } as never,
       {
         find: jest.fn().mockReturnValue(
           chain([
@@ -43,14 +45,14 @@ describe('MohuaStateUlbsService.list', () => {
           ]),
         ),
       } as never,
-      { findOne: jest.fn().mockReturnValue(chain({ _id: formId, activeDatasetVersion: 1 })) } as never,
+      { findOne: jest.fn().mockReturnValue(chain({ _id: formId, currentFormStatus: formStatus, activeDatasetVersion: 1 })) } as never,
       {
         find: jest
           .fn()
           .mockReturnValue(chain([{ ulbId: new Types.ObjectId(a.ulbId), electedBodyStatus: 'Constituted' }])),
       } as never,
       // FC Unspent: Anantapur declared ₹1.25 cr; Chirala's draft row has no figure yet; the others have no row.
-      { findOne: (unspentFormFind = jest.fn().mockReturnValue(chain({ _id: formId }))) } as never,
+      { findOne: (unspentFormFind = jest.fn().mockReturnValue(chain({ _id: formId, currentFormStatus: formStatus }))) } as never,
       {
         find: jest.fn().mockReturnValue(
           chain([
@@ -109,6 +111,27 @@ describe('MohuaStateUlbsService.list', () => {
 
     expect(loadSubmitted).toHaveBeenCalledWith(yearId, [a.ulbId, b.ulbId, c.ulbId, d.ulbId]);
   });
+
+  it.each([FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])(
+    'shows allocation, unspent balance and elected body while the State forms are at status %i',
+    async (status) => {
+      const { items } = await build(status).list(stateId, yearId, {});
+      const anantapur = items.find((row) => row.name === 'Anantapur')!;
+
+      expect(anantapur).toMatchObject({ allocation: 2.5, unspentAmount: 1.25, electedBody: 'Constituted' });
+    },
+  );
+
+  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.AWAITING_CLAIM_LETTER])(
+    'shows no allocation, unspent balance or elected body while the State forms are at status %i',
+    async (status) => {
+      const { items } = await build(status).list(stateId, yearId, {});
+
+      for (const row of items) {
+        expect(row).toMatchObject({ allocation: null, unspentAmount: null, electedBody: null });
+      }
+    },
+  );
 
   it('sorts by allocation in both directions and always puts ULBs without one last', async () => {
     const desc = await build().list(stateId, yearId, { sortBy: 'allocation', sortDir: 'desc' });

@@ -3,7 +3,7 @@ import { InternalServerErrorException } from '@nestjs/common';
 import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimEligibilityEvaluatorService } from './claim-eligibility-evaluator.service';
-import type { IFormJson } from 'src/form-json/interfaces/form-json.interface';
+import type { IFormJson } from 'src/master/form-json/interfaces/form-json.interface';
 import type { ClaimEligibilityConfig } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
 import { Ulb } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
@@ -125,6 +125,24 @@ describe('ClaimEligibilityEvaluatorService', () => {
     expect(query['installment']).toBe(1);
   });
 
+  it('adds source.match to the query without letting it override the scoping filters', async () => {
+    findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
+    const matchConfig: ClaimEligibilityConfig = {
+      ...devolutionConfig,
+      source: { ...devolutionConfig.source, match: { sectionType: 'audited', state: 'spoofed' } },
+    };
+
+    await service.evaluate(sourceFormJson({ claimEligibility: matchConfig }), {
+      stateId,
+      designYearId,
+      installment: 1,
+    });
+
+    const [query] = findOne.mock.calls[0] as [Record<string, unknown>];
+    expect(query['sectionType']).toBe('audited');
+    expect(query['state']).toBe(stateId);
+  });
+
   it('omits the design-year filter for a SUBMISSION_PERIOD_SINGLETON source (e.g. Bank Account)', async () => {
     findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 5 });
     const singletonConfig: ClaimEligibilityConfig = { ...devolutionConfig, yearScope: 'SUBMISSION_PERIOD_SINGLETON' };
@@ -243,6 +261,8 @@ describe('ClaimEligibilityEvaluatorService', () => {
       expect(result.result).toBe('EXEMPTED');
       expect(result.reasonCode).toBe('DISCRETIONARY_EXEMPTION_APPROVED');
       expect(result.exemptionId).toBe('6ab630c411607f9d6540b099');
+      expect(result.exemptionStatus).toBe(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
+      expect(result.exemptionKind).toBe('DISCRETIONARY_STATE');
       expect(result.formDocumentId).toBeNull();
       expect(exemptionResolverService.resolveDiscretionary).toHaveBeenCalledWith(
         null,
@@ -292,10 +312,10 @@ describe('ClaimEligibilityEvaluatorService', () => {
       expect(exemptionResolverService.resolveDiscretionary).not.toHaveBeenCalled();
     });
 
-    it('does not override when the discretionary request is only Pending or was Rejected', async () => {
+    it('returns EXEMPTED while the discretionary request is still under MoHUA review, with its own reason code', async () => {
       findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 2 });
       exemptionResolverService.resolveDiscretionary.mockResolvedValue({
-        requestId: new Types.ObjectId(),
+        requestId: new Types.ObjectId('6ab630c411607f9d6540b099'),
         currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
         decidedAt: null,
         mohuaRemarks: null,
@@ -304,9 +324,28 @@ describe('ClaimEligibilityEvaluatorService', () => {
 
       const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
 
+      expect(result.result).toBe('EXEMPTED');
+      expect(result.reasonCode).toBe('DISCRETIONARY_EXEMPTION_PENDING');
+      expect(result.exemptionId).toBe('6ab630c411607f9d6540b099');
+      expect(result.exemptionStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+    });
+
+    it('does not override when the discretionary request was rejected', async () => {
+      findOne.mockResolvedValue({ _id: new Types.ObjectId(), currentFormStatus: 2 });
+      exemptionResolverService.resolveDiscretionary.mockResolvedValue({
+        requestId: new Types.ObjectId(),
+        currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA,
+        decidedAt: new Date(),
+        mohuaRemarks: 'Not justified.',
+      });
+      const doc = sourceFormJson({ claimEligibility: exemptDevolutionConfig });
+
+      const result = await service.evaluate(doc, { stateId, designYearId, installment: 1 });
+
       expect(result.result).toBe('FAILED');
       expect(result.reasonCode).toBe('FORM_STATUS_2_NOT_ACCEPTED');
       expect(result.exemptionId).toBeNull();
+      expect(result.exemptionStatus).toBeNull();
     });
   });
 
@@ -367,7 +406,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
       expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
       expect(perUlb.get(ulbB)).toBe('INELIGIBLE'); // status 2, not accepted
       expect(perUlb.get(thirdUlb)).toBe('INELIGIBLE'); // no SLB document at all
-      expect(tally).toEqual({ eligible: 1, ineligible: 2, exempted: 0, total: 3 });
+      expect(tally).toEqual({ eligible: 1, ineligible: 2, exempted: 0, exemptedUnderReview: 0, total: 3 });
     });
 
     it('FORM_STATUS bulk: bounds the query to expectedUlbIds via $in (SLB has no state field to filter by)', async () => {
@@ -415,7 +454,10 @@ describe('ClaimEligibilityEvaluatorService', () => {
     });
 
     describe('xvi-fc dynamic year access - EXEMPTED bucket', () => {
-      const exemptSlbConfig: ClaimEligibilityConfig = { ...slbConfig, exemption: { allowed: true, targetLevel: 'FORM_STATUS' } };
+      const exemptSlbConfig: ClaimEligibilityConfig = {
+        ...slbConfig,
+        exemption: { allowed: true, targetLevel: 'FORM_STATUS' },
+      };
 
       it('a document with EXEMPTED_ACKNOWLEDGED status is always EXEMPTED, regardless of acceptedFormStatuses', async () => {
         mockCollection('xvifc_slb_forms', [{ ulb: new Types.ObjectId(ulbA), currentFormStatus: 12 }]);
@@ -424,7 +466,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
         const { perUlb, tally } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
 
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, exemptedUnderReview: 0, total: 1 });
         // Never needs the Ulb/formJsonConfig lookup - the document's own status is sufficient.
         expect(formJsonConfigService.findByFormId).not.toHaveBeenCalled();
       });
@@ -434,7 +476,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 32, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [32] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [32],
+        });
         const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
 
         const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
@@ -467,7 +513,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 32, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [32] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [32],
+        });
         const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
 
         const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
@@ -487,32 +537,119 @@ describe('ClaimEligibilityEvaluatorService', () => {
         const { perUlb, tally } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
 
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, exemptedUnderReview: 0, total: 1 });
+      });
+
+      it('a request under MoHUA review exempts too and is tallied as under review; a rejected one does not', async () => {
+        mockCollection('xvifc_slb_forms', [
+          { ulb: new Types.ObjectId(ulbA), currentFormStatus: 2 },
+          { ulb: new Types.ObjectId(ulbB), currentFormStatus: 2 },
+        ]);
+        const statuses = new Map([
+          [ulbA, { requestId: new Types.ObjectId(), currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }],
+          [ulbB, { requestId: new Types.ObjectId(), currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA }],
+        ]);
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(statuses);
+        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
+
+        const { perUlb, tally, discretionaryExemptionStatusByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA, ulbB],
+        });
+
+        expect(perUlb.get(ulbA)).toBe('EXEMPTED');
+        expect(perUlb.get(ulbB)).toBe('INELIGIBLE');
+        expect(tally).toEqual({ eligible: 0, ineligible: 1, exempted: 1, exemptedUnderReview: 1, total: 2 });
+        // Every filed request's status, so the claim letter can say why a ULB failed.
+        expect(discretionaryExemptionStatusByUlbId).toEqual(
+          new Map([
+            [ulbA, FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+            [ulbB, FORM_STATUS.RETURNED_BY_MOHUA],
+          ]),
+        );
+      });
+
+      it('returns each ULB form document, status and exemption as evidence for the claim snapshot', async () => {
+        const docA = new Types.ObjectId();
+        const docB = new Types.ObjectId();
+        const requestId = new Types.ObjectId();
+        mockCollection('xvifc_slb_forms', [
+          { _id: docA, ulb: new Types.ObjectId(ulbA), currentFormStatus: 3 },
+          { _id: docB, ulb: new Types.ObjectId(ulbB), currentFormStatus: FORM_STATUS.EXEMPTED_ACKNOWLEDGED },
+        ]);
+        exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
+          new Map([[ulbA, { requestId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }]]),
+        );
+        const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: exemptSlbConfig });
+
+        const { formEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA, ulbB],
+        });
+
+        expect(formEvidenceByUlbId?.get(ulbA)).toEqual({
+          bucket: 'EXEMPTED',
+          formDocumentId: String(docA),
+          statusAtEvaluation: 3,
+          exemptionId: String(requestId),
+          exemptionStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          exemptionKind: 'DISCRETIONARY_ULB',
+        });
+        expect(formEvidenceByUlbId?.get(ulbB)).toEqual({
+          bucket: 'EXEMPTED',
+          formDocumentId: String(docB),
+          statusAtEvaluation: FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: 'AUTO_NEW_ULB_STUB',
+        });
       });
     });
 
-    it('FORM_STATUS bulk: resolves a dotted currentFormStatus path (Annual Accounts style)', async () => {
-      mockCollection('xvifc_annualaccounts', [
-        { ulb: new Types.ObjectId(ulbA), auditedData: { form_status_id: 5 } },
-        { ulb: new Types.ObjectId(ulbB), auditedData: { form_status_id: 2 } },
+    it('FORM_STATUS bulk: resolves a dotted currentFormStatus path', async () => {
+      mockCollection('xvifc_slb_forms', [
+        { ulb: new Types.ObjectId(ulbA), review: { form_status_id: 5 } },
+        { ulb: new Types.ObjectId(ulbB), review: { form_status_id: 2 } },
       ]);
-      const auditedConfig: ClaimEligibilityConfig = {
+      const dottedConfig: ClaimEligibilityConfig = {
         ...slbConfig,
         acceptedFormStatuses: [5, 7],
         source: {
+          collection: 'xvifc_slb_forms',
+          fields: { designYear: 'year', ulb: 'ulb', currentFormStatus: 'review.form_status_id' },
+        },
+      };
+      const doc = sourceFormJson({ formId: 32, type: 'SLB', claimEligibility: dottedConfig });
+
+      const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
+
+      expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
+      expect(perUlb.get(ulbB)).toBe('INELIGIBLE');
+    });
+
+    it('FORM_STATUS bulk: Annual Accounts reads only its own section document via source.match', async () => {
+      mockCollection('xvifc_annualaccounts', [
+        { ulb: new Types.ObjectId(ulbA), form_status_id: 8 },
+        { ulb: new Types.ObjectId(ulbB), form_status_id: 3 },
+      ]);
+      const auditedConfig: ClaimEligibilityConfig = {
+        ...slbConfig,
+        acceptedFormStatuses: [5, 7, 8],
+        source: {
           collection: 'xvifc_annualaccounts',
-          fields: {
-            designYear: 'design_year',
-            state: 'state',
-            ulb: 'ulb',
-            currentFormStatus: 'auditedData.form_status_id',
-          },
+          match: { sectionType: 'audited' },
+          fields: { designYear: 'design_year', state: 'state', ulb: 'ulb', currentFormStatus: 'form_status_id' },
         },
       };
       const doc = sourceFormJson({ formId: 30, type: 'ANNUAL_ACCOUNT_AUDITED', claimEligibility: auditedConfig });
 
       const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds });
 
+      const [query] = byCollection['xvifc_annualaccounts'].find.mock.calls[0] as [Record<string, unknown>];
+      expect(query['sectionType']).toBe('audited');
+      expect(query['state']).toBe(stateId);
       expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
       expect(perUlb.get(ulbB)).toBe('INELIGIBLE');
     });
@@ -571,7 +708,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
       expect(perUlb.get(ulbA)).toBe('ELIGIBLE');
       expect(perUlb.get(ulbB)).toBe('INELIGIBLE');
       expect(perUlb.get(ulbC)).toBe('EXEMPTED');
-      expect(tally).toEqual({ eligible: 1, ineligible: 1, exempted: 1, total: 3 });
+      expect(tally).toEqual({ eligible: 1, ineligible: 1, exempted: 1, exemptedUnderReview: 0, total: 3 });
     });
 
     it('ROW_STATUS_AND_FIELDS bulk: resolves the parent form’s activeDatasetVersion and filters rows by it', async () => {
@@ -628,7 +765,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [23],
+        });
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
         const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
@@ -643,7 +784,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [23],
+        });
         exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
           new Map([[ulbC, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
         );
@@ -678,27 +823,37 @@ describe('ClaimEligibilityEvaluatorService', () => {
         mockCollection('xvifc_elected_ulb_rows', [
           { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Not Constituted' },
         ]);
+        const requestId = new Types.ObjectId('6ab630c411607f9d6540b099');
         exemptionResolverService.resolveDiscretionaryBulk.mockResolvedValue(
-          new Map([[ulbA, { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
+          new Map([[ulbA, { requestId, currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }]]),
         );
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
-        const { perUlb, tally, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
-          stateId,
-          designYearId,
-          expectedUlbIds: [ulbA],
-        });
+        const { perUlb, tally, rowEvidenceByUlbId, discretionaryExemptionStatusByUlbId } =
+          await service.evaluateUlbBulk(doc, {
+            stateId,
+            designYearId,
+            expectedUlbIds: [ulbA],
+          });
 
         // A later, authoritative MoHUA decision overrides the real (but now moot) row data.
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, total: 1 });
+        expect(tally).toEqual({ eligible: 0, ineligible: 0, exempted: 1, exemptedUnderReview: 0, total: 1 });
+        expect(discretionaryExemptionStatusByUlbId).toEqual(
+          new Map([[ulbA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA]]),
+        );
         // Still frozen as evidence (with the real row's own fields) so claim-letter assembly
         // doesn't fall back to the state-level source's own result for this ULB.
-        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
           bucket: 'EXEMPTED',
           rowDocumentId: expect.any(String),
           rowStatusAtEvaluation: null,
           datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+          rowValue: 'Not Constituted',
+          rowAccepted: null, // no rowFormStatusField configured
+          exemptionId: '6ab630c411607f9d6540b099',
+          exemptionStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          exemptionKind: 'DISCRETIONARY_ULB',
         });
       });
 
@@ -710,7 +865,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [23],
+        });
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
         const { perUlb } = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
@@ -729,21 +888,32 @@ describe('ClaimEligibilityEvaluatorService', () => {
         formJsonConfigService.findByFormId.mockResolvedValue({ formId: 23, isApplicableForExemption: true });
         yearModel.findById.mockReturnValue(q({ _id: designYearId, year: '2026-27' }));
         ulbModel.find.mockReturnValue(q([{ _id: new Types.ObjectId(ulbA), startYear: 2026, yearAccess: {} }]));
-        yearAccessService.peekEntry.mockResolvedValue({ yearEnabled: true, yearId: designYearId, disabledFormIds: [23] });
+        yearAccessService.peekEntry.mockResolvedValue({
+          yearEnabled: true,
+          yearId: designYearId,
+          disabledFormIds: [23],
+        });
         const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: exemptElectedBodyRowConfig });
 
-        const { perUlb, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+        const { perUlb, rowEvidenceByUlbId, discretionaryExemptionStatusByUlbId } = await service.evaluateUlbBulk(doc, {
           stateId,
           designYearId,
           expectedUlbIds: [ulbA],
         });
 
         expect(perUlb.get(ulbA)).toBe('EXEMPTED');
-        expect(rowEvidenceByUlbId.get(ulbA)).toEqual({
+        // Automatic exemptions are not "requested" ones, so the claim letter shows them as Yes.
+        expect(discretionaryExemptionStatusByUlbId.size).toBe(0);
+        expect(rowEvidenceByUlbId?.get(ulbA)).toEqual({
           bucket: 'EXEMPTED',
           rowDocumentId: null,
           rowStatusAtEvaluation: null,
           datasetVersion: null, // mockCollection's findOne always resolves null; unrelated to this test
+          rowValue: null,
+          rowAccepted: null,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: 'AUTO_NEW_ULB_NO_DOCUMENT',
         });
       });
 
@@ -798,9 +968,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
       // single-result evaluate() path for the state-level pass/fail line), but this method must
       // still route to row logic based on source.rowCollection being present.
       mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
-      mockCollection('xvifc_elected_ulb_rows', [
-        { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted' },
-      ]);
+      mockCollection('xvifc_elected_ulb_rows', [{ ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted' }]);
       const combinedConfig: ClaimEligibilityConfig = {
         ...electedBodyRowConfig,
         evaluator: { type: 'FORM_STATUS', config: electedBodyRowConfig.evaluator.config },
@@ -993,6 +1161,11 @@ describe('ClaimEligibilityEvaluatorService', () => {
           rowDocumentId: rowId.toString(),
           rowStatusAtEvaluation: 7,
           datasetVersion: null,
+          rowValue: true,
+          rowAccepted: true,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: null,
         });
       });
 
@@ -1033,7 +1206,40 @@ describe('ClaimEligibilityEvaluatorService', () => {
           rowDocumentId: rowId.toString(),
           rowStatusAtEvaluation: 5,
           datasetVersion: 4,
+          rowValue: 'Constituted',
+          rowAccepted: true,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: null,
         });
+      });
+
+      it('marks a row not yet accepted (rowAccepted false) but keeps its value for display', async () => {
+        mockCollection('xvifc_elected_ulb_forms', [{ activeDatasetVersion: 1 }]);
+        mockCollection('xvifc_elected_ulb_rows', [
+          { ulbId: new Types.ObjectId(ulbA), electedBodyStatus: 'Constituted', rowStatus: 2 },
+        ]);
+        const configWithFormStatus: ClaimEligibilityConfig = {
+          ...electedBodyRowConfig,
+          evaluator: {
+            type: 'ROW_STATUS_AND_FIELDS',
+            config: {
+              ...(electedBodyRowConfig.evaluator.config as Record<string, unknown>),
+              rowFormStatusField: 'rowStatus',
+              rowAcceptedFormStatuses: [5, 7],
+            },
+          },
+        };
+        const doc = sourceFormJson({ formId: 23, type: 'ELECTED_BODY', claimEligibility: configWithFormStatus });
+
+        const { perUlb, rowEvidenceByUlbId } = await service.evaluateUlbBulk(doc, {
+          stateId,
+          designYearId,
+          expectedUlbIds: [ulbA],
+        });
+
+        expect(perUlb.get(ulbA)).toBe('INELIGIBLE');
+        expect(rowEvidenceByUlbId?.get(ulbA)).toMatchObject({ rowValue: 'Constituted', rowAccepted: false });
       });
 
       it('has no entry for a ULB with no row at all (defaultWhenNoRow applied — nothing to freeze)', async () => {
@@ -1057,6 +1263,7 @@ describe('ClaimEligibilityEvaluatorService', () => {
         const result = await service.evaluateUlbBulk(doc, { stateId, designYearId, expectedUlbIds: [ulbA] });
 
         expect(result.rowEvidenceByUlbId).toBeUndefined();
+        expect(result.discretionaryExemptionStatusByUlbId).toEqual(new Map());
       });
     });
   });

@@ -39,6 +39,14 @@ class PdfFile {
 
   @Prop()
   metadataRetryUrl?: string; // the url metadataRetryCount is tracked against
+
+  // Set by the duplicates backfill (bal_sheet ... cash_flow `pdf` only): true when this slot holds the same file as an
+  // earlier slot of the same audit type. Absent = not checked yet.
+  @Prop()
+  isDuplicate?: boolean;
+
+  @Prop()
+  duplicateOfDocType?: string; // slot that holds the original file; only when isDuplicate
 }
 export const PdfFileSchema = SchemaFactory.createForClass(PdfFile);
 

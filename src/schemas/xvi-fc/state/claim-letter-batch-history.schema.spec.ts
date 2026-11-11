@@ -53,6 +53,20 @@ describe('ClaimLetterBatchHistorySchema', () => {
     expect(buildValidDoc().rejectedSourceRefs).toEqual([]);
   });
 
+  it('defaults submittedFiles to null and validates both files on a submit entry', () => {
+    expect(buildValidDoc().submittedFiles).toBeNull();
+
+    const file = { originalName: 'a.pdf', path: 'x/a.pdf', mimeType: 'application/pdf', extension: 'pdf', sizeKb: 1 };
+    const submitted = buildValidDoc({
+      submittedFiles: {
+        signedClaimFile: file,
+        finalClaimPdf: { file, sourceKey: 'k', included: ['Signed claim letter'], pageCount: 1, builtAt: new Date() },
+      },
+    });
+    expect(submitted.validateSync()).toBeUndefined();
+    expect(buildValidDoc({ submittedFiles: { signedClaimFile: file } }).validateSync()).toBeDefined();
+  });
+
   it('rejects an unrecognized actionSource', () => {
     const error = buildValidDoc({ actionSource: 'SOMETHING_ELSE' }).validateSync();
     expect(error).toBeDefined();

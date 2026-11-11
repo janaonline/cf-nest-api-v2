@@ -28,6 +28,7 @@ import {
   XviFcUnspentStateFormRow,
   XviFcUnspentStateFormRowSchema,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
+import { XviFcSfcStatus, XviFcSfcStatusSchema } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ClaimLetterController } from './claim-letter.controller';
 import { ClaimLetterService } from './services/main/claim-letter.service';
@@ -38,8 +39,12 @@ import { ClaimLetterAssemblyService } from './services/assembly/claim-letter-ass
 import { ClaimLetterHistoryService } from './services/history/claim-letter-history.service';
 import { ClaimLetterRecoveryService } from './services/recovery/claim-letter-recovery.service';
 import { ClaimLetterDocumentService } from './services/document/claim-letter-document.service';
-import { ClaimLetterPdfService } from './services/document/claim-letter-pdf.service';
+import { ClaimLetterDocxService } from './services/document/claim-letter-docx.service';
 import { ClaimLetterFormJsonService } from './services/form-json/claim-letter-form-json.service';
+import { ClaimLetterLetterDetailsService } from './services/letter-details/claim-letter-letter-details.service';
+import { ClaimLetterActiveBatchService } from './services/active-batch/claim-letter-active-batch.service';
+import { ClaimLetterFinalPdfService } from './services/final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterSubmitService } from './services/submit/claim-letter-submit.service';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 
 @Module({
@@ -49,8 +54,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
       { name: ClaimLetterBatchUlb.name, schema: ClaimLetterBatchUlbSchema },
       { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
       { name: ClaimLetterBatchHistory.name, schema: ClaimLetterBatchHistorySchema },
-      // Read-only cross-references — this module never writes to Devolution Formula, Ulb, State,
-      // Year, User, or FC Unspent Declaration.
+      // Read-only: this module never writes to the collections below.
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },
       { name: DevolutionFormulaRow.name, schema: DevolutionFormulaRowSchema },
       { name: Ulb.name, schema: UlbSchema },
@@ -59,6 +63,7 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
       { name: User.name, schema: UserSchema },
       { name: XviFcUnspentStateForm.name, schema: XviFcUnspentStateFormSchema },
       { name: XviFcUnspentStateFormRow.name, schema: XviFcUnspentStateFormRowSchema },
+      { name: XviFcSfcStatus.name, schema: XviFcSfcStatusSchema },
     ]),
     XviFcCommonModule,
     FormJsonModule,
@@ -73,7 +78,11 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterHistoryService,
     ClaimLetterRecoveryService,
     ClaimLetterDocumentService,
-    ClaimLetterPdfService,
+    ClaimLetterDocxService,
+    ClaimLetterLetterDetailsService,
+    ClaimLetterActiveBatchService,
+    ClaimLetterFinalPdfService,
+    ClaimLetterSubmitService,
     ClaimLetterFormJsonService,
     S3Service,
   ],

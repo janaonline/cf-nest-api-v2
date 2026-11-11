@@ -13,6 +13,14 @@ export enum UploadedBy {
   AFS = 'AFS',
 }
 
+export enum DigitizationV3Statuses {
+  NOT_DIGITIZED = 'not-digitized',
+  QUEUED = 'queued',
+  PROCESSING = 'processing',
+  DIGITIZED = 'digitized',
+  FAILED = 'failed',
+}
+
 export enum DigitizationStatuses {
   // NOT_STARTED = 'not-started',
   NOT_DIGITIZED = 'not-digitized',

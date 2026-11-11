@@ -6,6 +6,7 @@ import { ClaimLetterAssemblyService } from './claim-letter-assembly.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -25,6 +26,11 @@ function q<T>(value: T) {
 
 function duplicateKeyError(): Error & { code: number } {
   return Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+}
+
+/** Another open transaction wrote the same key first. */
+function writeConflictError(): Error & { code: number } {
+  return Object.assign(new Error('WriteConflict'), { code: 112 });
 }
 
 /** `createDraft`/`updateDraft`/`abandonDraft` now map their raw doc through
@@ -84,11 +90,12 @@ describe('ClaimLetterAssemblyService', () => {
     evaluateStateLevelGate: jest.Mock;
     resolveDevolutionAllocations: jest.Mock;
     resolveUlbLevelEligibility: jest.Mock;
-    computeTotalAlreadyAcknowledged: jest.Mock;
+    resolveClaimedUlbBatches: jest.Mock;
     getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
-  let formJsonConfigService: { loadVarianceConfig: jest.Mock };
+  let formJsonConfigService: { loadClaimAmountConfig: jest.Mock };
+  let activeBatchService: { assertCanCreate: jest.Mock };
 
   const allocation = {
     allocatedAmount: 100,
@@ -135,6 +142,22 @@ describe('ClaimLetterAssemblyService', () => {
     };
   }
 
+  /** ulbA and ulbB both resolve as known ULBs with an allocation, so only a lock can refuse them. */
+  function bothUlbsValid() {
+    ulbModel.find.mockReturnValue(
+      q([
+        { _id: ulbAId, name: 'Alpha ULB', censusCode: '111', sbCode: null },
+        { _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null },
+      ]),
+    );
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
+      new Map([
+        [ulbAId.toString(), allocation],
+        [ulbBId.toString(), allocation],
+      ]),
+    );
+  }
+
   function parentDoc(overrides: Record<string, unknown> = {}) {
     return {
       _id: parentId,
@@ -176,7 +199,7 @@ describe('ClaimLetterAssemblyService', () => {
         }),
       ),
       findById: jest.fn().mockReturnValue(q(null)),
-      deleteOne: jest.fn().mockResolvedValue(undefined),
+      deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
       updateOne: jest.fn().mockResolvedValue(undefined),
     };
     batchUlbModel = {
@@ -199,8 +222,9 @@ describe('ClaimLetterAssemblyService', () => {
     eligibilityService = {
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ sources: [], passed: true }),
       resolveDevolutionAllocations: jest.fn().mockResolvedValue(new Map([[ulbAId.toString(), allocation]])),
-      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
-      computeTotalAlreadyAcknowledged: jest.fn().mockResolvedValue(0),
+      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map(), perCriterion: [] }),
+      // Read only after a failed lock write, to name the rows another claim holds.
+      resolveClaimedUlbBatches: jest.fn().mockResolvedValue(new Map()),
       getClaimStatusBreakdown: jest.fn().mockResolvedValue({
         totalAlreadyAcknowledged: 0,
         totalClaimInProgress: 0,
@@ -209,9 +233,12 @@ describe('ClaimLetterAssemblyService', () => {
       }),
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
+    // The production default: switch off, so the claim is the allocation.
     formJsonConfigService = {
-      loadVarianceConfig: jest.fn().mockResolvedValue({ lowerPercent: 90, upperPercent: 110 }),
+      loadClaimAmountConfig: jest.fn().mockResolvedValue({ editable: false, lowerPercent: 90, upperPercent: 110 }),
     };
+
+    activeBatchService = { assertCanCreate: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -226,6 +253,7 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
         { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
+        { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
       ],
     }).compile();
 
@@ -264,6 +292,12 @@ describe('ClaimLetterAssemblyService', () => {
     expect(connection.startSession).not.toHaveBeenCalled();
   });
 
+  it('refuses to create a batch while another batch is active, before any write', async () => {
+    activeBatchService.assertCanCreate.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
+    await expect(service.createDraft(baseInput())).rejects.toThrow('Batch 1 is still in progress');
+    expect(connection.startSession).not.toHaveBeenCalled();
+  });
+
   // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
 
   it('returns the existing READY doc (mapped to a summary) when retried with the same buildRequestId', async () => {
@@ -295,7 +329,9 @@ describe('ClaimLetterAssemblyService', () => {
   it('throws ConflictException when retried with a buildRequestId whose build is still in progress or failed', async () => {
     batchModel.findOne.mockReturnValue(q({ _id: parentId, assemblyStatus: 'BUILDING' }));
 
-    await expect(service.createDraft(baseInput({ buildRequestId: 'key-1' }))).rejects.toThrow(ConflictException);
+    await expect(service.createDraft(baseInput({ buildRequestId: 'key-1' }))).rejects.toThrow(
+      'This claim letter is still being created. Please wait a moment, then try again.',
+    );
   });
 
   it('does not check for an existing build when no buildRequestId is supplied', async () => {
@@ -317,6 +353,8 @@ describe('ClaimLetterAssemblyService', () => {
     // Nothing reclaimable -> no cleanup, no wasted second attempt.
     expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
     expect(batchModel.create).not.toHaveBeenCalled();
+    // A slot conflict names no ULB rows.
+    expect(eligibilityService.resolveClaimedUlbBatches).not.toHaveBeenCalled();
   });
 
   it('reclaims a stale BUILDING parent occupying a batch slot and succeeds on retry', async () => {
@@ -381,6 +419,80 @@ describe('ClaimLetterAssemblyService', () => {
     expect(lockModel.insertMany).toHaveBeenCalledTimes(1);
   });
 
+  it('names the request rows another live claim holds, so the page can drop them', async () => {
+    bothUlbsValid();
+    lockModel.insertMany.mockRejectedValue(duplicateKeyError());
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbBId, claimLetter: new Types.ObjectId() }]));
+    eligibilityService.resolveClaimedUlbBatches.mockResolvedValue(new Map([[ulbBId.toString(), { batchNumber: 2 }]]));
+
+    let thrown: ConflictException | undefined;
+    try {
+      await service.createDraft(
+        baseInput({
+          ulbSelections: [
+            { ulbId: ulbAId.toString(), claimedAmount: 100 },
+            { ulbId: ulbBId.toString(), claimedAmount: 100 },
+          ],
+        }),
+      );
+    } catch (err) {
+      thrown = err as ConflictException;
+    }
+
+    expect(thrown).toBeInstanceOf(ConflictException);
+    expect(thrown?.getResponse()).toEqual({
+      message: '1 selected ULB is already locked in another active claim.',
+      code: 'CLAIM_LETTER_ULBS_REJECTED',
+      errors: {
+        'ulbSelections.1.ulbId': [{ field: 'ulbId', code: 'IN_ANOTHER_CLAIM', message: 'Already in Claim Batch #2.' }],
+      },
+    });
+    // The draft's transaction was aborted, so no lock of its own is left to exclude.
+    expect(eligibilityService.resolveClaimedUlbBatches).toHaveBeenCalledWith(
+      stateId.toString(),
+      yearId.toString(),
+      1,
+      undefined,
+    );
+  });
+
+  it('keeps the plain conflict when the lock was released before it could be named', async () => {
+    lockModel.insertMany.mockRejectedValue(duplicateKeyError());
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbAId, claimLetter: new Types.ObjectId() }]));
+
+    await expect(service.createDraft(baseInput())).rejects.toThrow(
+      'One or more selected ULBs are already locked in another active claim.',
+    );
+  });
+
+  it('keeps the plain 409 when naming the locked rows fails', async () => {
+    lockModel.insertMany.mockRejectedValue(duplicateKeyError());
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbAId, claimLetter: new Types.ObjectId() }]));
+    eligibilityService.resolveClaimedUlbBatches.mockRejectedValue(new Error('lookup down'));
+
+    const thrown = await service.createDraft(baseInput()).catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(ConflictException);
+    expect((thrown as ConflictException).message).toBe(
+      'One or more selected ULBs are already locked in another active claim.',
+    );
+  });
+
+  it('treats a WriteConflict on the lock insert as a lock conflict (409), not a 500', async () => {
+    lockModel.insertMany.mockRejectedValue(writeConflictError());
+    lockModel.find.mockReturnValue(q([{ ulbId: ulbAId, claimLetter: new Types.ObjectId() }]));
+
+    await expect(service.createDraft(baseInput())).rejects.toThrow(
+      'One or more selected ULBs are already locked in another active claim.',
+    );
+  });
+
+  it('treats a WriteConflict on the slot insert as a slot just taken', async () => {
+    batchModel.create.mockRejectedValue(writeConflictError());
+
+    await expect(service.createDraft(baseInput())).rejects.toThrow(/batch slot/i);
+  });
+
   it('reclaims a stale lock owner and succeeds on retry', async () => {
     const staleOwnerId = new Types.ObjectId();
     lockModel.insertMany.mockRejectedValueOnce(duplicateKeyError()); // 1st attempt conflicts; retry succeeds
@@ -410,6 +522,8 @@ describe('ClaimLetterAssemblyService', () => {
   it('reclaims a stale lock owner but still fails when another requested ULB is genuinely locked by a live claim', async () => {
     const staleOwnerId = new Types.ObjectId();
     const liveOwnerId = new Types.ObjectId();
+    bothUlbsValid();
+    eligibilityService.resolveClaimedUlbBatches.mockResolvedValue(new Map([[ulbBId.toString(), { batchNumber: 2 }]]));
     lockModel.insertMany.mockRejectedValue(duplicateKeyError()); // every attempt still conflicts (ulbBId is live)
     lockModel.find.mockReturnValue(
       q([
@@ -424,17 +538,23 @@ describe('ClaimLetterAssemblyService', () => {
       return q([]);
     });
 
-    await expect(
-      service.createDraft(
+    const thrown = await service
+      .createDraft(
         baseInput({
           ulbSelections: [
             { ulbId: ulbAId.toString(), claimedAmount: 100 },
             { ulbId: ulbBId.toString(), claimedAmount: 100 },
           ],
         }),
-      ),
-    ).rejects.toThrow(/already locked/i);
+      )
+      .catch((err: unknown) => err);
 
+    // The retry's conflict is named row by row too.
+    expect(thrown).toBeInstanceOf(ConflictException);
+    expect((thrown as ConflictException).getResponse()).toMatchObject({
+      message: '1 selected ULB is already locked in another active claim.',
+      errors: { 'ulbSelections.1.ulbId': [{ code: 'IN_ANOTHER_CLAIM', message: 'Already in Claim Batch #2.' }] },
+    });
     // The stale owner's artifacts were cleaned up even though the request overall still failed —
     // reclaim isn't all-or-nothing.
     expect(batchUlbModel.deleteMany).toHaveBeenCalledWith({ claimLetter: staleOwnerId }, expect.anything());
@@ -484,40 +604,35 @@ describe('ClaimLetterAssemblyService', () => {
 
   // ─── Step 3: eligibility / allocation / variance validation ─────────────────
 
-  it('throws BadRequestException and rolls back when the state-level gate fails', async () => {
+  it('throws BadRequestException before reserving anything when the state-level gate fails', async () => {
     eligibilityService.evaluateStateLevelGate.mockResolvedValue({
       sources: [{ result: 'FAILED', reasonCode: 'FORM_STATUS_2_NOT_ACCEPTED' }],
       passed: false,
     });
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
-    expect(batchModel.deleteOne).toHaveBeenCalledWith({ _id: parentId, assemblyStatus: 'BUILDING' }, expect.anything());
+    // Validated before reserving, so there is no slot, lock or parent to roll back.
+    expect(connection.startSession).not.toHaveBeenCalled();
     // Short-circuit: resolveUlbLevelEligibility (the heaviest fetch — a bulk find per
     // ULB-bulk-evaluable source) must never run once the state gate has already failed.
     expect(eligibilityService.resolveUlbLevelEligibility).not.toHaveBeenCalled();
   });
 
-  it('throws BadRequestException and rolls back when a selected ULB has no Devolution allocation', async () => {
+  it('throws BadRequestException before reserving anything when a selected ULB has no Devolution allocation', async () => {
     eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
-    expect(batchModel.deleteOne).toHaveBeenCalled();
+    expect(connection.startSession).not.toHaveBeenCalled();
   });
 
-  it('throws BadRequestException and rolls back when a selected ULB fails a new per-ULB criterion (SLB, Annual Accounts, etc.)', async () => {
+  it('throws BadRequestException before reserving anything when a selected ULB fails a new per-ULB criterion (SLB, Annual Accounts, etc.)', async () => {
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), false]]),
     });
 
     await expect(service.createDraft(baseInput())).rejects.toThrow(BadRequestException);
-    expect(batchModel.deleteOne).toHaveBeenCalled();
-  });
-
-  it('throws BadRequestException and rolls back when a claimed amount is outside the ±10% band', async () => {
-    await expect(
-      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] })),
-    ).rejects.toThrow(BadRequestException);
-    expect(batchModel.deleteOne).toHaveBeenCalled();
+    expect(connection.startSession).not.toHaveBeenCalled();
   });
 
   it('identifies an invalid ULB by censusCode in the error message, not its raw Mongo id', async () => {
@@ -531,19 +646,187 @@ describe('ClaimLetterAssemblyService', () => {
     expect(thrown?.message).not.toContain(ulbAId.toString());
   });
 
-  it('fetches the variance band via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
-    await service.createDraft(baseInput());
-    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledTimes(1);
-    expect(formJsonConfigService.loadVarianceConfig).toHaveBeenCalledWith(yearId.toString());
+  it('names each refused request row, ULB or amount, under CLAIM_LETTER_ULBS_REJECTED', async () => {
+    ulbModel.find.mockReturnValue(
+      q([
+        { _id: ulbAId, name: 'Alpha ULB', censusCode: '111', sbCode: null },
+        { _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null },
+      ]),
+    );
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(
+      new Map([
+        [ulbAId.toString(), allocation],
+        [ulbBId.toString(), allocation],
+      ]),
+    );
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
+      perUlbEligible: new Map([[ulbBId.toString(), false]]),
+    });
+
+    let thrown: BadRequestException | undefined;
+    try {
+      await service.createDraft(
+        baseInput({
+          ulbSelections: [
+            { ulbId: ulbAId.toString(), claimedAmount: 200 }, // amount differs from the allocation
+            { ulbId: ulbBId.toString() }, // no longer eligible
+          ],
+        }),
+      );
+    } catch (err) {
+      thrown = err as BadRequestException;
+    }
+
+    expect(thrown).toBeInstanceOf(BadRequestException);
+    expect(thrown?.getResponse()).toEqual({
+      message: '2 selected ULBs are ineligible or have an invalid claimed amount: 111, 222.',
+      code: 'CLAIM_LETTER_ULBS_REJECTED',
+      errors: {
+        'ulbSelections.0.claimedAmount': [
+          {
+            field: 'claimedAmount',
+            code: 'INVALID_CLAIMED_AMOUNT',
+            message: 'This claim amount is not allowed for this ULB.',
+          },
+        ],
+        'ulbSelections.1.ulbId': [{ field: 'ulbId', code: 'INELIGIBLE', message: 'This ULB is no longer eligible.' }],
+      },
+    });
   });
 
-  it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
-    formJsonConfigService.loadVarianceConfig.mockResolvedValue({ lowerPercent: 100, upperPercent: 100 });
+  it('names locked rows in the same refusal as ineligible ones, and reserves nothing', async () => {
+    ulbModel.find.mockReturnValue(
+      q([
+        { _id: ulbAId, name: 'Alpha ULB', censusCode: '111', sbCode: null },
+        { _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null },
+      ]),
+    );
+    // ulbA has no allocation (ineligible); ulbB is valid, but another claim holds it.
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map([[ulbBId.toString(), allocation]]));
+    eligibilityService.resolveClaimedUlbBatches.mockResolvedValue(new Map([[ulbBId.toString(), { batchNumber: 2 }]]));
 
-    // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
-    await expect(
-      service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
-    ).rejects.toThrow(BadRequestException);
+    const thrown = await service
+      .createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString() }, { ulbId: ulbBId.toString() }] }))
+      .catch((err: unknown) => err);
+
+    expect(thrown).toBeInstanceOf(BadRequestException);
+    expect((thrown as BadRequestException).getResponse()).toEqual({
+      message:
+        '1 selected ULB is ineligible or has an invalid claimed amount: 111. 1 selected ULB is already locked in another active claim.',
+      code: 'CLAIM_LETTER_ULBS_REJECTED',
+      errors: {
+        'ulbSelections.0.ulbId': [{ field: 'ulbId', code: 'INELIGIBLE', message: 'This ULB is no longer eligible.' }],
+        'ulbSelections.1.ulbId': [{ field: 'ulbId', code: 'IN_ANOTHER_CLAIM', message: 'Already in Claim Batch #2.' }],
+      },
+    });
+    // A create has no locks of its own yet.
+    expect(eligibilityService.resolveClaimedUlbBatches).toHaveBeenCalledWith(
+      stateId.toString(),
+      yearId.toString(),
+      1,
+      undefined,
+    );
+    expect(connection.startSession).not.toHaveBeenCalled();
+  });
+
+  it('still refuses the ineligible rows when the lock lookup fails', async () => {
+    eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map());
+    eligibilityService.resolveClaimedUlbBatches.mockRejectedValue(new Error('lookup down'));
+
+    await expect(service.createDraft(baseInput())).rejects.toThrow(
+      '1 selected ULB is ineligible or has an invalid claimed amount: 111.',
+    );
+  });
+
+  it('runs no lock lookup for a valid selection', async () => {
+    await service.createDraft(baseInput());
+    expect(eligibilityService.resolveClaimedUlbBatches).not.toHaveBeenCalled();
+  });
+
+  it('fetches the claim-amount config via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
+    await service.createDraft(baseInput());
+    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledTimes(1);
+    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledWith(yearId.toString());
+  });
+
+  describe('claim-amount switch off (claim = allocation)', () => {
+    function insertedChild(): Record<string, unknown> {
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      return ops[0].insertOne.document;
+    }
+
+    it('stores the allocation as the claim, with zero difference, when no amount is sent', async () => {
+      await service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString() }] }));
+
+      expect(insertedChild()).toEqual(
+        expect.objectContaining({
+          allocatedAmount: 100,
+          claimedAmount: 100,
+          differenceAmount: 0,
+          differencePercentageBasisPoints: 0,
+        }),
+      );
+    });
+
+    it('accepts a sent amount equal to the allocation', async () => {
+      await service.createDraft(baseInput());
+      expect(insertedChild()['claimedAmount']).toBe(100);
+    });
+
+    it('rejects a sent amount that differs from the allocation, even inside the old ±10% band', async () => {
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+      ).rejects.toThrow(/111/);
+      expect(batchUlbModel.bulkWrite).not.toHaveBeenCalled();
+      expect(connection.startSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('claim-amount switch on (editable within the band)', () => {
+    beforeEach(() => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
+        editable: true,
+        lowerPercent: 90,
+        upperPercent: 110,
+      });
+    });
+
+    it('stores a sent amount inside the band', async () => {
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ claimedAmount: 105 })]));
+      await service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] }));
+
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      expect(ops[0].insertOne.document).toEqual(
+        expect.objectContaining({ claimedAmount: 105, differenceAmount: 5, differencePercentageBasisPoints: 500 }),
+      );
+    });
+
+    it('throws BadRequestException before reserving anything when a claimed amount is outside the ±10% band', async () => {
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 200 }] })),
+      ).rejects.toThrow(BadRequestException);
+      expect(connection.startSession).not.toHaveBeenCalled();
+    });
+
+    it('rejects a selection without an amount', async () => {
+      await expect(service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString() }] }))).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('gates against a configured non-default variance band rather than the hardcoded 90/110', async () => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
+        editable: true,
+        lowerPercent: 100,
+        upperPercent: 100,
+      });
+
+      // allocation is 100; a claim of 105 is within the default 90-110 band but outside a 100-100 band.
+      await expect(
+        service.createDraft(baseInput({ ulbSelections: [{ ulbId: ulbAId.toString(), claimedAmount: 105 }] })),
+      ).rejects.toThrow(BadRequestException);
+    });
   });
 
   it('inserts children in chunks, never one giant array (chunk-boundary correctness)', async () => {
@@ -612,6 +895,7 @@ describe('ClaimLetterAssemblyService', () => {
     };
     eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), true]]),
       rowEvidenceByFormId: new Map([
         [
@@ -675,6 +959,7 @@ describe('ClaimLetterAssemblyService', () => {
     };
     eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
     eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
       perUlbEligible: new Map([[ulbAId.toString(), true]]),
       rowEvidenceByFormId: new Map([[23, new Map()]]), // no entry for ulbA — defaultWhenNoRow applied
     });
@@ -692,6 +977,226 @@ describe('ClaimLetterAssemblyService', () => {
       result: 'PASSED',
       reasonCode: 'ROW_DEFAULT_NO_ROW',
     });
+  });
+
+  it('freezes an Entire State exemption without a source document, with the exemption status', async () => {
+    const exemptionId = new Types.ObjectId();
+    const sfcSource = {
+      formId: 22,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'SFC_STATUS',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM',
+      formDocumentId: null,
+      statusAtEvaluation: null,
+      result: 'EXEMPTED',
+      exemptionId: exemptionId.toString(),
+      exemptionStatus: 5,
+      reasonCode: 'DISCRETIONARY_EXEMPTION_PENDING',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: null,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: null,
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [sfcSource], passed: true });
+
+    await service.createDraft(baseInput());
+
+    const [, update] = batchModel.findOneAndUpdate.mock.calls[0] as [
+      unknown,
+      { $set: { stateEligibilitySources: Record<string, unknown>[] } },
+    ];
+    expect(update.$set.stateEligibilitySources[0]).toMatchObject({
+      formId: 22,
+      formDocumentId: null,
+      statusAtEvaluation: null,
+      result: 'EXEMPTED',
+      exemptionId,
+      exemptionStatusAtEvaluation: 5,
+    });
+  });
+
+  it("freezes a ULB's exemption status from its row evidence on a FORM_AND_ROW entry", async () => {
+    const electedBodyFormDocId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perCriterion: [],
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              {
+                bucket: 'EXEMPTED',
+                rowDocumentId: null,
+                rowStatusAtEvaluation: null,
+                datasetVersion: 4,
+                rowValue: null,
+                rowAccepted: null,
+                exemptionStatus: 5,
+              },
+            ],
+          ]),
+        ],
+      ]),
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const eligibilitySources = ops[0].insertOne.document['eligibilitySources'] as Record<string, unknown>[];
+    expect(eligibilitySources[0]).toMatchObject({
+      formDocumentId: electedBodyFormDocId,
+      result: 'EXEMPTED',
+      reasonCode: 'ROW_EXEMPTED',
+      exemptionStatusAtEvaluation: 5,
+    });
+  });
+
+  it('records every ULB condition on the child, each with the exemption it relied on', async () => {
+    const electedBodyFormDocId = new Types.ObjectId();
+    const auditedDocId = new Types.ObjectId();
+    const slbDocId = new Types.ObjectId();
+    // One request document per ULB holds every formId, so Elected Body and Audited share an id.
+    const requestId = new Types.ObjectId();
+    const electedBodySource = {
+      formId: 23,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 1,
+      formType: 'ELECTED_BODY',
+      ownerLevel: 'STATE',
+      evaluationLevel: 'FORM_AND_ROW',
+      formDocumentId: electedBodyFormDocId.toString(),
+      statusAtEvaluation: 7,
+      result: 'PASSED',
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+      evidence: {
+        evidenceVersion: 1,
+        resolvedFormStatus: 7,
+        acceptedFormStatuses: [5, 7],
+        sourceFormDocumentId: electedBodyFormDocId.toString(),
+        evaluatedAt: new Date().toISOString(),
+      },
+    };
+    const ulbCriterion = (formId: number, type: string, evidence: Record<string, unknown>) => ({
+      formId,
+      type,
+      formJsonId: new Types.ObjectId().toString(),
+      ruleVersion: 2,
+      ownerLevel: 'ULB',
+      evaluationLevel: 'FORM',
+      acceptedFormStatuses: [5, 7, 8],
+      formEvidence: new Map([[ulbAId.toString(), evidence]]),
+    });
+    eligibilityService.evaluateStateLevelGate.mockResolvedValue({ sources: [electedBodySource], passed: true });
+    eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+      perUlbEligible: new Map([[ulbAId.toString(), true]]),
+      rowEvidenceByFormId: new Map([
+        [
+          23,
+          new Map([
+            [
+              ulbAId.toString(),
+              {
+                bucket: 'EXEMPTED',
+                rowDocumentId: null,
+                rowStatusAtEvaluation: null,
+                datasetVersion: 1,
+                rowValue: 'Not Constituted',
+                rowAccepted: true,
+                exemptionId: requestId.toString(),
+                exemptionStatus: 5,
+                exemptionKind: 'DISCRETIONARY_ULB',
+              },
+            ],
+          ]),
+        ],
+      ]),
+      perCriterion: [
+        ulbCriterion(30, 'UPLOAD_CONFIG_AUDITED', {
+          bucket: 'EXEMPTED',
+          formDocumentId: auditedDocId.toString(),
+          statusAtEvaluation: 1,
+          exemptionId: requestId.toString(),
+          exemptionStatus: 5,
+          exemptionKind: 'DISCRETIONARY_ULB',
+        }),
+        ulbCriterion(32, 'SLB', {
+          bucket: 'ELIGIBLE',
+          formDocumentId: slbDocId.toString(),
+          statusAtEvaluation: 8,
+          exemptionId: null,
+          exemptionStatus: null,
+          exemptionKind: null,
+        }),
+      ],
+    });
+
+    await service.createDraft(baseInput());
+
+    const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [
+      Array<{ insertOne: { document: Record<string, unknown> } }>,
+    ];
+    const child = ops[0].insertOne.document;
+    const sources = child['eligibilitySources'] as Record<string, unknown>[];
+    expect(sources.map((s) => s['formId'])).toEqual([23, 30, 32]);
+    expect(sources[0]).toMatchObject({
+      result: 'EXEMPTED',
+      exemptionId: requestId,
+      exemptionStatusAtEvaluation: 5,
+      exemptionKind: 'DISCRETIONARY_ULB',
+    });
+    expect(sources[1]).toMatchObject({
+      formType: 'UPLOAD_CONFIG_AUDITED',
+      formDocumentId: auditedDocId,
+      statusAtEvaluation: 1,
+      ruleVersion: 2,
+      result: 'EXEMPTED',
+      exemptionId: requestId,
+      exemptionStatusAtEvaluation: 5,
+      exemptionKind: 'DISCRETIONARY_ULB',
+      reasonCode: 'DISCRETIONARY_EXEMPTION_PENDING',
+      evidence: {
+        resolvedFormStatus: 1,
+        acceptedFormStatuses: [5, 7, 8],
+        sourceFormDocumentId: auditedDocId.toString(),
+      },
+    });
+    expect(sources[2]).toMatchObject({
+      formDocumentId: slbDocId,
+      result: 'PASSED',
+      exemptionId: null,
+      exemptionKind: null,
+      reasonCode: 'FORM_STATUS_ACCEPTED',
+    });
+    expect(child['appliedExemptionIds']).toEqual([requestId]);
   });
 
   it('recovers cleanly when a chunk insert fails mid-flight (does not leave the parent READY)', async () => {
@@ -851,7 +1356,10 @@ describe('ClaimLetterAssemblyService', () => {
     it('claims the edit lock atomically before touching any child rows', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
       batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
-      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      // Current rows hold 95, the request 100: a real change, so the rebuild runs.
+      batchUlbModel.find
+        .mockReturnValueOnce(q([persistedChild({ ulbId: ulbAId, claimedAmount: 95 })]))
+        .mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
 
       await service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 100 }], 0, stateUser);
@@ -893,31 +1401,48 @@ describe('ClaimLetterAssemblyService', () => {
       expect(connection.startSession).not.toHaveBeenCalled();
     });
 
-    it('diffs locks correctly: releases removed ULBs, acquires added ULBs, leaves retained ULBs untouched', async () => {
+    /** Replacing ulbA with ulbB: ulbB resolves as a known ULB with an allocation. */
+    function replaceAWithB() {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
-      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
-      // First call (currentChildren, before the diff) sees the pre-update set: ulbA only.
-      // Second call (persistedChildren, in verify) sees the post-rebuild set: ulbB only —
-      // matching the new selection (a pure replace: drop ulbA, add ulbB).
+      ulbModel.find.mockReturnValue(q([{ _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null }]));
+      eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map([[ulbBId.toString(), allocation]]));
+    }
+
+    const editLockReleased = () =>
+      expect(batchModel.updateOne).toHaveBeenCalledWith(
+        { _id: parentId, editLockToken: expect.any(String) },
+        { $set: { editLockToken: null, editLockAcquiredAt: null } },
+      );
+
+    it('locks added ULBs up front and releases removed ones only in the finalize transaction', async () => {
+      replaceAWithB();
+      batchModel.findOneAndUpdate
+        .mockReturnValueOnce(q(parentDoc())) // the edit-lock claim
+        .mockReturnValueOnce(q(parentDoc({ revision: 1 }))); // the finalize
+      // currentChildren sees ulbA only; verify's re-fetch sees the rebuilt set, ulbB only.
       batchUlbModel.find
         .mockReturnValueOnce(q([{ ulbId: ulbAId }]))
         .mockReturnValueOnce(q([persistedChild({ ulbId: ulbBId })]));
-      ulbModel.find.mockReturnValue(q([{ _id: ulbBId, name: 'Beta ULB', censusCode: '222', sbCode: null }]));
-      eligibilityService.resolveDevolutionAllocations.mockResolvedValue(new Map([[ulbBId.toString(), allocation]]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbBId }]));
 
       await service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString(), claimedAmount: 100 }], 0, stateUser);
 
-      expect(lockModel.deleteMany).toHaveBeenCalledWith(
-        { claimLetter: parentId, ulbId: { $in: [ulbAId] } },
-        expect.anything(),
-      );
       const [insertedLocks] = lockModel.insertMany.mock.calls[0] as [Array<{ ulbId: Types.ObjectId }>];
       expect(insertedLocks.map((l) => l.ulbId.toString())).toEqual([ulbBId.toString()]);
+      expect(lockModel.deleteMany).toHaveBeenCalledTimes(1);
+      expect(lockModel.deleteMany).toHaveBeenCalledWith(
+        { claimLetter: parentId, ulbId: { $in: [ulbAId] } },
+        { session },
+      );
+      // Released after the draft write, in the same transaction, never before the rebuild.
+      const finalizeOrder = batchModel.findOneAndUpdate.mock.invocationCallOrder[1];
+      expect(lockModel.deleteMany.mock.invocationCallOrder[0]).toBeGreaterThan(finalizeOrder);
+      expect(batchUlbModel.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(finalizeOrder);
+      expect(session.commitTransaction).toHaveBeenCalledTimes(2); // addLocks, then finalize
     });
 
-    it('rejects and rolls back the lock diff when an added ULB is already locked elsewhere', async () => {
-      batchModel.findOne.mockReturnValue(q(parentDoc()));
+    it('rejects and rolls back the added locks when an added ULB is already locked elsewhere', async () => {
+      replaceAWithB();
       batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
       batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
       lockModel.insertMany.mockRejectedValue(duplicateKeyError());
@@ -927,11 +1452,105 @@ describe('ClaimLetterAssemblyService', () => {
       ).rejects.toThrow(/already locked/i);
       expect(session.abortTransaction).toHaveBeenCalled();
       expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
-      // diffLocks itself failed (its own transaction already rolled back) — the edit-lock claim
-      // still must be released so this draft isn't permanently un-editable.
-      expect(batchModel.updateOne).toHaveBeenCalledWith(
-        { _id: parentId, editLockToken: expect.any(String) },
-        { $set: { editLockToken: null, editLockAcquiredAt: null } },
+      expect(lockModel.deleteMany).not.toHaveBeenCalled();
+      editLockReleased();
+    });
+
+    it('names an added ULB another claim holds, by its row in the edit request', async () => {
+      replaceAWithB();
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      lockModel.insertMany.mockRejectedValue(duplicateKeyError());
+      eligibilityService.resolveClaimedUlbBatches.mockResolvedValue(
+        new Map([[ulbBId.toString(), { batchNumber: null }]]),
+      );
+
+      let thrown: ConflictException | undefined;
+      try {
+        await service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString() }], 0, stateUser);
+      } catch (err) {
+        thrown = err as ConflictException;
+      }
+
+      expect(thrown?.getResponse()).toMatchObject({
+        code: 'CLAIM_LETTER_ULBS_REJECTED',
+        errors: {
+          'ulbSelections.0.ulbId': [
+            { field: 'ulbId', code: 'IN_ANOTHER_CLAIM', message: 'Already in another claim batch.' },
+          ],
+        },
+      });
+      // This draft's own locks are not "another claim".
+      expect(eligibilityService.resolveClaimedUlbBatches).toHaveBeenCalledWith(
+        stateId.toString(),
+        yearId.toString(),
+        1,
+        parentId.toString(),
+      );
+      editLockReleased();
+    });
+
+    it('names locked and ineligible rows of an edit in one refusal, excluding its own locks', async () => {
+      replaceAWithB();
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      // ulbA no longer resolves (ineligible); ulbB is valid, but another claim holds it.
+      eligibilityService.resolveClaimedUlbBatches.mockResolvedValue(new Map([[ulbBId.toString(), { batchNumber: 3 }]]));
+
+      const thrown = await service
+        .updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString() }, { ulbId: ulbBId.toString() }], 0, stateUser)
+        .catch((err: unknown) => err);
+
+      expect(thrown).toBeInstanceOf(BadRequestException);
+      expect((thrown as BadRequestException).getResponse()).toMatchObject({
+        errors: {
+          'ulbSelections.0.ulbId': [{ code: 'INELIGIBLE' }],
+          'ulbSelections.1.ulbId': [{ code: 'IN_ANOTHER_CLAIM', message: 'Already in Claim Batch #3.' }],
+        },
+      });
+      expect(eligibilityService.resolveClaimedUlbBatches).toHaveBeenCalledWith(
+        stateId.toString(),
+        yearId.toString(),
+        1,
+        parentId.toString(),
+      );
+      expect(lockModel.insertMany).not.toHaveBeenCalled();
+      editLockReleased();
+    });
+
+    it('writes no lock when the new selection is rejected, and releases the edit lock', async () => {
+      replaceAWithB();
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+
+      // Allocation 100: 500 is not the allocation (switch off), and outside 90-110% too.
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString(), claimedAmount: 500 }], 0, stateUser),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(lockModel.insertMany).not.toHaveBeenCalled();
+      expect(lockModel.deleteMany).not.toHaveBeenCalled();
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+      editLockReleased();
+    });
+
+    it('after a failure past locking, deletes only the added locks and then releases the edit lock', async () => {
+      replaceAWithB();
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      batchUlbModel.bulkWrite.mockRejectedValueOnce(new Error('insert failed')).mockResolvedValue({});
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbBId.toString(), claimedAmount: 100 }], 0, stateUser),
+      ).rejects.toThrow('insert failed');
+
+      // ulbA's lock was never released, so nothing is re-inserted; only ulbB's new lock goes.
+      expect(lockModel.insertMany).toHaveBeenCalledTimes(1);
+      expect(lockModel.deleteMany).toHaveBeenCalledTimes(1);
+      expect(lockModel.deleteMany).toHaveBeenCalledWith({ claimLetter: parentId, ulbId: { $in: [ulbBId] } });
+      editLockReleased();
+      expect(lockModel.deleteMany.mock.invocationCallOrder[0]).toBeLessThan(
+        batchModel.updateOne.mock.invocationCallOrder[0],
       );
     });
 
@@ -942,9 +1561,10 @@ describe('ClaimLetterAssemblyService', () => {
         .mockReturnValueOnce(
           q({ _id: parentId, revision: 1, currentFormStatus: 2, financialSummary: zeroFinancialSummary }),
         ); // the finalize
-      // Both the currentChildren lookup and the persistedChildren verify use the full shape —
-      // the selection is unchanged (ulbA only), so no lock diff and the same set persists.
-      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      // Same ULB (no lock diff), new amount: the persisted set is re-verified with the full shape.
+      batchUlbModel.find
+        .mockReturnValueOnce(q([persistedChild({ ulbId: ulbAId, claimedAmount: 95 })]))
+        .mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
 
       const result = await service.updateDraft(
@@ -962,6 +1582,8 @@ describe('ClaimLetterAssemblyService', () => {
       expect(finalizeFilter).toMatchObject({ _id: parentId, currentFormStatus: 2 });
       expect(typeof finalizeFilter['editLockToken']).toBe('string');
       expect(finalizeUpdate.$set).toMatchObject({ editLockToken: null, editLockAcquiredAt: null });
+      // The uploaded signed letter no longer matches the edited ULBs.
+      expect(finalizeUpdate.$set).toMatchObject({ signedClaimFile: null });
       expect(finalizeUpdate.$inc).toEqual({ revision: 1 });
       expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
@@ -974,9 +1596,10 @@ describe('ClaimLetterAssemblyService', () => {
     it('does not delete existing children when the new selection fails validation', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
       batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
-      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId, claimedAmount: 95 })]));
       lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
       eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
+        perCriterion: [],
         perUlbEligible: new Map([[ulbAId.toString(), false]]),
       });
 
@@ -1008,10 +1631,57 @@ describe('ClaimLetterAssemblyService', () => {
       expect(String(restoreOps[0].insertOne.document['ulbId'])).toBe(ulbAId.toString());
     });
 
+    it('keeps the draft, its revision and the signed letter when nothing changed', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      batchModel.findById.mockReturnValue(q(parentDoc({ signedClaimFile: { path: 'claim-letter/signed.pdf' } })));
+
+      const result = await service.updateDraft(
+        parentId.toString(),
+        [{ ulbId: ulbAId.toString(), claimedAmount: 100 }],
+        0,
+        stateUser,
+      );
+
+      expect(result).toMatchObject({ claimLetterId: String(parentId), revision: 0 });
+      expect(batchModel.findOneAndUpdate).toHaveBeenCalledTimes(1); // the edit-lock claim only
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+      expect(batchModel.updateOne).toHaveBeenCalledWith(
+        { _id: parentId, editLockToken: expect.any(String) },
+        { $set: { editLockToken: null, editLockAcquiredAt: null } },
+      );
+    });
+
+    it('treats the same ULBs without amounts as unchanged when each stored claim is its allocation', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      batchModel.findById.mockReturnValue(q(parentDoc()));
+
+      const result = await service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString() }], 0, stateUser);
+
+      expect(result).toMatchObject({ revision: 0 });
+      expect(batchModel.findOneAndUpdate).toHaveBeenCalledTimes(1);
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    });
+
+    it('does not treat a different sent amount as unchanged; it is rejected while the switch is off', async () => {
+      batchModel.findOne.mockReturnValue(q(parentDoc()));
+      batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
+      batchUlbModel.find.mockReturnValue(q([persistedChild({ ulbId: ulbAId })]));
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+
+      await expect(
+        service.updateDraft(parentId.toString(), [{ ulbId: ulbAId.toString(), claimedAmount: 105 }], 0, stateUser),
+      ).rejects.toThrow(BadRequestException);
+      expect(batchUlbModel.deleteMany).not.toHaveBeenCalled();
+    });
+
     it('restores the previous children when post-persist verification fails', async () => {
       batchModel.findOne.mockReturnValue(q(parentDoc()));
       batchModel.findOneAndUpdate.mockReturnValueOnce(q(parentDoc()));
-      const oldChild = persistedChild({ ulbId: ulbAId });
+      const oldChild = persistedChild({ ulbId: ulbAId, claimedAmount: 95 });
       batchUlbModel.find
         .mockReturnValueOnce(q([oldChild])) // currentChildren, before the edit
         .mockReturnValueOnce(q([])); // persistedChildren re-fetch inside verify — nothing there
@@ -1084,7 +1754,7 @@ describe('ClaimLetterAssemblyService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
-      expect(result).toMatchObject({ isAbandoned: true, currentFormStatusLabel: 'Abandoned' });
+      expect(result).toMatchObject({ isAbandoned: true, currentFormStatusLabel: 'Discarded' });
     });
 
     it('treats a concurrent race (findOneAndUpdate returns null) as idempotent if the doc is already abandoned', async () => {
@@ -1227,6 +1897,30 @@ describe('ClaimLetterAssemblyService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it.each([
+      ['off: takes the current allocation, not the old claim', false, 100],
+      ['on: carries the old claim forward', true, 95],
+    ])('with the claim-amount switch %s', async (_label, editable, expectedClaim) => {
+      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({ editable, lowerPercent: 90, upperPercent: 110 });
+      batchModel.findOne.mockReturnValue(q(previousParentDoc()));
+      batchModel.create.mockResolvedValue([{ _id: newParentId, batchNumber: 1, version: 2 }]);
+      // The previous version claimed 95; the allocation is now 100.
+      batchUlbModel.find
+        .mockReturnValueOnce(q([{ ulbId: ulbAId, claimedAmount: 95 }]))
+        .mockReturnValueOnce(
+          q([persistedChild({ claimLetter: newParentId, version: 2, claimedAmount: expectedClaim })]),
+        );
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({ _id: newParentId, assemblyStatus: 'READY', batchNumber: 1, version: 2, supersedes: parentId }),
+      );
+
+      await service.createNewVersion(parentId.toString(), 'reason', stateUser);
+
+      const [ops] = batchUlbModel.bulkWrite.mock.calls[0] as [{ insertOne: { document: Record<string, unknown> } }[]];
+      expect(ops[0].insertOne.document['claimedAmount']).toBe(expectedClaim);
     });
 
     it('surfaces a clear conflict when the {batchNumber,version} slot was already regenerated by a concurrent request', async () => {

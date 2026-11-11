@@ -8,6 +8,7 @@ import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from 'src/schemas/xvi-fc/annual-account.schema';
 import { XviFcBankAccount, XviFcBankAccountSchema } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
 import { UlbInProgressReminderService } from './ulb-in-progress-reminder.service';
 import { StateReviewDigestService } from './state-review-digest.service';
 import { StateReviewPdfService } from './state-review-pdf.service';
@@ -32,6 +33,7 @@ import { RemindersController } from './reminders.controller';
     ]),
     EmailQueueModule,
     EmailTemplatesModule,
+    UlbEligibilityModule,
   ],
   controllers: [RemindersController],
   providers: [

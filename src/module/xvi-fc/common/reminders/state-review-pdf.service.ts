@@ -49,10 +49,8 @@ const COLUMNS: { header: string; width: number; align: 'left' | 'center' | 'righ
 /**
  * Renders the STATE review-reminder digest's ULB/form list into a PDF buffer — the same data the
  * digest email's HTML table shows, attached so the state user has a dated, state-stamped record
- * even if forwarded outside the email. Modeled on
- * `state/claim-letter/services/document/claim-letter-pdf.service.ts`'s stream-to-Buffer shape, but
- * with a purpose-built fixed-column table rather than importing that service's private `drawTable`
- * — its "2 fixed + N dynamic trailing" column model doesn't fit this flat 6-column report.
+ * even if forwarded outside the email. Uses a pdfkit stream-to-Buffer shape with a purpose-built
+ * fixed-column table for this flat 6-column report.
  *
  * Every page carries the same letterhead band + watermark as a matching pair: `pageAdded` covers
  * pages created by `doc.addPage()` during table overflow, and `drawPageChrome` is also called once

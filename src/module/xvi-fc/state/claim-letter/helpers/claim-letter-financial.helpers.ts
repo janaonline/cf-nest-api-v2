@@ -1,20 +1,8 @@
 import type { ClaimLetterFinancialSummaryDisplay } from '../types/claim-letter.types';
 
-/**
- * Devolution Formula — and every other xvi-fc form — stores money as whole Rupees only (no
- * decimals), and so does Claim Letter: no unit conversion at the storage boundary. Both
- * `allocatedAmount` and `claimedAmount` are always integers, so plain arithmetic here is exact
- * (JS sums/differences of integers under 2^53 never drift) — no scaling needed, except in
- * `isClaimedAmountWithinVariance`, where a percentage boundary still requires care (see its own
- * comment).
- */
+// Amounts are whole Rupees, so integer arithmetic here is exact (module CLAUDE.md, "Money").
 
-/**
- * Fallback defaults, used only when a design year's form-json document has no
- * `meta.varianceLowerPercent`/`meta.varianceUpperPercent` override (see
- * CLAIM_LETTER_VARIANCE_LOWER_META_KEY/CLAIM_LETTER_VARIANCE_UPPER_META_KEY). Never read directly
- * for the gating computation — go through ClaimLetterFormJsonService.loadVarianceConfig().
- */
+/** Fallback band when formjson meta has no override; read it through ClaimLetterFormJsonService. */
 export const CLAIM_LETTER_VARIANCE_LOWER_PERCENT = 90;
 export const CLAIM_LETTER_VARIANCE_UPPER_PERCENT = 110;
 
@@ -22,13 +10,17 @@ export const CLAIM_LETTER_VARIANCE_UPPER_PERCENT = 110;
 export const CLAIM_LETTER_VARIANCE_LOWER_META_KEY = 'varianceLowerPercent';
 export const CLAIM_LETTER_VARIANCE_UPPER_META_KEY = 'varianceUpperPercent';
 
-/**
- * Claimed-vs-allocated variance check. `allocatedAmount * percent / 100` would introduce a float
- * division (a percent of a whole number isn't generally whole itself), so this cross-multiplies
- * instead (`claimedAmount * 100` vs. `allocatedAmount * percent`) — exact integer comparison, no
- * division, no epsilon. Requires `lowerPercent`/`upperPercent` to themselves be whole numbers.
- * Resolved by the caller (ClaimLetterFormJsonService), never hardcoded here.
- */
+/** `meta.claimAmountEditable === true` lets the State enter a claim within the band; otherwise the
+ *  claim is the allocation (ADR 0006). */
+export const CLAIM_LETTER_CLAIM_AMOUNT_EDITABLE_META_KEY = 'claimAmountEditable';
+
+export interface ClaimLetterClaimAmountConfig {
+  editable: boolean;
+  lowerPercent: number;
+  upperPercent: number;
+}
+
+/** Cross-multiplies instead of dividing, so the check stays exact; the percents must be whole numbers. */
 export function isClaimedAmountWithinVariance(
   allocatedAmount: number,
   claimedAmount: number,
@@ -38,22 +30,32 @@ export function isClaimedAmountWithinVariance(
   return claimedAmount * 100 >= allocatedAmount * lowerPercent && claimedAmount * 100 <= allocatedAmount * upperPercent;
 }
 
+/** The amount to store, or null when the request must be rejected. Switch off: the allocation, and a
+ *  different requested amount is rejected. Switch on: the requested amount, within the band. */
+export function resolveClaimedAmount(
+  allocatedAmount: number,
+  requestedAmount: number | undefined,
+  config: ClaimLetterClaimAmountConfig,
+): number | null {
+  if (!config.editable) {
+    return requestedAmount === undefined || requestedAmount === allocatedAmount ? allocatedAmount : null;
+  }
+  if (requestedAmount === undefined) return null;
+  return isClaimedAmountWithinVariance(allocatedAmount, requestedAmount, config.lowerPercent, config.upperPercent)
+    ? requestedAmount
+    : null;
+}
+
 export function computeDifferenceAmount(allocatedAmount: number, claimedAmount: number): number {
   return claimedAmount - allocatedAmount;
 }
 
-/**
- * 1 basis point = 0.01%. Division is unavoidable here (percentage is inherently a ratio) — this
- * value is for display only; backend ±10% validation never depends on it, only on the exact
- * integer comparison in isClaimedAmountWithinVariance.
- */
+/** Display only (1 bp = 0.01%); the variance check never uses it. */
 export function computeDifferencePercentageBasisPoints(allocatedAmount: number, claimedAmount: number): number {
   if (allocatedAmount === 0) return 0;
   return Math.round(((claimedAmount - allocatedAmount) * 10000) / allocatedAmount);
 }
 
-/** Plain summation — every amount is a whole Rupee, so this stays bit-for-bit reproducible against
- *  the same inputs summed again elsewhere (e.g. create-time total vs. verify-time re-sum). */
 export function sumAmountsExactly(amounts: readonly number[]): number {
   return amounts.reduce((sum, amount) => sum + amount, 0);
 }
@@ -62,17 +64,19 @@ export function amountsAreEqual(a: number, b: number): boolean {
   return a === b;
 }
 
-/** File base name format: `CF_<statecode>_<designyear>_<installmentno>`. */
-export function buildClaimLetterFileBaseName(stateCode: string, designYearLabel: string, installment: 1 | 2): string {
-  return `CF_${stateCode}_${designYearLabel}_${installment}`;
+/** `CF_<statecode>_<designyear>_<installment>-<batchnumber>`, the same `1-1` as the Ref No and the
+ *  download names, so each batch has its own name. */
+export function buildClaimLetterFileBaseName(
+  stateCode: string,
+  designYearLabel: string,
+  installment: 1 | 2,
+  batchNumber: number,
+): string {
+  return `CF_${stateCode}_${designYearLabel}_${installment}-${batchNumber}`;
 }
 
-/**
- * Ref No. format: `CL/<statecode>/<designyear>/<installment>-<batchnumber>`. Computed live from
- * fields that are already unique per batch — `{state, year, installment, batchNumber}` is
- * DB-unique-indexed on `ClaimLetterBatch` — so this is deterministic and needs no stored counter;
- * the same batch always yields the same Ref No. across repeated Preview/Download calls.
- */
+/** `CL/<statecode>/<designyear>/<installment>-<batchnumber>`: built from the batch's unique key, so
+ *  it is stable across calls and needs no stored counter. */
 export function buildClaimLetterRefNo(params: {
   stateCode: string;
   designYearLabel: string;

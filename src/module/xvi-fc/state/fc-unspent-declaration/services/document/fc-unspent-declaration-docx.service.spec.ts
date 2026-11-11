@@ -56,6 +56,18 @@ async function extractStylesXml(buffer: Buffer): Promise<string> {
   return file.async('text');
 }
 
+/** The first text run in the body, i.e. where the letter starts. */
+function firstBodyText(xml: string): string | undefined {
+  return /<w:body>[\s\S]*?<w:t\b[^>]*>([^<]*)<\/w:t>/.exec(xml)?.[1];
+}
+
+/** Cells (raw XML) of the table's header row and first data row. */
+function headerAndFirstRowCells(xml: string): [string[], string[]] {
+  const [header = '', first = ''] = xml.match(/<w:tr>[\s\S]*?<\/w:tr>/g) ?? [];
+  const cells = (row: string) => row.match(/<w:tc>[\s\S]*?<\/w:tc>/g) ?? [];
+  return [cells(header), cells(first)];
+}
+
 describe('FcUnspentDeclarationDocxService', () => {
   let service: FcUnspentDeclarationDocxService;
   let documentService: { getDocumentData: jest.Mock };
@@ -111,16 +123,13 @@ describe('FcUnspentDeclarationDocxService', () => {
     expect(xml).not.toContain('AMRUT-IIB');
   });
 
-  it('renders the title heading, bold/underlined/centered, dynamic on the FC cycle label', async () => {
+  it('starts at the addressee, without the specimen heading', async () => {
     documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
     const result = await service.generateDeclarationDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
 
-    expect(xml).toContain(
-      'Format of Letter to be submitted by the State reg. Unspent Balance of 14th Finance Commission and Previous Finance Commissions',
-    );
-    expect(xml).toContain('w:jc w:val="center"');
-    expect(xml).toMatch(/<w:u\b/);
+    expect(xml).not.toContain('Format of Letter');
+    expect(firstBodyText(xml)).toBe('To,');
   });
 
   it('sets Times New Roman 12pt as the document default font', async () => {
@@ -132,7 +141,31 @@ describe('FcUnspentDeclarationDocxService', () => {
     expect(stylesXml).toContain('w:sz w:val="24"');
   });
 
-  it('renders the new dynamic subject line and "Sir," salutation, not the old wording', async () => {
+  it('uses 11pt in table cells', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    const xml = await extractDocumentXml(result.buffer);
+
+    expect(xml).toMatch(/<w:tc>[\s\S]*?<w:sz w:val="22"\/>/);
+  });
+
+  it('centres the table header cells and right-aligns the two amount cells', async () => {
+    documentService.getDocumentData.mockResolvedValue(buildYesBranchData(1));
+    const result = await service.generateDeclarationDocument(stateId, yearId, user);
+    const [header, first] = headerAndFirstRowCells(await extractDocumentXml(result.buffer));
+
+    expect(header).toHaveLength(5);
+    expect(header.every((cell) => cell.includes('w:jc w:val="center"'))).toBe(true);
+    expect(first.map((cell) => /w:jc w:val="(\w+)"/.exec(cell)?.[1] ?? null)).toEqual([
+      null,
+      null,
+      null,
+      'right',
+      'right',
+    ]);
+  });
+
+  it('renders the new dynamic subject line and "Sir/Madam," salutation, not the old wording', async () => {
     documentService.getDocumentData.mockResolvedValue(buildNoBranchData());
     const result = await service.generateDeclarationDocument(stateId, yearId, user);
     const xml = await extractDocumentXml(result.buffer);
@@ -142,7 +175,8 @@ describe('FcUnspentDeclarationDocxService', () => {
       'Subject: Declaration regarding 14th Finance Commission and previous Finance Commissions&apos; unspent ' +
         'balance with Urban Local Bodies in the State of Andhra Pradesh -reg.',
     );
-    expect(xml).toContain('Sir,');
+    expect(xml).toContain('>Sir/Madam,<');
+    expect(xml).not.toContain('>Sir,<');
     expect(xml).not.toContain('Respected Sir/Madam,');
     expect(xml).not.toContain('Declaration regarding nil');
   });

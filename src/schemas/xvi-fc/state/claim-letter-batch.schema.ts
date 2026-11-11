@@ -17,7 +17,8 @@ export type ClaimLetterBatchDocument = HydratedDocument<ClaimLetterBatch>;
  * All monetary fields are whole Rupees (no decimals), matching Devolution's own storage
  * convention (and every other xvi-fc form) — no unit conversion at any boundary, stored and
  * returned as-is. See claim-letter-financial.helpers.ts for the exact-integer comparison/sum
- * helpers used on these fields (the ±10% variance boundary, financial-totals cross-checks).
+ * helpers used on these fields (the claimed amount rule, financial-totals cross-checks). While the
+ * claim-amount switch is off (ADR 0006), every claim equals its allocation.
  */
 @Schema({ _id: false })
 export class ClaimLetterFinancialSummary {
@@ -30,7 +31,7 @@ export class ClaimLetterFinancialSummary {
   // Sum claimed across this state/year/installment's OTHER batches at UNDER_REVIEW_BY_MOHUA /
   // IN_PROGRESS respectively, self-excluding this batch — persisted (not just computed transiently)
   // so the frontend can live-recompute `remainingIfAcknowledged`-equivalent values as the user edits
-  // claim amounts, without needing a fresh server round-trip on every keystroke.
+  // the batch's ULBs (and claim amounts, while the switch is on), without a server round-trip each time.
   @Prop({ type: Number, default: 0 })
   totalClaimInProgress!: number;
 
@@ -54,6 +55,31 @@ export class ClaimLetterFinancialSummary {
 }
 
 export const ClaimLetterFinancialSummarySchema = SchemaFactory.createForClass(ClaimLetterFinancialSummary);
+
+/** The signed letter merged with its supporting documents, cached until any input changes. */
+@Schema({ _id: false })
+export class ClaimLetterFinalPdf {
+  @Prop({ type: FileInfoSchema, required: true })
+  file!: FileInfo;
+
+  // SHA-256 over the ordered input labels and upload paths; a new upload changes it.
+  @Prop({ type: String, required: true })
+  sourceKey!: string;
+
+  @Prop({ type: [String], default: [] })
+  included!: string[];
+
+  @Prop({ type: [String], default: [] })
+  missing!: string[];
+
+  @Prop({ type: Number, default: null })
+  pageCount!: number | null;
+
+  @Prop({ type: Date, required: true })
+  builtAt!: Date;
+}
+
+export const ClaimLetterFinalPdfSchema = SchemaFactory.createForClass(ClaimLetterFinalPdf);
 
 /**
  * Parent claim document (brain §14.2) — one immutable version of one logical batch slot per
@@ -179,6 +205,22 @@ export class ClaimLetterBatch {
 
   @Prop({ type: Date, default: null })
   abandonedAt?: Date | null;
+
+  // State-entered letter details (keys from formjson `meta.letterDetailKeys`). No default, never
+  // written as null: reads use `?? {}`, saves `$set` the whole merged object.
+  @Prop({ type: MongooseSchema.Types.Mixed })
+  letterDetails?: Record<string, unknown>;
+
+  @Prop({ type: Date, default: null })
+  letterDetailsUpdatedAt?: Date | null;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
+  letterDetailsUpdatedBy?: Types.ObjectId | null;
+
+  // The final claim letter (signed letter + enclosures), cached until an upload changes; the
+  // submitted batch keeps it.
+  @Prop({ type: ClaimLetterFinalPdfSchema, default: null })
+  finalClaimPdf?: ClaimLetterFinalPdf | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   abandonedBy?: Types.ObjectId | null;
