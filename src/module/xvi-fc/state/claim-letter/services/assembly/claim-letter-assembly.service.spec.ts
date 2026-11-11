@@ -7,6 +7,7 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -254,6 +255,7 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
+        { provide: PmuUndoEligibilityService, useValue: { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

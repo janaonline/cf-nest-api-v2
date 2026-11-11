@@ -13,6 +13,9 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentMohuaFormLean, FcUnspentMohuaRowLean } from '../types/fc-unspent-mohua-review.types';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -118,6 +121,7 @@ describe('FcUnspentMohuaReviewService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         FcUnspentMohuaReviewService,
         { provide: getModelToken(XviFcUnspentStateForm.name), useValue: formModel },
         { provide: FcUnspentRowReviewDomainService, useValue: domainService },

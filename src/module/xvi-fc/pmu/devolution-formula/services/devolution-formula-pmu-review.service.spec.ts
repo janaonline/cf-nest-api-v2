@@ -19,6 +19,14 @@ import { State } from 'src/schemas/state.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
+const mockUndoEligibility = {
+  canUndo: jest.fn().mockResolvedValue(false),
+  assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined),
+};
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -116,6 +124,8 @@ describe('DevolutionFormulaPmuReviewService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: PmuUndoEligibilityService, useValue: mockUndoEligibility },
         DevolutionFormulaPmuReviewService,
         StateFormPmuReviewHelper,
         XvifcFormActorsService,

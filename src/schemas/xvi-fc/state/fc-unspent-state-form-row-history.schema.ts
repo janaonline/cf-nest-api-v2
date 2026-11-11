@@ -1,7 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import { ROW_HISTORY_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { FcUnspentUlbRowSnapshot, FcUnspentUlbRowSnapshotSchema } from './fc-unspent-state-form-row.schema';
 
 export type XviFcUnspentStateFormRowHistoryDocument = HydratedDocument<XviFcUnspentStateFormRowHistory>;
@@ -31,11 +31,11 @@ export class XviFcUnspentStateFormRowHistory {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Year', required: true })
   year!: Types.ObjectId;
 
-  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
-  previousStatus!: RowReviewStatus | null;
+  @Prop({ type: Number, enum: [...ROW_HISTORY_STATUS_VALUES, null], default: null })
+  previousStatus!: RowHistoryStatus | null;
 
-  @Prop({ type: Number, enum: ROW_REVIEW_STATUS_VALUES, required: true })
-  currentStatus!: RowReviewStatus;
+  @Prop({ type: Number, enum: ROW_HISTORY_STATUS_VALUES, required: true })
+  currentStatus!: RowHistoryStatus;
 
   /** Null for a pure PMU/MoHUA review decision (no data-edit capability exists at this layer) —
    *  non-null only for the STATE-written entry from `finalSubmit`. */

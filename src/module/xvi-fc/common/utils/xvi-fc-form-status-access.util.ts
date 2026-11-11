@@ -185,6 +185,21 @@ export function assertCanPmuMutateForm(status: number): void {
   }
 }
 
+/** The two statuses PMU's own decision leaves a form in — approved onward to MoHUA (5) or returned (14).
+ *  Only these can be undone back to `UNDER_REVIEW_BY_PMU`; anything else means a later actor (the State
+ *  editing, MoHUA deciding) has already moved the form on. */
+export const PMU_UNDOABLE_STATUSES: readonly number[] = [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.RETURNED_BY_PMU];
+
+export function canPmuUndoForm(status: number): boolean {
+  return PMU_UNDOABLE_STATUSES.includes(status);
+}
+
+export function assertCanPmuUndoForm(status: number): void {
+  if (!canPmuUndoForm(status)) {
+    throw new ForbiddenException(`There is no PMU decision to undo when status is ${getFormStatusLabel(status)}.`);
+  }
+}
+
 /**
  * Row-level counterpart to `STATE_EDITABLE_STATUSES`, for forms with per-ULB PMU row review
  * (Elected Urban Local Bodies, FC Unspent Declaration). A row is editable by the State only while it
