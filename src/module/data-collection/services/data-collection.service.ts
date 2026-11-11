@@ -26,6 +26,7 @@ import { GetDataCollectionDto } from '../dto/get-data-collection.dto';
 import { ReverseDataCollectionDto } from '../dto/reverse-data-collection.dto';
 import { DataCollection, DataCollectionDocument } from '../entities/data-collection.schema';
 import {
+  COMPUTED_VALUES_KEYS,
   extractComputedKey,
   type ActiveDataCollectionFilter,
   type ComputedValues,
@@ -37,6 +38,7 @@ import {
   type ExternalDataCollectionResponse,
   type SubmittedLineItems,
 } from '../types/data-collection.types';
+import type { ChangedLineItem } from '../types/data-collection-audit-log.types';
 import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
 import { DataCollectionAuthorizationService } from './data-collection-authorization.service';
 import { DataCollectionReferenceResolverService } from './data-collection-reference-resolver.service';
@@ -337,8 +339,6 @@ export class DataCollectionService {
 
     const legends = await this.lineItemsLegendService.getActiveLegendsForValidation(templateVersion);
 
-    const changedLineItemCodes = this.getChangedLineItemCodes(existing.lineItems, payloadLineItems);
-
     const mergedLineItems: Record<string, unknown> = Object.fromEntries(existing.lineItems) as Record<string, unknown>;
     for (const [key, value] of Object.entries(payloadLineItems)) {
       mergedLineItems[key] = value;
@@ -378,6 +378,32 @@ export class DataCollectionService {
       });
     }
 
+    // Must run before existing.lineItems is overwritten
+    const changedLineItems = this.getChangedLineItems(existing.lineItems, payloadLineItems, result.submittedLineItems);
+    const changedLineItemCodes = changedLineItems.map((item) => item.code);
+    // Old records may lack computed, stateId or yearCode; those still need a save
+    const computedChanged = COMPUTED_VALUES_KEYS.some((key) => existing.computed?.[key] !== result.computed[key]);
+
+    // Nothing to write: skip the save so updatedAt keeps meaning "data last changed"
+    if (!changedLineItems.length && !computedChanged && existing.stateId && existing.yearCode) {
+      await this.auditLogService.logNoChange({
+        apiClientId,
+        stateId,
+        ulbId,
+        yearId,
+        templateVersion,
+        lineItemCount,
+        ip: meta.ip,
+        userAgent: meta.userAgent,
+        dataCollectionId: existing._id,
+        validationStatus: existing.validationStatus,
+      });
+      return {
+        message: 'No changes detected. Financial data is already up to date.',
+        data: this.mapToExternalDataCollectionResponse(existing, ulbCode, yearCode),
+      };
+    }
+
     existing.templateVersion = templateVersion;
     existing.lineItems = new Map(Object.entries(result.submittedLineItems));
     existing.computed = result.computed;
@@ -394,6 +420,7 @@ export class DataCollectionService {
         yearId,
         templateVersion,
         changedLineItemCodes,
+        changedLineItems,
         lineItemCount,
         ip: meta.ip,
         userAgent: meta.userAgent,
@@ -1141,8 +1168,19 @@ export class DataCollectionService {
     return Object.keys(lineItems).length;
   }
 
-  private getChangedLineItemCodes(existing: Map<string, number>, incoming: SubmittedLineItems): string[] {
-    return Object.keys(incoming).filter((key) => existing.get(key) !== incoming[key]);
+  /** Incoming codes whose value differs from the saved record; saved holds the validated numbers. */
+  private getChangedLineItems(
+    existing: Map<string, number>,
+    incoming: SubmittedLineItems,
+    saved: Record<string, number>,
+  ): ChangedLineItem[] {
+    const changed: ChangedLineItem[] = [];
+    for (const code of Object.keys(incoming)) {
+      const oldValue = existing.get(code);
+      if (oldValue === incoming[code]) continue;
+      changed.push({ code, oldValue: oldValue ?? null, newValue: saved[code] });
+    }
+    return changed;
   }
 
   private createErrorResponse(error: unknown, functionName: string): never {

@@ -7,6 +7,21 @@ import {
   type DataCollectionFailureReason,
 } from '../constant';
 
+@Schema({ _id: false })
+export class ChangedLineItem {
+  @Prop({ type: String, required: true })
+  code!: string;
+
+  // null when the code was not in the record before
+  @Prop({ type: Number })
+  oldValue!: number | null;
+
+  @Prop({ type: Number, required: true })
+  newValue!: number;
+}
+
+const ChangedLineItemSchema = SchemaFactory.createForClass(ChangedLineItem);
+
 @Schema({ timestamps: true })
 export class DataCollectionAuditLog {
   createdAt!: Date;
@@ -48,11 +63,20 @@ export class DataCollectionAuditLog {
   @Prop({ type: String, enum: ['VALID', 'WARNING'] })
   validationStatus?: 'VALID' | 'WARNING';
 
+  // Number of codes in the request payload, not in the saved record
   @Prop({ type: Number })
   lineItemCount?: number;
 
   @Prop({ type: [String], default: [] })
   changedLineItemCodes?: string[];
+
+  // default undefined so only MODIFIED rows carry the array
+  @Prop({ type: [ChangedLineItemSchema], default: undefined })
+  changedLineItems?: ChangedLineItem[];
+
+  // Set by a one-off DB query on MODIFIED rows written before changedLineItems existed
+  @Prop({ type: Boolean })
+  valuesNotCaptured?: boolean;
 
   @Prop({ type: Number })
   errorCount?: number;
