@@ -77,6 +77,10 @@ export class AfsExcelFileItem {
   @Prop({ type: String })
   requestId: string;
 
+  /** Digitization pipeline version FastAPI stamped on this file's job (e.g. "v3"); absent on older records */
+  @Prop({ type: String })
+  version?: string;
+
   /** Enqueue run this file was queued in (digitization v3); also sent to FastAPI as `batch_id` */
   @Prop({ type: String })
   batchId?: string;

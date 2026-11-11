@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { AxiosError } from 'axios';
 import { Job, UnrecoverableError } from 'bullmq';
 import FormData from 'form-data';
+import { randomUUID } from 'crypto';
 import { setTimeout as sleep } from 'timers/promises';
 import { firstValueFrom } from 'rxjs';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -34,6 +35,8 @@ interface FastApiDocumentClassification {
 
 interface FastApiJobCreated {
   job_id: string;
+  /** Pipeline version FastAPI stamped on the job, e.g. "v3" */
+  version?: string | null;
   status: string;
 }
 
@@ -122,8 +125,8 @@ export class AfsDigitizationV3QueueService {
       const dryRunDelayMs = this.dryRunDelayMs();
       if (dryRunDelayMs > 0) await this.simulateDryRun(dryRunDelayMs);
 
-      const afsDigitizationJobId = await this.submit(data);
-      await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId);
+      const { jobId: afsDigitizationJobId, version } = await this.submit(data);
+      await this.digitizationV3Service.markSubmitted(data, afsDigitizationJobId, version);
       this.logger.log(`AFS digitization v3 job ${job.id} submitted to FastAPI as ${afsDigitizationJobId}`);
       await this.waitForCompletion(afsDigitizationJobId);
       const result = await this.fetchResult(afsDigitizationJobId);
@@ -226,7 +229,7 @@ export class AfsDigitizationV3QueueService {
     return Number(this.config.get('AFS_DIGITIZATION_V3_TIMEOUT_MS')) || DEFAULT_REQUEST_TIMEOUT_MS;
   }
 
-  private async submit(data: AfsDigitizationV3JobData): Promise<string> {
+  private async submit(data: AfsDigitizationV3JobData): Promise<{ jobId: string; version?: string }> {
     const fastApiDocType = NEST_TO_FASTAPI_DOC_TYPE[data.docType];
     if (!fastApiDocType) throw new UnrecoverableError(`Unsupported docType ${data.docType}`);
 
@@ -236,6 +239,13 @@ export class AfsDigitizationV3QueueService {
     form.append('doc_type', fastApiDocType);
     form.append('source', '15thfc');
     if (data.batchId) form.append('batch_id', data.batchId);
+    // Correlation id: lets a FastAPI job be traced back to this Nest call in both services' logs.
+    // Format matches the legacy digitization queues, e.g. req-20261026-2505d8.
+    const requestId =
+      data.requestId ||
+      `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${randomUUID().substring(0, 6)}`;
+    form.append('request_id', requestId);
+    this.logger.log(`Submitting ${data.pdfUrl} to FastAPI, requestId: ${requestId}`);
     const yearLabel = YearIdToLabel[data.year];
     if (yearLabel) form.append('financial_year', yearLabel);
     if (data.ulbName) form.append('ulb_name', data.ulbName);
@@ -253,7 +263,7 @@ export class AfsDigitizationV3QueueService {
       ),
     );
     if (!created?.job_id) throw new Error('FastAPI did not return a job_id');
-    return created.job_id;
+    return { jobId: created.job_id, version: created.version ?? undefined };
   }
 
   private async waitForCompletion(afsDigitizationJobId: string): Promise<void> {
