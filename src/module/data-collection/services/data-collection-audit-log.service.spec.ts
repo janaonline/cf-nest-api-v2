@@ -1,6 +1,6 @@
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Types } from 'mongoose';
+import { Mongoose, Types } from 'mongoose';
 import { DATA_COLLECTION_AUDIT_ACTION, DATA_COLLECTION_FAILURE_REASON } from '../constant';
 import { DataCollectionAuditLog, DataCollectionAuditLogSchema } from '../entities/data-collection-audit-log.schema';
 import { DataCollectionAuditLogService } from './data-collection-audit-log.service';
@@ -28,6 +28,19 @@ const adminUserId = new Types.ObjectId();
 const mockModel = { create: jest.fn() };
 const removedFields = ['clientId', 'actorType', 'ulbCode', 'yearCode', 'submittedLineItemCodes', 'warningCount'];
 const requiredFields = ['stateId', 'ulbId', 'yearId', 'templateVersion', 'action', 'success'];
+
+// Unconnected model, used only to check schema defaults and validation
+const AuditLogModel = new Mongoose().model('DataCollectionAuditLogSpec', DataCollectionAuditLogSchema);
+const makeAuditDoc = (extra: Record<string, unknown> = {}) =>
+  new AuditLogModel({
+    action: DATA_COLLECTION_AUDIT_ACTION.SUBMITTED,
+    success: true,
+    stateId,
+    ulbId,
+    yearId,
+    templateVersion: '2026.1',
+    ...extra,
+  });
 
 // ─── Suite ────────────────────────────────────────────────────────────────────
 
@@ -73,6 +86,29 @@ describe('DataCollectionAuditLogService', () => {
         { success: 1, createdAt: -1 },
         { adminUserId: 1, createdAt: -1 },
       ]);
+    });
+
+    it('does not add changedLineItems to rows that do not set it', () => {
+      const doc = makeAuditDoc();
+      expect(doc.toObject()).not.toHaveProperty('changedLineItems');
+      expect(doc.toObject()).not.toHaveProperty('valuesNotCaptured');
+    });
+
+    it('accepts null oldValue for a code that did not exist before', () => {
+      const doc = makeAuditDoc({
+        action: DATA_COLLECTION_AUDIT_ACTION.MODIFIED,
+        changedLineItems: [{ code: '130', oldValue: null, newValue: 50 }],
+      });
+      expect(doc.validateSync()).toBeUndefined();
+      expect(doc.toObject().changedLineItems).toEqual([{ code: '130', oldValue: null, newValue: 50 }]);
+    });
+
+    it('requires newValue on changedLineItems entries', () => {
+      const doc = makeAuditDoc({
+        action: DATA_COLLECTION_AUDIT_ACTION.MODIFIED,
+        changedLineItems: [{ code: '130', oldValue: 1 }],
+      });
+      expect(doc.validateSync()?.errors).toHaveProperty(['changedLineItems.0.newValue']);
     });
   });
 
@@ -120,24 +156,58 @@ describe('DataCollectionAuditLogService', () => {
   // ─── logModified ───────────────────────────────────────────────────────────
 
   describe('logModified', () => {
-    it('creates a record with MODIFIED action, success=true, and changedLineItemCodes', async () => {
+    it('creates a record with MODIFIED action, success=true, changed codes and values', async () => {
+      const changedLineItems = [
+        { code: '110', oldValue: 999, newValue: 500 },
+        { code: '130', oldValue: null, newValue: 50 },
+      ];
       await service.logModified({
         ...baseData,
         dataCollectionId,
         validationStatus: 'VALID',
-        changedLineItemCodes: ['110'],
+        changedLineItemCodes: ['110', '130'],
+        changedLineItems,
       });
       expect(mockModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
           action: DATA_COLLECTION_AUDIT_ACTION.MODIFIED,
           success: true,
-          changedLineItemCodes: ['110'],
+          changedLineItemCodes: ['110', '130'],
+          changedLineItems,
         }),
       );
       const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       for (const field of removedFields) {
         expect(arg).not.toHaveProperty(field);
       }
+    });
+  });
+
+  // ─── logNoChange ───────────────────────────────────────────────────────────
+
+  describe('logNoChange', () => {
+    it('creates a record with NO_CHANGE action, success=true and no changed values', async () => {
+      await service.logNoChange({ ...baseData, dataCollectionId, validationStatus: 'VALID' });
+      expect(mockModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE,
+          success: true,
+          dataCollectionId,
+          lineItemCount: baseData.lineItemCount,
+        }),
+      );
+      const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['failureReason']).toBeUndefined();
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(arg).not.toHaveProperty('changedLineItemCodes');
+      for (const field of removedFields) {
+        expect(arg).not.toHaveProperty(field);
+      }
+    });
+
+    it('is accepted by the schema action enum', () => {
+      const doc = makeAuditDoc({ action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE });
+      expect(doc.validateSync()).toBeUndefined();
     });
   });
 

@@ -24,6 +24,14 @@ export interface OcrCtx {
  * AnnualAccountStatusSyncService (the cron fallback for jobs that outlive it, e.g. a large PDF),
  * so both write to the same flat `documents.$` path and both apply the post-rejection strike
  * counter.
+ *
+ * Two guards, because the processor's poll loop and the cron can both see the same terminal
+ * status:
+ * - Every slot write is scoped by `currentUpload.uploadId`, not just `docId` — a re-upload while
+ *   the slot is still PROCESSING replaces `currentUpload`, and the old job's late result must not
+ *   land on the new upload (same rule as DurValidationResultWriter).
+ * - A terminal write first claims the upload history row out of PROCESSING; only the caller whose
+ *   claim succeeds writes the slot, so the post-rejection strike is counted once.
  */
 @Injectable()
 export class AnnualAccountOcrResultWriter {
@@ -38,26 +46,22 @@ export class AnnualAccountOcrResultWriter {
   ) {}
 
   async writeProgress(ctx: OcrCtx, status: string | undefined, progressStep: string): Promise<void> {
-    const { uploadId, targetDocId, docId } = ctx;
     await Promise.all([
       this.uploadHistoryModel.updateOne(
-        { uploadId },
+        { uploadId: ctx.uploadId },
         { $set: { 'ocrInfo.status': status, 'ocrInfo.progressStep': progressStep } },
       ),
-      this.annualAccountModel.updateOne(
-        { _id: targetDocId, 'documents.docId': docId },
-        {
-          $set: {
-            'documents.$.currentUpload.ocrInfo.status': status,
-            'documents.$.currentUpload.ocrInfo.progressStep': progressStep,
-          },
+      this.annualAccountModel.updateOne(this.slotFilter(ctx), {
+        $set: {
+          'documents.$.currentUpload.ocrInfo.status': status,
+          'documents.$.currentUpload.ocrInfo.progressStep': progressStep,
         },
-      ),
+      }),
     ]);
   }
 
   async writeCompleted(ctx: OcrCtx, resp: OcrResultResponse): Promise<void> {
-    const { uploadId, targetDocId, docId } = ctx;
+    const { uploadId } = ctx;
     const completedAt = new Date();
 
     // Python nests validation inside result.basic_validation and uses "PASS"/"FAIL"
@@ -65,75 +69,80 @@ export class AnnualAccountOcrResultWriter {
     const validationStatus = bv?.validation_status ?? null;
     const processingStatus = validationStatus?.toUpperCase() === 'PASS' ? 'PASSED' : 'FAILED';
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(targetDocId, docId, processingStatus);
+    const claimed = await this.claim(uploadId, {
+      processingStatus,
+      'queue.status': 'completed',
+      'ocrInfo.status': 'COMPLETED',
+      'ocrInfo.completedAt': completedAt,
+      'ocrInfo.validationStatus': validationStatus,
+      'ocrInfo.validationDetails': bv?.validation_details ?? null,
+      'ocrInfo.failedChecks': resp.result?.error_messages ?? [],
+    });
+    if (!claimed) return;
 
-    await Promise.all([
-      this.uploadHistoryModel.updateOne(
-        { uploadId },
-        {
-          $set: {
-            processingStatus,
-            'queue.status': 'completed',
-            'ocrInfo.status': 'COMPLETED',
-            'ocrInfo.completedAt': completedAt,
-            'ocrInfo.validationStatus': validationStatus,
-            'ocrInfo.validationDetails': bv?.validation_details ?? null,
-            'ocrInfo.failedChecks': resp.result?.error_messages ?? [],
-          },
-        },
-      ),
-      this.annualAccountModel.updateOne(
-        { _id: targetDocId, 'documents.docId': docId },
-        {
-          $set: {
-            'documents.$.processingStatus': processingStatus,
-            'documents.$.currentUpload.ocrInfo.status': 'COMPLETED',
-            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
-            'documents.$.currentUpload.ocrInfo.validationStatus': validationStatus,
-            'documents.$.currentUpload.ocrInfo.validationDetails': bv?.validation_details ?? null,
-            'documents.$.currentUpload.ocrInfo.failedChecks': resp.result?.error_messages ?? [],
-            ...postRejectionUpdate,
-          },
-        },
-      ),
-    ]);
+    const postRejectionUpdate = await this.computePostRejectionUpdate(ctx, processingStatus);
+    const res = await this.annualAccountModel.updateOne(this.slotFilter(ctx), {
+      $set: {
+        'documents.$.processingStatus': processingStatus,
+        'documents.$.currentUpload.ocrInfo.status': 'COMPLETED',
+        'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+        'documents.$.currentUpload.ocrInfo.validationStatus': validationStatus,
+        'documents.$.currentUpload.ocrInfo.validationDetails': bv?.validation_details ?? null,
+        'documents.$.currentUpload.ocrInfo.failedChecks': resp.result?.error_messages ?? [],
+        ...postRejectionUpdate,
+      },
+    });
+    this.warnIfSuperseded(res.matchedCount, ctx);
 
     this.logger.log(`OCR result written — uploadId=${uploadId} processingStatus=${processingStatus}`);
   }
 
   async writeFailed(ctx: OcrCtx, reason?: string): Promise<void> {
-    const { uploadId, targetDocId, docId } = ctx;
+    const { uploadId } = ctx;
     const completedAt = new Date();
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(targetDocId, docId, 'FAILED');
+    const claimed = await this.claim(uploadId, {
+      processingStatus: 'FAILED',
+      error: reason ?? 'OCR job failed',
+      'queue.status': 'failed',
+      'ocrInfo.status': 'FAILED',
+      'ocrInfo.completedAt': completedAt,
+    });
+    if (!claimed) return;
 
-    await Promise.all([
-      this.uploadHistoryModel.updateOne(
-        { uploadId },
-        {
-          $set: {
-            processingStatus: 'FAILED',
-            error: reason ?? 'OCR job failed',
-            'queue.status': 'failed',
-            'ocrInfo.status': 'FAILED',
-            'ocrInfo.completedAt': completedAt,
-          },
-        },
-      ),
-      this.annualAccountModel.updateOne(
-        { _id: targetDocId, 'documents.docId': docId },
-        {
-          $set: {
-            'documents.$.processingStatus': 'FAILED',
-            'documents.$.currentUpload.ocrInfo.status': 'FAILED',
-            'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
-            ...postRejectionUpdate,
-          },
-        },
-      ),
-    ]);
+    const postRejectionUpdate = await this.computePostRejectionUpdate(ctx, 'FAILED');
+    const res = await this.annualAccountModel.updateOne(this.slotFilter(ctx), {
+      $set: {
+        'documents.$.processingStatus': 'FAILED',
+        'documents.$.currentUpload.ocrInfo.status': 'FAILED',
+        'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
+        ...postRejectionUpdate,
+      },
+    });
+    this.warnIfSuperseded(res.matchedCount, ctx);
 
     this.logger.warn(`OCR failure written — uploadId=${uploadId} reason=${reason}`);
+  }
+
+  private slotFilter({ targetDocId, docId, uploadId }: OcrCtx) {
+    return { _id: targetDocId, documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } };
+  }
+
+  /** Moves the upload history row out of PROCESSING. False when another caller already settled it. */
+  private async claim(uploadId: string, set: Record<string, unknown>): Promise<boolean> {
+    const res = await this.uploadHistoryModel.updateOne({ uploadId, processingStatus: 'PROCESSING' }, { $set: set });
+    if (res.modifiedCount === 0) {
+      this.logger.log(`OCR result already settled — skipping duplicate write — uploadId=${uploadId}`);
+      return false;
+    }
+    return true;
+  }
+
+  /** The slot's current upload is a newer one (re-upload) — this result belongs only in history. */
+  private warnIfSuperseded(matchedCount: number, { uploadId, docId }: OcrCtx): void {
+    if (matchedCount === 0) {
+      this.logger.warn(`Dropped a stale OCR result — docId=${docId} uploadId=${uploadId} superseded by a re-upload`);
+    }
   }
 
   /**
@@ -153,8 +162,7 @@ export class AnnualAccountOcrResultWriter {
    * same array element in one plain updateOne.
    */
   private async computePostRejectionUpdate(
-    targetDocId: Types.ObjectId,
-    docId: string,
+    ctx: OcrCtx,
     processingStatus: 'PASSED' | 'FAILED',
   ): Promise<Record<string, unknown>> {
     if (processingStatus === 'PASSED') {
@@ -166,13 +174,7 @@ export class AnnualAccountOcrResultWriter {
       };
     }
 
-    const doc = await this.annualAccountModel
-      .findOne(
-        { _id: targetDocId, 'documents.docId': docId },
-        { 'documents.$': 1 },
-      )
-      .lean()
-      .exec();
+    const doc = await this.annualAccountModel.findOne(this.slotFilter(ctx), { 'documents.$': 1 }).lean().exec();
     const docSlot = doc?.documents?.[0];
     if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
 
