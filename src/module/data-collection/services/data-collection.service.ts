@@ -504,7 +504,7 @@ export class DataCollectionService {
   ): ValidationOutcome {
     const { context, errors: contextErrors } = this.buildValidationContext(lineItems, legendItems, templateVersion);
     const regularErrors = this.validateRegularLegendRules(context);
-    const { errors: computedErrors, computed } = this.evaluateComputedLegends(context);
+    const { errors: computedErrors, computed } = this.evaluateComputedLegends(context, templateVersion);
 
     const errors = [...contextErrors, ...regularErrors, ...computedErrors];
     return {
@@ -631,12 +631,28 @@ export class DataCollectionService {
    *
    * If a formula operand is not in legendByCode (DB corruption), a configuration error is emitted.
    */
-  private evaluateComputedLegends(ctx: ValidationContext): {
+  private evaluateComputedLegends(
+    ctx: ValidationContext,
+    templateVersion: string,
+  ): {
     errors: DataCollectionValidationIssue[];
     computed: ComputedValues;
   } {
     const errors: DataCollectionValidationIssue[] = [];
     const computed: ComputedValues = { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 };
+
+    // A total without a formula legend would silently be saved as 0; reject the request instead
+    const configuredKeys = new Set(
+      ctx.computedLegends
+        .filter((legend) => legend.rules.some((rule) => rule.type === 'formula'))
+        .map((legend) => extractComputedKey(legend.nmamCode)),
+    );
+    for (const key of COMPUTED_VALUES_KEYS) {
+      if (configuredKeys.has(key)) continue;
+      const message = `Configuration error: no computed legend for computed.${key} in template ${templateVersion}.`;
+      this.logger.error(message);
+      errors.push({ lineItemCode: `computed.${key}`, value: null, severity: 'ERROR', message });
+    }
 
     for (const legend of ctx.computedLegends) {
       const key = extractComputedKey(legend.nmamCode);

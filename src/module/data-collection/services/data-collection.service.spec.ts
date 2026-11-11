@@ -232,6 +232,40 @@ const mockLineItemsLegendService = {
   getActiveLegendsForValidation: jest.fn().mockResolvedValue([]),
 };
 
+type LegendLike = { nmamCode: string; isComputed?: boolean };
+
+/**
+ * The service rejects a template without a formula legend for each computed total. Most tests do not
+ * care about totals, so the provided legend service adds a neutral computed legend (no operands, total 0)
+ * for any key a test did not supply. Tests about missing computed legends set fillComputedLegends = false.
+ */
+let fillComputedLegends = true;
+const withComputedLegends = (legends: LegendLike[]): LegendLike[] => {
+  if (!fillComputedLegends) return legends;
+  const present = new Set(legends.filter((l) => l.isComputed === true).map((l) => l.nmamCode));
+  const neutral = ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue']
+    .filter((key) => !present.has(`computed.${key}`))
+    .map((key) => ({
+      nmamCode: `computed.${key}`,
+      name: `Neutral ${key}`,
+      accountHead: 'COMPUTED',
+      level: 1,
+      parentCode: null,
+      isComputed: true,
+      rules: [{ type: 'formula', operation: 'sum', operands: [] }],
+    }));
+  return [...legends, ...neutral];
+};
+
+const legendServiceProvider = {
+  getFinancialDataTemplate: (query?: unknown) =>
+    mockLineItemsLegendService.getFinancialDataTemplate(query) as Promise<unknown>,
+  getActiveLegendsForValidation: async (templateVersion: string) =>
+    withComputedLegends(
+      (await mockLineItemsLegendService.getActiveLegendsForValidation(templateVersion)) as LegendLike[],
+    ),
+};
+
 const mockAuditLogService = {
   logSubmitted: jest.fn().mockResolvedValue(undefined),
   logModified: jest.fn().mockResolvedValue(undefined),
@@ -303,6 +337,7 @@ describe('DataCollectionService', () => {
   beforeEach(async () => {
     dcModel = mockDataCollectionModel();
     defaultUlbChain = makeUlbChain();
+    fillComputedLegends = true;
     jest.clearAllMocks();
     mockUlbModel.find.mockReturnValue(defaultUlbChain);
     mockYearModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
@@ -331,7 +366,7 @@ describe('DataCollectionService', () => {
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: DataCollectionAuthorizationService, useValue: mockAuthorizationService },
-        { provide: LineItemsLegendService, useValue: mockLineItemsLegendService },
+        { provide: LineItemsLegendService, useValue: legendServiceProvider },
         { provide: DataCollectionReferenceResolverService, useValue: mockReferenceResolverService },
         { provide: DataCollectionAuditLogService, useValue: mockAuditLogService },
       ],
@@ -2704,11 +2739,66 @@ describe('DataCollectionService', () => {
       expect(issue?.expectedCondition).toBeDefined();
     });
 
-    it('no computed validation runs when no computed legends are in the active template', async () => {
-      // makeComputedSourceLegends() has no isComputed: true legends → no computed validation
+    it('rejects create with a configuration error when the template has no computed legends', async () => {
+      fillComputedLegends = false;
       mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
-      const result = await service.create(baseComputedPayload({ '110': 100 }) as never, stateClient);
-      expect(result).not.toBeInstanceOf(BadRequestException);
+      const err = await service
+        .create(baseComputedPayload({ '110': 100 }) as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const configErrors = body.errors.filter((e) => e.message.startsWith('Configuration error: no computed legend'));
+      expect(configErrors.map((e) => e.lineItemCode)).toEqual([
+        'computed.totIncome',
+        'computed.totExpenditure',
+        'computed.totRevenue',
+        'computed.totOwnRevenue',
+      ]);
+      expect(mockSave).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logValidationFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects update and saves nothing when a computed legend is missing (no silent zero totals)', async () => {
+      fillComputedLegends = false;
+      const withoutRevenue = makeFullLegendSet().filter((l) => l.nmamCode !== 'computed.totRevenue');
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(withoutRevenue);
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([
+          ['110', 100],
+          ['210', 200],
+        ]),
+        save: jest.fn(),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+
+      const err = await service
+        .update({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 150 } } as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.map((e) => e.lineItemCode)).toEqual(['computed.totRevenue']);
+      expect(existingDoc.save).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+    });
+
+    it('treats a computed legend without a formula rule as missing', async () => {
+      fillComputedLegends = false;
+      const legends = makeFullLegendSet().map((l) =>
+        l.nmamCode === 'computed.totIncome' ? { ...l, rules: l.rules.filter((r) => r.type !== 'formula') } : l,
+      );
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(baseComputedPayload({ '110': 100, '210': 200 }) as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.some((e) => e.message.includes('no computed legend for computed.totIncome'))).toBe(true);
     });
 
     it('computed validation passes when all four totals satisfy DB comparison rules', async () => {
