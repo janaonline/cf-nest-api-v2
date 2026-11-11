@@ -88,10 +88,30 @@ describe('DataCollectionAuditLogService', () => {
       ]);
     });
 
-    it('does not add changedLineItems to rows that do not set it', () => {
-      const doc = makeAuditDoc();
-      expect(doc.toObject()).not.toHaveProperty('changedLineItems');
-      expect(doc.toObject()).not.toHaveProperty('valuesNotCaptured');
+    it.each([
+      DATA_COLLECTION_AUDIT_ACTION.SUBMITTED,
+      DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE,
+      DATA_COLLECTION_AUDIT_ACTION.MODIFY_CONFLICT,
+    ])('stores no change arrays on a %s row', (action) => {
+      const stored = makeAuditDoc({ action }).toObject();
+      expect(stored).not.toHaveProperty('changedLineItemCodes');
+      expect(stored).not.toHaveProperty('changedLineItems');
+      expect(stored).not.toHaveProperty('changedComputed');
+      expect(stored).not.toHaveProperty('valuesNotCaptured');
+    });
+
+    it.each([DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE, DATA_COLLECTION_AUDIT_ACTION.MODIFY_CONFLICT])(
+      'accepts %s in the action enum',
+      (action) => {
+        expect(makeAuditDoc({ action }).validateSync()).toBeUndefined();
+      },
+    );
+
+    it('stores changedComputed entries with the same shape as changedLineItems', () => {
+      const changedComputed = [{ code: 'totIncome', oldValue: null, newValue: 120 }];
+      const doc = makeAuditDoc({ action: DATA_COLLECTION_AUDIT_ACTION.MODIFIED, changedComputed });
+      expect(doc.validateSync()).toBeUndefined();
+      expect(doc.toObject().changedComputed).toEqual(changedComputed);
     });
 
     it('accepts null oldValue for a code that did not exist before', () => {
@@ -161,12 +181,14 @@ describe('DataCollectionAuditLogService', () => {
         { code: '110', oldValue: 999, newValue: 500 },
         { code: '130', oldValue: null, newValue: 50 },
       ];
+      const changedComputed = [{ code: 'totIncome', oldValue: 1000, newValue: 551 }];
       await service.logModified({
         ...baseData,
         dataCollectionId,
         validationStatus: 'VALID',
         changedLineItemCodes: ['110', '130'],
         changedLineItems,
+        changedComputed,
       });
       expect(mockModel.create).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -174,6 +196,7 @@ describe('DataCollectionAuditLogService', () => {
           success: true,
           changedLineItemCodes: ['110', '130'],
           changedLineItems,
+          changedComputed,
         }),
       );
       const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
@@ -204,10 +227,28 @@ describe('DataCollectionAuditLogService', () => {
         expect(arg).not.toHaveProperty(field);
       }
     });
+  });
 
-    it('is accepted by the schema action enum', () => {
-      const doc = makeAuditDoc({ action: DATA_COLLECTION_AUDIT_ACTION.NO_CHANGE });
-      expect(doc.validateSync()).toBeUndefined();
+  // ─── logModifyConflict ─────────────────────────────────────────────────────
+
+  describe('logModifyConflict', () => {
+    it('creates a failed MODIFY_CONFLICT record with CONCURRENT_MODIFICATION and no value arrays', async () => {
+      await service.logModifyConflict({ ...baseData, dataCollectionId });
+      expect(mockModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: DATA_COLLECTION_AUDIT_ACTION.MODIFY_CONFLICT,
+          success: false,
+          failureReason: DATA_COLLECTION_FAILURE_REASON.CONCURRENT_MODIFICATION,
+          dataCollectionId,
+          lineItemCount: baseData.lineItemCount,
+        }),
+      );
+      const arg = (mockModel.create.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(arg).not.toHaveProperty('changedComputed');
+      for (const field of removedFields) {
+        expect(arg).not.toHaveProperty(field);
+      }
     });
   });
 

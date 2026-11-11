@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Error as MongooseError, Model, Types } from 'mongoose';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import type { User } from 'src/module/auth/enum/role.enum';
 import type { FinancialDataTemplateQueryDto } from 'src/module/line-items-legends/dto/financial-data-template-query.dto';
@@ -378,29 +378,31 @@ export class DataCollectionService {
       });
     }
 
-    // Must run before existing.lineItems is overwritten
+    // Must run before existing.lineItems / existing.computed are overwritten
     const changedLineItems = this.getChangedLineItems(existing.lineItems, payloadLineItems, result.submittedLineItems);
     const changedLineItemCodes = changedLineItems.map((item) => item.code);
-    // Old records may lack computed, stateId or yearCode; those still need a save
-    const computedChanged = COMPUTED_VALUES_KEYS.some((key) => existing.computed?.[key] !== result.computed[key]);
+    const changedComputed = this.getChangedComputed(existing.computed, result.computed);
 
-    // Nothing to write: skip the save so updatedAt keeps meaning "data last changed"
-    if (!changedLineItems.length && !computedChanged && existing.stateId && existing.yearCode) {
-      await this.auditLogService.logNoChange({
-        apiClientId,
-        stateId,
-        ulbId,
-        yearId,
-        templateVersion,
-        lineItemCount,
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-        dataCollectionId: existing._id,
-        validationStatus: existing.validationStatus,
-      });
+    const auditData = {
+      apiClientId,
+      stateId,
+      ulbId,
+      yearId,
+      templateVersion,
+      lineItemCount,
+      ip: meta.ip,
+      userAgent: meta.userAgent,
+      dataCollectionId: existing._id,
+    };
+
+    // Nothing to write: skip the save so updatedAt keeps meaning "data last changed".
+    // Old records missing stateId or yearCode still need a save.
+    if (!changedLineItems.length && !changedComputed.length && existing.stateId && existing.yearCode) {
+      await this.auditLogService.logNoChange({ ...auditData, validationStatus: existing.validationStatus });
       return {
         message: 'No changes detected. Financial data is already up to date.',
         data: this.mapToExternalDataCollectionResponse(existing, ulbCode, yearCode),
+        meta: { changed: false },
       };
     }
 
@@ -414,24 +416,19 @@ export class DataCollectionService {
     try {
       const data = await existing.save();
       await this.auditLogService.logModified({
-        apiClientId,
-        stateId,
-        ulbId,
-        yearId,
-        templateVersion,
+        ...auditData,
         changedLineItemCodes,
         changedLineItems,
-        lineItemCount,
-        ip: meta.ip,
-        userAgent: meta.userAgent,
-        dataCollectionId: data._id,
+        changedComputed,
         validationStatus: data.validationStatus,
       });
       return {
         message: 'Financial data updated successfully.',
         data: this.mapToExternalDataCollectionResponse(data, ulbCode, yearCode),
+        meta: { changed: true },
       };
     } catch (error: unknown) {
+      if (error instanceof MongooseError.VersionError) await this.auditLogService.logModifyConflict(auditData);
       this.createErrorResponse(error, 'update');
     }
   }
@@ -507,7 +504,7 @@ export class DataCollectionService {
   ): ValidationOutcome {
     const { context, errors: contextErrors } = this.buildValidationContext(lineItems, legendItems, templateVersion);
     const regularErrors = this.validateRegularLegendRules(context);
-    const { errors: computedErrors, computed } = this.evaluateComputedLegends(context);
+    const { errors: computedErrors, computed } = this.evaluateComputedLegends(context, templateVersion);
 
     const errors = [...contextErrors, ...regularErrors, ...computedErrors];
     return {
@@ -634,12 +631,28 @@ export class DataCollectionService {
    *
    * If a formula operand is not in legendByCode (DB corruption), a configuration error is emitted.
    */
-  private evaluateComputedLegends(ctx: ValidationContext): {
+  private evaluateComputedLegends(
+    ctx: ValidationContext,
+    templateVersion: string,
+  ): {
     errors: DataCollectionValidationIssue[];
     computed: ComputedValues;
   } {
     const errors: DataCollectionValidationIssue[] = [];
     const computed: ComputedValues = { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 };
+
+    // A total without a formula legend would silently be saved as 0; reject the request instead
+    const configuredKeys = new Set(
+      ctx.computedLegends
+        .filter((legend) => legend.rules.some((rule) => rule.type === 'formula'))
+        .map((legend) => extractComputedKey(legend.nmamCode)),
+    );
+    for (const key of COMPUTED_VALUES_KEYS) {
+      if (configuredKeys.has(key)) continue;
+      const message = `Configuration error: no computed legend for computed.${key} in template ${templateVersion}.`;
+      this.logger.error(message);
+      errors.push({ lineItemCode: `computed.${key}`, value: null, severity: 'ERROR', message });
+    }
 
     for (const legend of ctx.computedLegends) {
       const key = extractComputedKey(legend.nmamCode);
@@ -1168,7 +1181,7 @@ export class DataCollectionService {
     return Object.keys(lineItems).length;
   }
 
-  /** Incoming codes whose value differs from the saved record; saved holds the validated numbers. */
+  /** Incoming codes whose validated value (about to be saved) differs from the stored one. */
   private getChangedLineItems(
     existing: Map<string, number>,
     incoming: SubmittedLineItems,
@@ -1176,14 +1189,38 @@ export class DataCollectionService {
   ): ChangedLineItem[] {
     const changed: ChangedLineItem[] = [];
     for (const code of Object.keys(incoming)) {
+      const newValue = saved[code];
       const oldValue = existing.get(code);
-      if (oldValue === incoming[code]) continue;
-      changed.push({ code, oldValue: oldValue ?? null, newValue: saved[code] });
+      if (oldValue === newValue) continue;
+      changed.push({ code, oldValue: oldValue ?? null, newValue });
     }
     return changed;
   }
 
+  /** Computed totals that differ from the stored ones; oldValue is null when the record had none. */
+  private getChangedComputed(existing: ComputedValues | undefined, next: ComputedValues): ChangedLineItem[] {
+    const changed: ChangedLineItem[] = [];
+    for (const key of COMPUTED_VALUES_KEYS) {
+      const oldValue = existing?.[key];
+      if (oldValue === next[key]) continue;
+      changed.push({ code: key, oldValue: oldValue ?? null, newValue: next[key] });
+    }
+    return changed;
+  }
+
+  private concurrentModificationException(): ConflictException {
+    return new ConflictException({
+      message: 'Financial data was changed by another request. Please retry.',
+      code: DATA_COLLECTION_FAILURE_REASON.CONCURRENT_MODIFICATION,
+    });
+  }
+
   private createErrorResponse(error: unknown, functionName: string): never {
+    // An expected lost race, not a failure
+    if (error instanceof MongooseError.VersionError) {
+      this.logger.warn(`${functionName}() lost a concurrent update`);
+      throw this.concurrentModificationException();
+    }
     this.logger.error(`${functionName}() Failed to perform operation`, error);
     if (error instanceof HttpException) throw error;
     if (error instanceof Error && error.name === 'ValidationError') throw new BadRequestException(error.message);
