@@ -68,8 +68,9 @@ export class XviFcController {
   getFormStatus(
     @Param('ulbId', ParseObjectIdPipe) ulbId: string,
     @Param('designYearId', ParseObjectIdPipe) designYearId: string,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.xviFcService.getFormStatus(ulbId, designYearId);
+    return this.xviFcService.getFormStatus(ulbId, designYearId, user);
   }
 
   @ApiBearerAuth()

@@ -48,6 +48,7 @@ import {
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import {
   buildRejectedUlbsBody,
@@ -174,6 +175,7 @@ export class ClaimLetterAssemblyService {
     private readonly historyService: ClaimLetterHistoryService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
     private readonly activeBatchService: ClaimLetterActiveBatchService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Public methods return the mapped summary; the `*Raw` pipeline works on raw documents. */
@@ -394,6 +396,9 @@ export class ClaimLetterAssemblyService {
         }
         throw err;
       }
+
+      // Serializes with a PMU undo for this State + year (see touchClaimUndoGuard).
+      await this.undoEligibility.touchClaimUndoGuard(stateOid, yearOid, session);
 
       // Deterministic order reduces lock-contention/deadlock risk across overlapping requests.
       const sortedUlbIds = [...ulbIds].sort();
@@ -1357,6 +1362,8 @@ export class ClaimLetterAssemblyService {
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
+      // Serializes with a PMU undo for this State + year (see touchClaimUndoGuard).
+      await this.undoEligibility.touchClaimUndoGuard(stateOid, yearOid, session);
       try {
         await this.lockModel.insertMany(
           [...addedUlbIds].sort().map((ulbId) => ({
@@ -1682,6 +1689,9 @@ export class ClaimLetterAssemblyService {
         }
         throw err;
       }
+
+      // Serializes with a PMU undo for this State + year (see touchClaimUndoGuard).
+      await this.undoEligibility.touchClaimUndoGuard(stateOid, yearOid, session);
 
       const sortedUlbIds = [...ulbIds].sort();
       try {

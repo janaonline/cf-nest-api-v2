@@ -14,6 +14,7 @@ import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import { YearIdToLabel } from 'src/core/constants/years';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -48,6 +49,7 @@ export class FcUnspentPmuRowsService {
     @InjectModel(XviFcUnspentStateFormRow.name)
     private readonly rowModel: Model<XviFcUnspentStateFormRowDocument>,
     private readonly domainService: FcUnspentPmuRowReviewDomainService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
   ) {}
 
   /** Paginated, searchable, filterable list of a form's active rows for PMU review. */
@@ -190,6 +192,8 @@ export class FcUnspentPmuRowsService {
       await session.endSession();
     }
 
+    this.notifyIfReturned(currentFormStatus, stateOid);
+
     const rowSummary = await this.domainService.getRowSummary(form._id);
 
     return xviFcSuccess('Selected rows approved.', {
@@ -314,6 +318,8 @@ export class FcUnspentPmuRowsService {
       await session.endSession();
     }
 
+    this.notifyIfReturned(currentFormStatus, stateOid);
+
     const rowSummary = await this.domainService.getRowSummary(form._id);
 
     return xviFcSuccess('Selected rows rejected.', {
@@ -326,6 +332,18 @@ export class FcUnspentPmuRowsService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** Row review settles the form to `RETURNED_BY_PMU` once no row is pending and at least one was
+   *  rejected — reachable from the last approve as well as the last reject, so both call this. One
+   *  email per settle, never per row; remarks live per row, so none is quoted. */
+  private notifyIfReturned(currentFormStatus: number, stateOid: Types.ObjectId): void {
+    if (currentFormStatus !== FORM_STATUS.RETURNED_BY_PMU) return;
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'FC Unspent Declaration',
+      remarks: null,
+    });
+  }
 
   /** Exactly one of the explicit-array field or `selectAllMatching` must be given — see
    *  `BulkApprovePmuRowsDto`'s own docblock for why both exist. */

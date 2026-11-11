@@ -1,7 +1,10 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
-import { ROW_REVIEW_STATUS_VALUES } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import {
+  ROW_HISTORY_STATUS_VALUES,
+  ROW_REVIEW_STATUS_VALUES,
+} from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 
 export type XviFcUnspentStateFormRowDocument = HydratedDocument<XviFcUnspentStateFormRow>;
 
@@ -81,8 +84,9 @@ export class FcUnspentUlbRowSnapshot {
   @Prop({ type: Boolean, required: true })
   eligibility!: boolean;
 
-  @Prop({ type: Number, enum: [...ROW_REVIEW_STATUS_VALUES, null], default: null })
-  rowStatus!: RowReviewStatus | null;
+  // History-only snapshot, so it also accepts UNDO (10) — the log-only marker of a PMU undo.
+  @Prop({ type: Number, enum: [...ROW_HISTORY_STATUS_VALUES, null], default: null })
+  rowStatus!: RowHistoryStatus | null;
 
   @Prop({ type: String, default: null })
   rejectionRemark!: string | null;

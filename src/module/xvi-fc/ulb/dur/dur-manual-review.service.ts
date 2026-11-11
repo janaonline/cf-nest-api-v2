@@ -387,12 +387,20 @@ export class DurManualReviewService {
    * live — when the requested uploadId is still the current one. A pre-migration upload that's since
    * been superseded resolves through the manual-review request that references it (its `filePath`
    * snapshot, else the derived S3 key), and 404s if no such request exists.
+   *
+   * Two cases skip the lookups above:
+   * - `requestId` names one manual-review request: its own `filePath` snapshot is the file it was raised
+   *   on, even if that upload ID was reused since (a reused pre-history ID's history row holds the
+   *   replacement file, so the uploadId alone is ambiguous there).
+   * - neither id: the document's current upload is the answer, straight from the live slot (a history
+   *   row or an older request for the same uploadId can lag behind a same-ID re-upload).
    */
   async getDocumentDownload(
     id: string,
     docId: XviFcDurDocId,
     uploadId: string | undefined,
     user: AuthUser,
+    requestId?: string,
   ): Promise<DurDocumentDownload> {
     if (user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only ADMIN users may download manual-review documents');
@@ -410,44 +418,64 @@ export class DurManualReviewService {
       return docSlot;
     };
 
+    type DownloadFile = { path: string; originalName?: string | null; mimeType?: string | null };
+    const durObjectId = new Types.ObjectId(id);
+    let file: DownloadFile | undefined;
     let resolvedUploadId = uploadId;
-    if (!resolvedUploadId) {
+    // The request named by id (scoped to this form/doc, so an admin can't probe arbitrary keys).
+    let namedRequest: { uploadId: string; filePath?: string | null } | null = null;
+
+    if (requestId) {
+      namedRequest = await this.manualReviewRequestModel
+        .findOne({ _id: new Types.ObjectId(requestId), durId: durObjectId, docId })
+        .select('uploadId filePath')
+        .lean<{ uploadId: string; filePath?: string | null }>()
+        .exec();
+      if (!namedRequest) throw new NotFoundException('Manual review request not found');
+      resolvedUploadId = namedRequest.uploadId;
+      if (namedRequest.filePath) file = { path: namedRequest.filePath, mimeType: 'application/pdf' };
+    } else if (!resolvedUploadId) {
       const slot = await loadDocSlot();
       if (!slot?.currentUpload) throw new NotFoundException('Document not found');
       resolvedUploadId = slot.currentUpload.uploadId;
+      file = slot.currentUpload.file;
     }
 
-    const uploadRecord = await this.uploadHistoryModel
-      .findOne({ durId: new Types.ObjectId(id), docId, uploadId: resolvedUploadId })
-      .lean()
-      .exec();
-
-    let file: { path: string; originalName?: string | null; mimeType?: string | null } | undefined = uploadRecord?.file;
+    if (!file) {
+      const uploadRecord = await this.uploadHistoryModel
+        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+        .lean()
+        .exec();
+      file = uploadRecord?.file;
+    }
+    // Not in history (superseded pre-history upload): the manual-review request that references this
+    // exact form/doc/upload is checked BEFORE the live slot — after a decided request a re-upload can
+    // replace currentUpload with a different path under the same uploadId. Scoped so an admin can't
+    // probe arbitrary keys.
+    const request =
+      namedRequest ??
+      (file
+        ? null
+        : await this.manualReviewRequestModel
+            .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+            .select('filePath')
+            .lean()
+            .exec());
+    if (!file && request?.filePath) {
+      file = { path: request.filePath, mimeType: 'application/pdf' };
+    }
     if (!file) {
       const slot = await loadDocSlot();
       if (slot?.currentUpload?.uploadId === resolvedUploadId) file = slot.currentUpload.file;
     }
-    if (!file) {
-      // Superseded pre-history upload: resolve via the manual-review request that references it —
-      // its own `filePath` snapshot first, else the S3 key layout (confirmUpload only enforces the
-      // prefix, so this is a last resort). Scoped to a request on this exact form/doc/upload so an
-      // admin can't probe arbitrary keys.
-      const durObjectId = new Types.ObjectId(id);
-      const request = await this.manualReviewRequestModel
-        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
-        .select('filePath')
-        .lean()
-        .exec();
-      if (request?.filePath) {
-        file = { path: request.filePath, mimeType: 'application/pdf' };
-      } else if (request) {
-        const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
-        if (dur) {
-          file = {
-            path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
-            mimeType: 'application/pdf',
-          };
-        }
+    if (!file && request) {
+      // Last resort: the S3 key layout (confirmUpload only enforces the prefix).
+      const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
+      if (dur) {
+        file = {
+          path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
+          mimeType: 'application/pdf',
+        };
       }
     }
     if (!file) throw new NotFoundException('Upload not found');

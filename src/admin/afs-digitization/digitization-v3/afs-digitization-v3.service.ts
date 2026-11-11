@@ -56,6 +56,10 @@ interface V3View {
   /** FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) */
   jobId?: string;
   error?: string;
+  /** When the job finished (completed or failed) */
+  digitizedAt?: Date;
+  /** How long the job took to run, in milliseconds */
+  elapsedMs?: number;
   /** Digitized by the old flow (no detectedDocTypes): shown as digitized, but contents unknown and can be re-queued */
   isLegacy?: boolean;
 }
@@ -68,6 +72,9 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.digitizationStatus': 1,
   'ulbFile.digitizationMsg': 1,
   'ulbFile.queue.status': 1,
+  'ulbFile.queue.processedOn': 1,
+  'ulbFile.queue.finishedOn': 1,
+  'ulbFile.totalProcessingTimeMs': 1,
   'ulbFile.detectedDocTypes': 1,
   'ulbFile.segments': 1,
   'ulbFile.isConsolidated': 1,
@@ -177,6 +184,23 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const metrics = this.computeMetrics(rows, records);
 
     const matching = rows.filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query));
+    if (query.sortColumn) {
+      const dir = query.sortDirection === 'asc' ? 1 : -1;
+      const value = (row: UlbRow): number | null => {
+        const record = records.get(row.ulb.toString());
+        if (query.sortColumn === 'pages') return row.pdfPageCount ?? record?.noOfPages ?? null;
+        return record?.digitizedAt ? new Date(record.digitizedAt).getTime() : null;
+      };
+      // Stable sort keeps the name order for ties; rows with no value always go last
+      matching.sort((a, b) => {
+        const va = value(a);
+        const vb = value(b);
+        if (va === vb) return 0;
+        if (va === null) return 1;
+        if (vb === null) return -1;
+        return (va - vb) * dir;
+      });
+    }
     const data = matching
       .slice((page - 1) * limit, page * limit)
       .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString())));
@@ -888,6 +912,14 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     if (query.isConsolidated === false && !(isDigitized && !record?.isConsolidated)) return false;
     if (query.isMismatch === true && !record?.isMismatch) return false;
     if (query.isMismatch === false && !(isDigitized && !record?.isMismatch)) return false;
+
+    if (query.digitizedFrom || query.digitizedTo) {
+      // Files with no digitized date (not finished, or no timestamp) never match a date range
+      if (!record?.digitizedAt) return false;
+      const at = new Date(record.digitizedAt).getTime();
+      if (query.digitizedFrom && at < new Date(query.digitizedFrom).getTime()) return false;
+      if (query.digitizedTo && at > new Date(query.digitizedTo).getTime()) return false;
+    }
     return true;
   }
 
@@ -898,7 +930,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   private toView(item?: {
     digitizationStatus?: string;
     digitizationMsg?: string;
-    queue?: { status?: string };
+    queue?: { status?: string; processedOn?: Date; finishedOn?: Date };
+    totalProcessingTimeMs?: number;
     detectedDocTypes?: string[];
     segments?: V3View['segments'];
     isConsolidated?: boolean;
@@ -932,8 +965,22 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       status = DigitizationV3Statuses.FAILED;
     }
 
+    const finishedOn = item.queue?.finishedOn;
+    const processedOn = item.queue?.processedOn;
+    const finished = status === DigitizationV3Statuses.DIGITIZED || status === DigitizationV3Statuses.FAILED;
+    let elapsedMs: number | undefined;
+    if (finished) {
+      if (typeof item.totalProcessingTimeMs === 'number') elapsedMs = item.totalProcessingTimeMs;
+      else if (finishedOn && processedOn) {
+        const diff = new Date(finishedOn).getTime() - new Date(processedOn).getTime();
+        if (diff >= 0) elapsedMs = diff;
+      }
+    }
+
     return {
       status,
+      digitizedAt: finished && finishedOn ? finishedOn : undefined,
+      elapsedMs,
       detectedDocTypes: item.detectedDocTypes ?? [],
       segments: item.segments ?? [],
       isConsolidated: !!item.isConsolidated,

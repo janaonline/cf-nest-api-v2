@@ -10,4 +10,7 @@ export interface PmuReviewPermissions {
   canApproveForm: boolean;
   canRejectForm: boolean;
   canReviewRows?: boolean;
+  /** PMU may reverse its own approve/return: status is 5 or 14, the caller can approve as PMU, and no
+   *  claim letter has been started for the state/year (see `PmuUndoEligibilityService`). */
+  canUndo?: boolean;
 }
