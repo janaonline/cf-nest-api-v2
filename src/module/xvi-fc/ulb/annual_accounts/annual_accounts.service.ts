@@ -75,7 +75,7 @@ import { ANNUAL_ACCOUNT_PROCESSING_QUEUE } from '../../../../core/constants/queu
 import { canUlbEditForm, canUlbSubmitForm } from '../../common/utils/xvi-fc-form-status-access.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   buildDecisionRecord,
   resolveDeciderName,
@@ -542,8 +542,8 @@ export class AnnualAccountsService implements OnModuleInit {
     // on `!doc` alone would miss the placeholder case entirely. revalidate runs whenever a document
     // already exists, to catch an admin having since undone the exemption; it independently no-ops
     // when neither section is a stale stub. Both re-fetch/re-derive from a fresh read afterward.
-    // MoHUA and DoE only view: both of these can write (create, reset or delete a stub), so they never run for them.
-    if (!isMohuaViewScope(user)) {
+    // MoHUA, DoE and PMU only view: both of these can write (create, reset or delete a stub), so they never run for them.
+    if (!isNationalDashboardScope(user)) {
       await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
       if (doc) {
         await this.revalidateExemptionStubIfNeeded(doc, ulbId, designYearId);

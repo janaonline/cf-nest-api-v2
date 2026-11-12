@@ -67,7 +67,10 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
   resurrecting stale rows); `EulbFormJsonConfigService`/`getFieldsByType` for the review page's field
   config; `UlbEligibilityService.getEligibleUlbFilter` + a live `Ulb` count for the same
   active-ULB-count display the State side computes (see that CLAUDE's "active-ULB-count" section —
-  this is a 7th read-only call site added to that convention, not a write).
+  this is a 7th read-only call site added to that convention, not a write). The review metadata
+  also returns `statusSummary` (ULBs per elected-body status in the active dataset) from the State
+  side's own `computeEulbStatusSummary`, so PMU sees the same Eligible / Ineligible / 6th Schedule
+  counts as the State page; computed on every read here, since PMU reviews from 13 onward.
 - **No PMU-specific schema or collection exists** (`src/schemas/xvi-fc/` has only `state/` and
   `ulb/`), and none is needed — every PMU-specific fact (who reviewed what, when) is captured by
   reusing the State side's own row/form history collections with `PMU_APPROVE`/`PMU_REJECT`-tagged

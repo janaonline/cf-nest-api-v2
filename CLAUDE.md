@@ -89,8 +89,9 @@ src/
 │   │                    # when it's merely been submitted.
 │   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
 │   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
-│   │                    # expected-ULB count; MOHUA/DOE (read-only)/ADMIN scope only, never cached — every dashboard read
-│   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
+│   │                    # expected-ULB count; MOHUA/DOE/PMU (read-only)/ADMIN scope only, never cached — the three dashboard
+│   │                    # controllers check `isNationalDashboardScope` (MoHUA + DoE + PMU, whose Overview is this same
+│   │                    # dashboard; common/utils/xvi-fc-scope.util.ts), other MoHUA reads `isMohuaViewScope`) plus the per-state
 │   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
 │   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
 │   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, unspent balance

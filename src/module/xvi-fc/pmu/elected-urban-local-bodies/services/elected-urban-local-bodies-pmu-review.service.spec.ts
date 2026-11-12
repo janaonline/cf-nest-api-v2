@@ -14,6 +14,7 @@ import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibilit
 import { Ulb } from 'src/schemas/ulb.schema';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { State } from 'src/schemas/state.schema';
+import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
@@ -97,6 +98,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
   let domainService: Record<string, jest.Mock>;
   let mockSession: Record<string, jest.Mock>;
   let stateModel: { find: jest.Mock };
+  let rowModel: { aggregate: jest.Mock };
 
   beforeEach(async () => {
     mockSession = {
@@ -125,6 +127,16 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
     };
     stateModel = { find: jest.fn().mockReturnValue(qState([{ _id: stateOid, name: 'Karnataka' }])) };
     const ulbModel = { countDocuments: jest.fn().mockResolvedValue(5) };
+    // Status-summary aggregation: ULBs grouped by electedBodyStatus in the active dataset.
+    rowModel = {
+      aggregate: jest.fn().mockReturnValue({
+        exec: jest.fn().mockResolvedValue([
+          { _id: 'Constituted', count: 16 },
+          { _id: 'Not Constituted', count: 2 },
+          { _id: '6th Schedule', count: 2 },
+        ]),
+      }),
+    };
     domainService = {
       findForm: jest.fn().mockResolvedValue(makeForm()),
       getActiveRows: jest.fn().mockResolvedValue([]),
@@ -147,6 +159,7 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(Ulb.name), useValue: ulbModel },
         { provide: getModelToken(State.name), useValue: stateModel },
+        { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
         { provide: ElectedUrbanLocalBodiesPmuRowReviewDomainService, useValue: domainService },
         XvifcFormActorsService,
         FormQuestionHydratorService,
@@ -167,6 +180,13 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
                 fieldTypes: ['EULB_MAIN_FORM_FIELDS'],
               },
               { key: 'ulbCount', label: 'ULB Count', formFieldType: 'number', fieldTypes: ['EULB_MAIN_FORM_FIELDS'] },
+              {
+                key: 'electedBodyStatus',
+                label: 'Elected Body Status',
+                formFieldType: 'select',
+                fieldTypes: ['EULB_ROW_EDIT_FIELDS'],
+                options: ['Constituted', 'Not Constituted', '6th Schedule'],
+              },
             ]),
           },
         },
@@ -252,6 +272,23 @@ describe('ElectedUrbanLocalBodiesPmuReviewService', () => {
       await expect(service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser)).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it("returns the State page's status summary: ULBs per elected-body status in the active dataset", async () => {
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, activeDatasetVersion: 3 }));
+
+      const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
+
+      expect(result.data!.statusSummary).toEqual({
+        totalUlbCount: 20,
+        constitutedCount: 16,
+        notConstitutedCount: 2,
+        exemptCount: 2,
+      });
+      const [pipeline] = rowModel.aggregate.mock.calls.at(-1) as [Array<{ $match?: Record<string, unknown> }>];
+      expect(pipeline[0].$match).toMatchObject({ form: formOid, datasetVersion: 3, isActive: true });
     });
 
     it('allows read-only review of a form that has never reached PMU (e.g. IN_PROGRESS) — view-only, not mutable', async () => {
