@@ -66,6 +66,12 @@ interface V3View {
 
 type V3Record = V3View | undefined;
 
+/** A PDF uploaded from the v3 page (afs_xl_files.afsFile), the same slot the AFS dashboard's Upload writes */
+interface AfsPdf {
+  pdfUrl: string;
+  noOfPages?: number;
+}
+
 /** Only these ulbFile fields are read for the list: small, and no data[]. */
 const ULB_FILE_PROJECTION = {
   ulb: 1,
@@ -180,7 +186,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const page = query.page > 0 ? query.page : 1;
     const limit = query.limit > 0 ? query.limit : 100;
 
-    const { rows, records } = await this.loadSelection(query);
+    const { rows, records, afsPdfs } = await this.loadSelection(query);
     const metrics = this.computeMetrics(rows, records);
 
     const matching = rows.filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query));
@@ -203,7 +209,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     }
     const data = matching
       .slice((page - 1) * limit, page * limit)
-      .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString())));
+      .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString()), afsPdfs.get(row.ulb.toString())));
 
     return { success: true, data, totalCount: matching.length, metrics };
   }
@@ -826,14 +832,19 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        ULB_FILE_PROJECTION,
+        { ...ULB_FILE_PROJECTION, 'afsFile.pdfUrl': 1, 'afsFile.noOfPages': 1 },
       )
       .lean()
       .exec();
     const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
+    // PDFs an admin uploaded from this page (afsFile), shown next to the ULB's own PDF
+    const afsPdfs = new Map<string, AfsPdf>();
+    for (const r of existing) {
+      if (r.afsFile?.pdfUrl) afsPdfs.set(r.ulb.toString(), { pdfUrl: r.afsFile.pdfUrl, noOfPages: r.afsFile.noOfPages });
+    }
     await this.followOriginals(rows, records, yearId, auditType);
 
-    return { rows, records };
+    return { rows, records, afsPdfs };
   }
 
   /**
@@ -1004,7 +1015,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     return record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
   }
 
-  private shapeRow(row: UlbRow, docType: string, record: V3Record) {
+  private shapeRow(row: UlbRow, docType: string, record: V3Record, afsPdf?: AfsPdf) {
     const excelUrl = this.displayStatus(record) === DigitizationV3Statuses.DIGITIZED ? record?.excelUrl : undefined;
     return {
       _id: row._id,
@@ -1021,6 +1032,9 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       isDuplicate: row.isDuplicate,
       duplicateOfDocType: row.duplicateOfDocType ?? null,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
+      afsPdfUrl: afsPdf?.pdfUrl ?? null,
+      afsPdfUrlSigned: afsPdf ? this.fileTokenService.signFileUrl(afsPdf.pdfUrl) : null,
+      afsPdfPageCount: afsPdf?.noOfPages || null,
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,
       excelUrlSigned: excelUrl ? this.fileTokenService.signFileUrl(excelUrl) : null,
