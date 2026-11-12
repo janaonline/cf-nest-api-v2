@@ -207,8 +207,7 @@ export class DevolutionFormulaService {
       rowEditFields,
       installmentAccess,
       meta: { version: 1 },
-      pmuRemarks: doc?.pmuRemarks ?? null,
-      mohuaRemarks: doc?.mohuaRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
     };
 
     return xviFcSuccess('ULB-wise Allocation form fetched.', responseData);
@@ -516,6 +515,12 @@ export class DevolutionFormulaService {
         assertCanStateFinalSubmitForm,
       );
     }
+
+    // Rows the SO returned with their claim letter (16) were corrected with this resubmit: back to unset, as PMU has no
+    // row review here, so a later claim letter's approval moves them like any other row.
+    await this.rowModel
+      .updateMany({ form: form._id, rowStatus: FORM_STATUS.RETURNED_BY_SO }, { $set: { rowStatus: null } })
+      .exec();
 
     // Snapshot rows now — see CLAUDE.md's "Form status history log" section for why.
     let submittedRowsSnapshot: Record<string, unknown>[] | null = null;

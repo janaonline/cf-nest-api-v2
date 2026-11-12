@@ -82,7 +82,9 @@ export class FcUnspentUlbOptionsService {
         state: stateOid,
         year: yearOid,
         installment: FC_UNSPENT_DEVOLUTION_INSTALLMENT,
-        currentFormStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
+        currentFormStatus: {
+          $in: [FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA],
+        },
       })
       .select('_id activeDatasetVersion')
       .lean<{ _id: Types.ObjectId; activeDatasetVersion: number }>()

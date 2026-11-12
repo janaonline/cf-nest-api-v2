@@ -82,7 +82,7 @@ type SfcStatusLeanDoc = {
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 const SFC_DUMP_HEADERS: RowHeader[] = [
@@ -206,7 +206,7 @@ export class SfcStatusService {
       actors,
       instructions: [],
       meta: { version: 1 },
-      pmuRemarks: doc?.pmuRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
       ...exemption,
     };
 

@@ -52,11 +52,9 @@ export class XviFcUnspentStateForm {
   @Prop({ type: Boolean, default: true })
   isDraft!: boolean;
 
+  /** The latest return's reason, from whoever returned it last (PMU, the SO or MoHUA). */
   @Prop({ type: String, default: null })
-  mohuaRemarks?: string | null;
-
-  @Prop({ type: String, default: null })
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 
   /**
    * Stored for audit only; GET always re-derives applicableFc from the current year -> FC mapping, preventing stale data from becoming authoritative

@@ -27,6 +27,9 @@ export enum AnnualAccountFormStatus {
    *  discretionary Request Exemption entry for this section's formId (30/31) — see
    *  `RequestExemptionService`/`mohua/request-exemption`. Never a manual ULB/STATE action. */
   EXEMPTED_ACKNOWLEDGED = 'EXEMPTED_ACKNOWLEDGED',
+  /** The MoHUA Section Officer returned the claim letter this section was in — mirrors the shared
+   *  FORM_STATUS.RETURNED_BY_SO (16). The ULB corrects and resubmits to the State. */
+  RETURNED_BY_SO = 'RETURNED_BY_SO',
 }
 
 export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
@@ -42,6 +45,7 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
   [AnnualAccountFormStatus.UNDO]: 10,
   [AnnualAccountFormStatus.ACTION_REQUIRED]: 11,
   [AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]: 12,
+  [AnnualAccountFormStatus.RETURNED_BY_SO]: 16,
 };
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;

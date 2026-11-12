@@ -43,7 +43,7 @@ full lifecycle; the short version this module depends on: `finalSubmit` sets eve
 `rejectionRemark` set). There is no PMU-specific status value and no separate per-row "PMU decision"
 field layered on top — PMU has no status of its own once approved, so an approved row lands directly
 on the same `UNDER_REVIEW_BY_MOHUA` a (currently nonexistent) MoHUA reviewer would also use. The
-complete-form analog: `currentFormStatus`/`pmuRemarks` on the parent, and
+complete-form analog: `currentFormStatus`/`rejectionRemarks` on the parent, and
 `FormHistoryAction.PMU_APPROVE`/`PMU_REJECT` entries in `ElectedUrbanLocalBodiesFormHistory` (see
 that same state CLAUDE's "Form status history log" section — `CREATE_DRAFT`/`FINAL_SUBMIT` are
 logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
@@ -51,7 +51,7 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
 ## Reads vs. writes relative to `state/elected-urban-local-bodies`
 
 - **Writes**: `ElectedUrbanLocalBodiesRow.rowStatus`/`rejectionRemark` (row-level transitions, both
-  bulk and complete-form); `ElectedUrbanLocalBodiesForm.currentFormStatus`/`pmuRemarks` (complete-form
+  bulk and complete-form); `ElectedUrbanLocalBodiesForm.currentFormStatus`/`rejectionRemarks` (complete-form
   decisions); one `ElectedUrbanLocalBodiesRowHistory` entry per row transition and one
   `ElectedUrbanLocalBodiesFormHistory` entry per parent transition (skipped when the transition is a
   no-op). Never touches the row's own domain data (`electedBodyStatus`, `dateOfConstitution`,

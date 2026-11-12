@@ -15,7 +15,7 @@ export interface EulbPmuFormLean {
   year: Types.ObjectId;
   currentFormStatus: number;
   activeDatasetVersion: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 /** Lean row projection used throughout the PMU review domain (list, transitions, snapshots). */
@@ -55,7 +55,7 @@ export interface EulbPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   questions: HydratedFieldConfig[];
   rowSummary: EulbPmuRowSummary;
   /** ULBs per elected-body status in the active dataset (constituted / not / 6th Schedule) — the same

@@ -41,7 +41,7 @@ describe('ClaimLetterActiveBatchService', () => {
       state,
       year,
       installment: 1,
-      currentFormStatus: { $in: [2, 5, 6] },
+      currentFormStatus: { $in: [2, 15, 16, 6] },
       isAbandoned: false,
       supersededBy: null,
       assemblyStatus: 'READY',

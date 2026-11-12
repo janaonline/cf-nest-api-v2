@@ -6,10 +6,14 @@ import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/s
 
 export const CLAIM_LETTER_BATCH_BLOCKED = 'CLAIM_LETTER_BATCH_BLOCKED';
 
-/** Draft, under MoHUA review, or returned by MoHUA. */
+/**
+ * Draft, under SO review, or returned by the SO or MoHUA. UNDER_REVIEW_BY_MOHUA (5) is not active: once the SO
+ * approves a letter it counts as approved (MoHUA's final 5 -> 7 step is not used yet), so the State can start the next.
+ */
 const ACTIVE_STATUSES: number[] = [
   FORM_STATUS.IN_PROGRESS,
-  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.RETURNED_BY_SO,
   FORM_STATUS.RETURNED_BY_MOHUA,
 ];
 

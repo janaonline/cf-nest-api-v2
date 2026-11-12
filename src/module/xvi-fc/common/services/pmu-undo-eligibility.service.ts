@@ -48,7 +48,7 @@ export interface PmuUndoForm {
 const WRITE_CONFLICT_CODES = new Set([112, 11000]);
 
 /**
- * When a PMU decision (approve → 5, return → 14) may still be undone, shared by all five PMU review
+ * When a PMU decision (approve → 15, return → 14) may still be undone, shared by all five PMU review
  * modules. Besides the form being in one of those two statuses and the caller being a PMU approver:
  * - the status must actually be PMU's decision: a form that reached 5 by a State submit from before the
  *   PMU stage existed has nothing to undo (see `isPmuDecision`);

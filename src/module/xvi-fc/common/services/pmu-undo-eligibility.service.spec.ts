@@ -34,7 +34,7 @@ describe('PmuUndoEligibilityService', () => {
     guardModel = { updateOne: jest.fn().mockReturnValue(q({ acknowledged: true })) };
     historyModel = { findOne: jest.fn() };
     locks(false);
-    latest(FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+    latest(FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_SO);
     const other = { findOne: jest.fn() };
     service = new PmuUndoEligibilityService(
       lockModel as never,
@@ -79,24 +79,24 @@ describe('PmuUndoEligibilityService', () => {
 
   describe('isPmuDecision', () => {
     it('is true when the latest entry is PMU moving the form from 13 to its current status', async () => {
-      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).resolves.toBe(true);
+      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_SO)).resolves.toBe(true);
       expect(historyModel.findOne).toHaveBeenCalledWith({ eulbForm: form.id });
     });
 
     it('is false for a form the State submitted straight to 5 before the PMU stage existed', async () => {
-      latest(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
-      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).resolves.toBe(false);
-      await expect(service.assertPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).rejects.toThrow(ForbiddenException);
+      latest(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_SO);
+      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_SO)).resolves.toBe(false);
+      await expect(service.assertPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_SO)).rejects.toThrow(ForbiddenException);
     });
 
     it('is false with no history at all', async () => {
       historyModel.findOne.mockReturnValue(q(null));
-      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_MOHUA)).resolves.toBe(false);
+      await expect(service.isPmuDecision(form, FORM_STATUS.UNDER_REVIEW_BY_SO)).resolves.toBe(false);
     });
   });
 
   describe('canUndo', () => {
-    it.each([FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.RETURNED_BY_PMU])(
+    it.each([FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_PMU])(
       'allows undo of status %i for a PMU admin when PMU decided it and no claim letter exists',
       async (status) => {
         latest(FORM_STATUS.UNDER_REVIEW_BY_PMU, status);
@@ -106,6 +106,7 @@ describe('PmuUndoEligibilityService', () => {
 
     it.each([
       FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      FORM_STATUS.UNDER_REVIEW_BY_MOHUA, // the SO has verified it on a claim letter
       FORM_STATUS.IN_PROGRESS,
       FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
       FORM_STATUS.RETURNED_BY_MOHUA,
@@ -114,10 +115,10 @@ describe('PmuUndoEligibilityService', () => {
     });
 
     it('hides undo from a PMU viewer, and when a claim letter exists', async () => {
-      await expect(service.canUndo(pmuViewer, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, stateOid, yearOid, form)).resolves.toBe(false);
+      await expect(service.canUndo(pmuViewer, FORM_STATUS.UNDER_REVIEW_BY_SO, stateOid, yearOid, form)).resolves.toBe(false);
 
       locks(true);
-      await expect(service.canUndo(pmuAdmin, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, stateOid, yearOid, form)).resolves.toBe(false);
+      await expect(service.canUndo(pmuAdmin, FORM_STATUS.UNDER_REVIEW_BY_SO, stateOid, yearOid, form)).resolves.toBe(false);
     });
 
     it('hides undo from a non-PMU user even if a permission override grants PMU approval (the endpoint refuses them)', async () => {
@@ -127,14 +128,14 @@ describe('PmuUndoEligibilityService', () => {
         xviFcSubrole: 'admin',
         permissionOverrides: { allow: [Permission.APPROVE_STATE_SUBMISSIONS_PMU] },
       } as unknown as AuthUser;
-      await expect(service.canUndo(mohuaWithOverride, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, stateOid, yearOid, form)).resolves.toBe(
+      await expect(service.canUndo(mohuaWithOverride, FORM_STATUS.UNDER_REVIEW_BY_SO, stateOid, yearOid, form)).resolves.toBe(
         false,
       );
     });
 
     it('hides undo for a legacy status set before the PMU stage', async () => {
-      latest(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
-      await expect(service.canUndo(pmuAdmin, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, stateOid, yearOid, form)).resolves.toBe(false);
+      latest(FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_SO);
+      await expect(service.canUndo(pmuAdmin, FORM_STATUS.UNDER_REVIEW_BY_SO, stateOid, yearOid, form)).resolves.toBe(false);
     });
   });
 });

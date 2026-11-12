@@ -44,13 +44,13 @@ interface FormLevelLean {
   year: Types.ObjectId;
   installment?: number;
   currentFormStatus: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 /**
  * Everything about "undo my PMU approve/return", in one place — the controller's single entry point.
- * Reverses PMU's own approve (`UNDER_REVIEW_BY_MOHUA`, 5) or return (`RETURNED_BY_PMU`, 14) back to
- * `UNDER_REVIEW_BY_PMU` (13), logged `5|14 -> 10 (UNDO) -> 13`. The three whole-form reviewers (SFC Status,
+ * Reverses PMU's own approve (`UNDER_REVIEW_BY_SO`, 15) or return (`RETURNED_BY_PMU`, 14) back to
+ * `UNDER_REVIEW_BY_PMU` (13), logged `15|14 -> 10 (UNDO) -> 13`. The three whole-form reviewers (SFC Status,
  * GTC, Devolution Formula) share one generic path here; the two row-bearing ones live in
  * `PmuUndoRowFormsService`. See common/services/CLAUDE.md, "Undoing a PMU decision".
  */
@@ -141,7 +141,7 @@ export class PmuUndoService {
   ): Promise<XviFcApiResponse<PmuUndoResult>> {
     const form = await cfg.formModel
       .findOne(cfg.filter as FilterQuery<TForm>)
-      .select('state year installment currentFormStatus pmuRemarks')
+      .select('state year installment currentFormStatus rejectionRemarks')
       .lean<FormLevelLean>()
       .exec();
     if (!form) throw new NotFoundException(`${cfg.label} form not found for this state and year.`);
@@ -160,7 +160,7 @@ export class PmuUndoService {
       await this.formHelper.transitionForm<TForm>({
         formModel: cfg.formModel,
         formId: form._id,
-        setFields: { currentFormStatus: toStatus, updatedBy: userOid, pmuRemarks: null },
+        setFields: { currentFormStatus: toStatus, updatedBy: userOid, rejectionRemarks: null },
         session,
         expectedStatus: fromStatus,
         notFoundMessage: `${cfg.label} form not found.`,
@@ -183,7 +183,7 @@ export class PmuUndoService {
           ip: ctx.ip,
           userAgent: ctx.userAgent,
           // The remark being cleared is kept on the first entry so the reason survives in history.
-          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? null) : null,
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.rejectionRemarks ?? null) : null,
         }),
       });
     });

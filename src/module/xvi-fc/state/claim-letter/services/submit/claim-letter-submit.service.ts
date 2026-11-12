@@ -51,7 +51,14 @@ type SubmitBatch = {
   editLockAcquiredAt?: Date | null;
 };
 
-/** `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` and the checks that must pass first (ADR 0003). */
+/** Submitted already: with the SO (15), or moved on by the SO to MoHUA review (5) or approved (7). */
+const ALREADY_SUBMITTED_STATUSES: number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+/** `IN_PROGRESS -> UNDER_REVIEW_BY_SO` and the checks that must pass first (ADR 0003). */
 @Injectable()
 export class ClaimLetterSubmitService {
   constructor(
@@ -83,7 +90,7 @@ export class ClaimLetterSubmitService {
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, String(parent.state));
 
-    if (parent.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+    if (ALREADY_SUBMITTED_STATUSES.includes(parent.currentFormStatus)) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
     }
     // Abandon keeps IN_PROGRESS and has already released the locks, so the flag is checked on its own.
@@ -130,7 +137,7 @@ export class ClaimLetterSubmitService {
           },
           {
             $set: {
-              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
               submittedAt: new Date(),
               submittedBy: userOid,
               updatedBy: userOid,
@@ -151,7 +158,7 @@ export class ClaimLetterSubmitService {
             batchNumber: updated.batchNumber,
             version: updated.version,
             fromStatus: FORM_STATUS.IN_PROGRESS,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
             actionSource: 'DIRECT_STATE_REVIEW',
             // Both exist: the filter pinned both.
             submittedFiles: { signedClaimFile: updated.signedClaimFile!, finalClaimPdf: updated.finalClaimPdf! },
@@ -179,7 +186,7 @@ export class ClaimLetterSubmitService {
     // Concurrent status change (or an in-flight `updateDraft`) between our initial read and the
     // guarded update.
     const current = await this.batchModel.findById(claimLetterId).lean<SubmitBatch | null>().exec();
-    if (current?.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+    if (current && ALREADY_SUBMITTED_STATUSES.includes(current.currentFormStatus)) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current, user));
     }
     if (current?.editLockToken && this.isEditLockActive(current.editLockAcquiredAt)) {
