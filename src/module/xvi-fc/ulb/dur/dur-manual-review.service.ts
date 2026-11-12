@@ -114,7 +114,8 @@ export class DurManualReviewService {
     const docSlot = dur.documents.find((d) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found');
 
-    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+    // Case-insensitive; a technical failure (no validationStatus) is fixed by Retry / Re-upload instead.
+    if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed validation.');
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
@@ -632,8 +633,10 @@ export class DurManualReviewService {
   }
 
   /**
-   * Filter + lookup stages shared by the paginated list and the unpaginated Excel dump — everything
-   * up to (not including) sort/pagination, so both read exactly the same rows for a given query.
+   * Filter stages shared by the paginated list and the unpaginated Excel dump, so both read exactly
+   * the same rows for a given query. Only the State filter and the ULB search join ULB/State here;
+   * every other lookup (`durManualReviewHistoryLookupStages`) runs after sort/pagination, on the rows returned only, so a page
+   * never joins the whole history.
    */
   private buildDurManualReviewHistoryFilterStages(dto: DurManualReviewHistoryQueryDto): PipelineStage[] {
     const match: Record<string, unknown> = {};
@@ -651,22 +654,23 @@ export class DurManualReviewService {
       };
     }
 
+    const search = dto.search?.trim();
+    const searchRegex = search ? new RegExp(escapeRegex(search), 'i') : null;
     return [
       { $match: match },
-      ...this.durManualReviewHistoryLookupStages(),
-      ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
-      ...(dto.breachedOnly ? [{ $match: { isBreached: true } } as PipelineStage] : []),
-      ...(dto.search?.trim()
-        ? [
-            {
-              $match: {
-                $or: [
-                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                ],
-              },
-            } as PipelineStage,
-          ]
+      ...(dto.stateId || searchRegex
+        ? ([
+            { $lookup: { from: 'ulbs', localField: 'ulb', foreignField: '_id', as: 'ulbDoc' } },
+            { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+          ] as PipelineStage[])
+        : []),
+      ...(dto.stateId ? [{ $match: { 'ulbDoc.state': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
+      ...(searchRegex
+        ? [{ $match: { $or: [{ 'ulbDoc.name': searchRegex }, { 'ulbDoc.code': searchRegex }] } } as PipelineStage]
+        : []),
+      // Same derivation as isBreached in the lookup stages — never stored.
+      ...(dto.breachedOnly
+        ? [{ $match: { $expr: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] } } } as PipelineStage]
         : []),
     ];
   }
@@ -684,7 +688,12 @@ export class DurManualReviewService {
       { $sort: { requestedAt: -1 } },
       {
         $facet: {
-          data: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }, this.durManualReviewHistoryProjectStage()],
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            ...this.durManualReviewHistoryLookupStages(),
+            this.durManualReviewHistoryProjectStage(),
+          ],
           totalCount: [{ $count: 'count' }],
         },
       },
@@ -793,6 +802,7 @@ export class DurManualReviewService {
     const pipeline: PipelineStage[] = [
       ...this.buildDurManualReviewHistoryFilterStages(dto),
       { $sort: { requestedAt: -1 } },
+      ...this.durManualReviewHistoryLookupStages(),
       this.durManualReviewHistoryProjectStage(),
     ];
 

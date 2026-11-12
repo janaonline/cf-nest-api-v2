@@ -100,7 +100,9 @@ export class AnnualAccountManualReviewService {
     const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
 
-    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+    // Case-insensitive, like the writer's PASS check. A technical failure (OCR job crashed) has no
+    // validationStatus and is fixed by Retry / Re-upload, not a manual review.
+    if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
@@ -633,8 +635,10 @@ export class AnnualAccountManualReviewService {
   }
 
   /**
-   * Filter + lookup stages shared by the paginated list and the unpaginated Excel dump — everything
-   * up to (not including) sort/pagination, so both read exactly the same rows for a given query.
+   * Filter stages shared by the paginated list and the unpaginated Excel dump, so both read exactly
+   * the same rows for a given query. Only the State filter and the ULB search join ULB/State here;
+   * every other lookup (`manualReviewHistoryLookupStages`) runs after sort/pagination, on the rows returned only, so a page
+   * never joins the whole history.
    */
   private buildManualReviewHistoryFilterStages(dto: ManualReviewHistoryQueryDto): PipelineStage[] {
     const match: Record<string, unknown> = {};
@@ -652,22 +656,23 @@ export class AnnualAccountManualReviewService {
       };
     }
 
+    const search = dto.search?.trim();
+    const searchRegex = search ? new RegExp(escapeRegex(search), 'i') : null;
     return [
       { $match: match },
-      ...this.manualReviewHistoryLookupStages(),
-      ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
-      ...(dto.breachedOnly ? [{ $match: { isBreached: true } } as PipelineStage] : []),
-      ...(dto.search?.trim()
-        ? [
-            {
-              $match: {
-                $or: [
-                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                ],
-              },
-            } as PipelineStage,
-          ]
+      ...(dto.stateId || searchRegex
+        ? ([
+            { $lookup: { from: 'ulbs', localField: 'ulb', foreignField: '_id', as: 'ulbDoc' } },
+            { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+          ] as PipelineStage[])
+        : []),
+      ...(dto.stateId ? [{ $match: { 'ulbDoc.state': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
+      ...(searchRegex
+        ? [{ $match: { $or: [{ 'ulbDoc.name': searchRegex }, { 'ulbDoc.code': searchRegex }] } } as PipelineStage]
+        : []),
+      // Same derivation as isBreached in the lookup stages — never stored.
+      ...(dto.breachedOnly
+        ? [{ $match: { $expr: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] } } } as PipelineStage]
         : []),
     ];
   }
@@ -685,7 +690,12 @@ export class AnnualAccountManualReviewService {
       { $sort: { requestedAt: -1 } },
       {
         $facet: {
-          data: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }, this.manualReviewHistoryProjectStage()],
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            ...this.manualReviewHistoryLookupStages(),
+            this.manualReviewHistoryProjectStage(),
+          ],
           totalCount: [{ $count: 'count' }],
         },
       },
@@ -797,6 +807,7 @@ export class AnnualAccountManualReviewService {
     const pipeline: PipelineStage[] = [
       ...this.buildManualReviewHistoryFilterStages(dto),
       { $sort: { requestedAt: -1 } },
+      ...this.manualReviewHistoryLookupStages(),
       this.manualReviewHistoryProjectStage(),
     ];
 

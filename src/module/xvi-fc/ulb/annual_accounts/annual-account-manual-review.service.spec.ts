@@ -237,6 +237,23 @@ describe('AnnualAccountManualReviewService', () => {
       );
     });
 
+    it('rejects a technical failure (the OCR job crashed, so no validationStatus)', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: null }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review can only be requested for a failed OCR validation.',
+      );
+    });
+
+    it('treats a lowercase "fail" as a failed validation', async () => {
+      // Already requested, so it stops at the next check: proof the FAIL check let it through.
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'fail', isManualReviewRequested: true }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review has already been requested for this document.',
+      );
+    });
+
     it('rejects when manual review was already requested', async () => {
       mockAnnualAccountModel.findById.mockReturnValue(
         docWithOcr({ validationStatus: 'FAIL', isManualReviewRequested: true }),
@@ -549,6 +566,34 @@ describe('AnnualAccountManualReviewService', () => {
       const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
 
       expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+
+    it('joins ULB/State/Year/upload history only for the page, after skip and limit', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      await service.listManualReviewRequestHistory({ page: 2, pageSize: 20 }, adminUser);
+
+      const pipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0] as Record<string, any>[];
+      const facet = pipeline.find((stage) => stage.$facet).$facet;
+      expect(pipeline.some((stage) => stage.$lookup)).toBe(false);
+      expect(facet.data.slice(0, 2)).toEqual([{ $skip: 20 }, { $limit: 20 }]);
+      expect(facet.data.some((stage: Record<string, any>) => stage.$lookup?.from === 'ulbs')).toBe(true);
+    });
+
+    it('joins ULBs before paging only to filter by State or search', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      await service.listManualReviewRequestHistory(
+        { page: 1, pageSize: 20, stateId: '5dcf9d7416a06aed41c748f0', search: 'nagar' },
+        adminUser,
+      );
+
+      const pipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0] as Record<string, any>[];
+      const before = pipeline.slice(0, pipeline.findIndex((stage) => stage.$facet));
+      expect(before.filter((stage) => stage.$lookup).map((stage) => stage.$lookup.from)).toEqual(['ulbs']);
+      expect(String(before.find((stage) => stage.$match?.['ulbDoc.state'])?.$match['ulbDoc.state'])).toBe(
+        '5dcf9d7416a06aed41c748f0',
+      );
     });
   });
 
