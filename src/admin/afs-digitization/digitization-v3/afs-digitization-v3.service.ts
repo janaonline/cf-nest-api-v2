@@ -70,6 +70,7 @@ type V3Record = V3View | undefined;
 interface AfsPdf {
   pdfUrl: string;
   noOfPages?: number;
+  fileSizeBytes?: number;
 }
 
 /** Only these ulbFile fields are read for the list: small, and no data[]. */
@@ -274,7 +275,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       }
 
       const current = records.get(row.ulb.toString())?.status;
-      if (current === DigitizationV3Statuses.DIGITIZED) {
+      if (current === DigitizationV3Statuses.DIGITIZED && !query.redigitize) {
         summary.skippedAlreadyDigitized++;
         continue;
       }
@@ -294,7 +295,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         batchId,
       };
 
-      const claimed = await this.claim(data);
+      const claimed = await this.claim(data, query.redigitize);
       if (!claimed) {
         // Another request queued it between our read and this write.
         summary.skippedAlreadyQueued++;
@@ -352,7 +353,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       }
 
       const current = afsRecords.get(key)?.status;
-      if (current === DigitizationV3Statuses.DIGITIZED) {
+      if (current === DigitizationV3Statuses.DIGITIZED && !query.redigitize) {
         summary.skippedAlreadyDigitized++;
         continue;
       }
@@ -373,7 +374,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         batchId,
       };
 
-      if (!(await this.claim(data))) {
+      if (!(await this.claim(data, query.redigitize))) {
         summary.skippedAlreadyQueued++;
         continue;
       }
@@ -432,13 +433,14 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   }
 
   /**
-   * Atomically moves the file to `queued`. Returns false if it is already queued, or already digitized by v3.
+   * Atomically moves the file to `queued`. Returns false if it is already queued, or already digitized by v3
+   * (unless `redigitize`, which lets a digitized file be queued again).
    * Upserts so ULBs that were never digitized (no afs_xl_files record yet) can be queued too.
    *
    * Only dotted `ulbFile.*` (or `afsFile.*` for an AFS upload) paths are written, so nothing else in the item is
    * overwritten, and without defaults no empty `data[]` is created.
    */
-  private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
+  private async claim(data: AfsDigitizationV3JobData, redigitize = false): Promise<boolean> {
     const key = this.recordKey(data);
     const f = this.slot(data);
     try {
@@ -448,11 +450,15 @@ export class AfsDigitizationV3Service implements OnModuleInit {
             ...key,
             $nor: [
               { [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED },
-              // `detectedDocTypes` exists only on items v3 has digitized
-              {
-                [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
-                [`${f}.detectedDocTypes`]: { $exists: true },
-              },
+              // `detectedDocTypes` exists only on items v3 has digitized; a re-digitize may start from those
+              ...(redigitize
+                ? []
+                : [
+                    {
+                      [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
+                      [`${f}.detectedDocTypes`]: { $exists: true },
+                    },
+                  ]),
             ],
           },
           {
@@ -941,7 +947,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1 },
+        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1, 'afsFile.fileSizeBytes': 1 },
       )
       .lean()
       .exec();
@@ -951,7 +957,11 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const afsRecords = new Map<string, V3Record>();
     for (const r of existing) {
       if (!r.afsFile?.pdfUrl) continue;
-      afsPdfs.set(r.ulb.toString(), { pdfUrl: r.afsFile.pdfUrl, noOfPages: r.afsFile.noOfPages });
+      afsPdfs.set(r.ulb.toString(), {
+        pdfUrl: r.afsFile.pdfUrl,
+        noOfPages: r.afsFile.noOfPages,
+        fileSizeBytes: r.afsFile.fileSizeBytes,
+      });
       afsRecords.set(r.ulb.toString(), this.toView(r.afsFile));
     }
     await this.followOriginals(rows, records, yearId, auditType);
@@ -1149,6 +1159,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       afsPdfUrl: afsPdf?.pdfUrl ?? null,
       afsPdfUrlSigned: afsPdf ? this.fileTokenService.signFileUrl(afsPdf.pdfUrl) : null,
       afsPdfPageCount: afsPdf?.noOfPages || null,
+      afsPdfSizeBytes: afsPdf?.fileSizeBytes ?? null,
       // Digitization of the uploaded AFS PDF (same shape as `digitization`); absent until a PDF is uploaded
       afsDigitization: afsPdf
         ? afsRecord
