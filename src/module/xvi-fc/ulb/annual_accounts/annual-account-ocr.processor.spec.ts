@@ -43,13 +43,13 @@ describe('AnnualAccountOcrProcessor', () => {
     jest.useFakeTimers();
 
     annualAccountModel = {
-      updateOne: jest.fn().mockResolvedValue({}),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1, matchedCount: 1 }),
       findById: jest.fn(),
       // Default: no docSlot found — computePostRejectionUpdate treats this as "not in a
       // post-rejection cycle" and no-ops, matching a document with no manualReviewDecision.
       findOne: jest.fn().mockReturnValue(findByIdChain(null)),
     };
-    uploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({}) };
+    uploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1, matchedCount: 1 }) };
     ulbModel = {
       findById: jest
         .fn()
@@ -130,13 +130,13 @@ describe('AnnualAccountOcrProcessor', () => {
     await processPromise;
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-1' },
+      { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({ processingStatus: 'PASSED', 'ocrInfo.status': 'COMPLETED' }),
       }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.objectContaining({
         $set: expect.objectContaining({ 'documents.$.processingStatus': 'PASSED' }),
       }),
@@ -159,7 +159,7 @@ describe('AnnualAccountOcrProcessor', () => {
     await processPromise;
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-1' },
+      { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({
           processingStatus: 'FAILED',
@@ -193,7 +193,7 @@ describe('AnnualAccountOcrProcessor', () => {
       expect.objectContaining({ ulb: ulbObjId, design_year: yearObjId, sectionType: 'unaudited' }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: siblingId, 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ _id: siblingId, documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.anything(),
     );
   });
@@ -207,13 +207,13 @@ describe('AnnualAccountOcrProcessor', () => {
 
     expect(ocrApi.getJobResult).not.toHaveBeenCalled();
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-1' },
+      { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({ processingStatus: 'FAILED', error: 'OCR engine error', 'queue.status': 'failed' }),
       }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.objectContaining({
         $set: expect.objectContaining({ 'documents.$.processingStatus': 'FAILED' }),
       }),
@@ -229,7 +229,7 @@ describe('AnnualAccountOcrProcessor', () => {
     await processPromise;
 
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.objectContaining({
         $set: expect.not.objectContaining({ 'documents.$.postRejectionAttemptsUsed': expect.anything() }),
       }),
@@ -247,7 +247,7 @@ describe('AnnualAccountOcrProcessor', () => {
     await processPromise;
 
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.objectContaining({
         $set: expect.objectContaining({ 'documents.$.postRejectionAttemptsUsed': 2 }),
       }),
@@ -361,7 +361,7 @@ describe('AnnualAccountOcrProcessor', () => {
     await processPromise;
 
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ 'documents.docId': 'doc-1' }),
+      expect.objectContaining({ documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.manualReviewDecision': null,
@@ -410,7 +410,7 @@ describe('AnnualAccountOcrProcessor', () => {
     // (no progress_step was ever returned, so the in-loop progress update never fired).
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledTimes(2);
     expect(uploadHistoryModel.updateOne).not.toHaveBeenCalledWith(
-      { uploadId: 'upload-1' },
+      { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({ $set: expect.objectContaining({ processingStatus: expect.anything() }) }),
     );
   });

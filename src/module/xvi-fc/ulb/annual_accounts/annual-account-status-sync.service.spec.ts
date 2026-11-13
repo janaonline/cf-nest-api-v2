@@ -30,14 +30,14 @@ describe('AnnualAccountStatusSyncService', () => {
 
   beforeEach(() => {
     annualAccountModel = {
-      updateOne: jest.fn().mockResolvedValue({}),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1, matchedCount: 1 }),
       findById: jest.fn(),
       // No docSlot by default — not in a post-rejection cycle.
       findOne: jest.fn().mockReturnValue(queryChain(null)),
     };
     uploadHistoryModel = {
       find: jest.fn().mockReturnValue(findChain([])),
-      updateOne: jest.fn().mockResolvedValue({}),
+      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1, matchedCount: 1 }),
     };
     ocrApi = { getJobStatus: jest.fn(), getJobResult: jest.fn() };
 
@@ -80,14 +80,14 @@ describe('AnnualAccountStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-1' },
+      { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({ processingStatus: 'PASSED', 'ocrInfo.status': 'COMPLETED' }),
       }),
     );
     // The flat per-section schema — the audited anchor itself for 'auditedData'.
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      { _id: new Types.ObjectId(doc.annualAccountId), 'documents.docId': 'doc-1' },
+      { _id: new Types.ObjectId(doc.annualAccountId), documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } },
       expect.objectContaining({
         $set: expect.objectContaining({ 'documents.$.processingStatus': 'PASSED' }),
       }),
@@ -112,7 +112,7 @@ describe('AnnualAccountStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      { _id: siblingId, 'documents.docId': 'doc-1' },
+      { _id: siblingId, documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } },
       expect.objectContaining({
         $set: expect.objectContaining({
           'documents.$.processingStatus': 'FAILED',
@@ -120,6 +120,27 @@ describe('AnnualAccountStatusSyncService', () => {
         }),
       }),
     );
+  });
+
+  it('skips the slot write when the processor already settled the upload', async () => {
+    const doc = makeDoc();
+    uploadHistoryModel.find.mockReturnValue(findChain([doc]));
+    uploadHistoryModel.updateOne.mockResolvedValue({ modifiedCount: 0, matchedCount: 0 });
+    annualAccountModel.findOne.mockReturnValue(
+      queryChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 1 }] }),
+    );
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'completed' });
+    ocrApi.getJobResult.mockResolvedValue({
+      job_id: 'ocr-job-1',
+      status: 'completed',
+      result: { basic_validation: { validation_status: 'FAIL' } },
+    });
+
+    await service.syncPendingJobs();
+
+    // No second strike and no slot overwrite.
+    expect(annualAccountModel.findOne).not.toHaveBeenCalled();
+    expect(annualAccountModel.updateOne).not.toHaveBeenCalled();
   });
 
   it('counts a late FAIL as a post-rejection attempt, same as the processor', async () => {
@@ -156,7 +177,7 @@ describe('AnnualAccountStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-2' },
+      { uploadId: 'upload-2', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({ processingStatus: 'FAILED', 'ocrInfo.validationStatus': 'FAIL' }),
       }),
@@ -172,7 +193,7 @@ describe('AnnualAccountStatusSyncService', () => {
 
     expect(ocrApi.getJobResult).not.toHaveBeenCalled();
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-3' },
+      { uploadId: 'upload-3', processingStatus: 'PROCESSING' },
       expect.objectContaining({ $set: expect.objectContaining({ processingStatus: 'FAILED', error: 'engine error' }) }),
     );
   });
@@ -199,7 +220,7 @@ describe('AnnualAccountStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-5' },
+      { uploadId: 'upload-5', processingStatus: 'PROCESSING' },
       expect.objectContaining({
         $set: expect.objectContaining({ processingStatus: 'FAILED', error: 'OCR job not found on processing server (404)' }),
       }),
@@ -246,11 +267,11 @@ describe('AnnualAccountStatusSyncService', () => {
     await service.syncPendingJobs();
 
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
-      { uploadId: 'upload-a' },
+      { uploadId: 'upload-a', processingStatus: 'PROCESSING' },
       expect.objectContaining({ $set: expect.objectContaining({ processingStatus: 'PASSED' }) }),
     );
     expect(uploadHistoryModel.updateOne).not.toHaveBeenCalledWith(
-      { uploadId: 'upload-b' },
+      { uploadId: 'upload-b', processingStatus: 'PROCESSING' },
       expect.objectContaining({ $set: expect.objectContaining({ processingStatus: expect.anything() }) }),
     );
   });

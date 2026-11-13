@@ -12,6 +12,7 @@ import { LineItemsLegend, LineItemsLegendDocument } from './entities/line-items-
 import {
   ACCOUNT_HEAD_VALUES,
   COMPARISON_OPERATORS,
+  COMPUTED_LEGEND_CODES,
   AccountHead,
   DEFAULT_TEMPLATE_VERSION,
   isComparisonOperator,
@@ -63,42 +64,57 @@ export class LineItemsLegendService {
 
   /**
    * Fetches active legends for validation (both normal and computed).
-   * Results are cached by templateVersion. Cache misses fall back to MongoDB.
+   * Cached per database and templateVersion, with no expiry. A list missing any computed
+   * legend is never trusted or cached, so a stale or incomplete entry heals on the next call.
    * @param templateVersion Template version to validate against.
    * @returns Active legend records for validation.
    */
   async getActiveLegendsForValidation(templateVersion: string): Promise<LineItemLegendForValidation[]> {
-    const key = `${VALIDATION_CACHE_PREFIX}:${templateVersion}`;
+    const key = this.validationCacheKey(templateVersion);
 
     // Attempt cache read; fall through to MongoDB on any failure.
     try {
       const cached = await this.redisService.get(key);
       if (cached !== null) {
-        return JSON.parse(cached) as LineItemLegendForValidation[];
+        const legends = JSON.parse(cached) as LineItemLegendForValidation[];
+        if (this.hasAllComputedLegends(legends)) return legends;
+        this.logger.warn(`Cached legends for ${key} lack computed legends; reloading from MongoDB`);
       }
     } catch (err: unknown) {
       this.logger.warn(`Cache read failed for ${key}: ${String(err)}`);
     }
 
-    // Cache miss — fetch from MongoDB.
     const legends = await this.legendModel
       .find({ templateVersion, isActive: true }, '-_id nmamCode name accountHead level parentCode rules isComputed')
       .lean<LineItemLegendForValidation[]>();
 
-    // Populate cache; a write failure must not affect the caller.
-    try {
-      await this.redisService.set(key, legends);
-    } catch (err: unknown) {
-      this.logger.warn(`Cache write failed for ${key}: ${String(err)}`);
+    // Cache only a complete list; a write failure must not affect the caller.
+    if (this.hasAllComputedLegends(legends)) {
+      try {
+        await this.redisService.set(key, legends);
+      } catch (err: unknown) {
+        this.logger.warn(`Cache write failed for ${key}: ${String(err)}`);
+      }
     }
 
     return legends;
   }
 
+  /** Database name in the key so one Redis never serves another database's legends. */
+  private validationCacheKey(templateVersion: string): string {
+    return `${VALIDATION_CACHE_PREFIX}:${this.legendModel.db.name}:${templateVersion}`;
+  }
+
+  /** True when every computed legend code is present as a computed legend. */
+  private hasAllComputedLegends(legends: LineItemLegendForValidation[]): boolean {
+    const computedCodes = new Set(legends.filter((l) => l.isComputed === true).map((l) => l.nmamCode));
+    return COMPUTED_LEGEND_CODES.every((code) => computedCodes.has(code));
+  }
+
   /** Removes the validation cache entry for one template version. Logs and continues on failure. */
   private async invalidateValidationCache(templateVersion: string): Promise<void> {
     try {
-      await this.redisService.del(`${VALIDATION_CACHE_PREFIX}:${templateVersion}`);
+      await this.redisService.del(this.validationCacheKey(templateVersion));
     } catch (err: unknown) {
       this.logger.warn(`Cache invalidation failed for templateVersion ${templateVersion}: ${String(err)}`);
     }
