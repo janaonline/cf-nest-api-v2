@@ -155,7 +155,10 @@ export class DigitizationQueueService {
     // job.requestId = uuidv4(); // generate a unique request ID for tracking
     job.requestId = `req-${new Date().toISOString().split('T')[0].replace(/-/g, '')}-${uuidv4().substring(0, 6)}`;
 
-    job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(await this.s3Service.getPdfBufferFromS3(job.pdfUrl));
+    // One download gives both the page count and the file size, stored on the file like the ULB PDF's `fileSizeBytes`
+    const pdfBuffer = await this.s3Service.getPdfBufferFromS3(job.pdfUrl);
+    job.noOfPages = await this.s3Service.getPdfPageCountFromBuffer(pdfBuffer);
+    const fileSizeBytes = pdfBuffer.length;
     // if (job.annualAccountsId) {
     //   await this.afsDigitizationService.updatePdfMetadataForAnnualAccount(job.annualAccountsId);
     // }
@@ -192,6 +195,7 @@ export class DigitizationQueueService {
       data: [],
       queue,
       noOfPages: job.noOfPages || 0,
+      fileSizeBytes,
     };
 
     const update = {

@@ -103,6 +103,10 @@ export class AfsExcelFileItem {
   @Prop({ type: Number })
   noOfPages: number;
 
+  /** Size of the source PDF in bytes (same meaning as `pdf.fileSizeBytes` on the annual account's PDF) */
+  @Prop({ type: Number })
+  fileSizeBytes?: number;
+
   @Prop({ type: String })
   excelUrl: string;
 

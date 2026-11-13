@@ -70,6 +70,7 @@ type V3Record = V3View | undefined;
 interface AfsPdf {
   pdfUrl: string;
   noOfPages?: number;
+  fileSizeBytes?: number;
 }
 
 /** Only these ulbFile fields are read for the list: small, and no data[]. */
@@ -941,7 +942,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1 },
+        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1, 'afsFile.fileSizeBytes': 1 },
       )
       .lean()
       .exec();
@@ -951,7 +952,11 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const afsRecords = new Map<string, V3Record>();
     for (const r of existing) {
       if (!r.afsFile?.pdfUrl) continue;
-      afsPdfs.set(r.ulb.toString(), { pdfUrl: r.afsFile.pdfUrl, noOfPages: r.afsFile.noOfPages });
+      afsPdfs.set(r.ulb.toString(), {
+        pdfUrl: r.afsFile.pdfUrl,
+        noOfPages: r.afsFile.noOfPages,
+        fileSizeBytes: r.afsFile.fileSizeBytes,
+      });
       afsRecords.set(r.ulb.toString(), this.toView(r.afsFile));
     }
     await this.followOriginals(rows, records, yearId, auditType);
@@ -1149,6 +1154,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       afsPdfUrl: afsPdf?.pdfUrl ?? null,
       afsPdfUrlSigned: afsPdf ? this.fileTokenService.signFileUrl(afsPdf.pdfUrl) : null,
       afsPdfPageCount: afsPdf?.noOfPages || null,
+      afsPdfSizeBytes: afsPdf?.fileSizeBytes ?? null,
       // Digitization of the uploaded AFS PDF (same shape as `digitization`); absent until a PDF is uploaded
       afsDigitization: afsPdf
         ? afsRecord
