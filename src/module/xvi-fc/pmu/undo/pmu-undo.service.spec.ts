@@ -7,10 +7,10 @@ import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/stat
 import type { PmuUndoDto } from './pmu-undo.dto';
 import { PmuUndoService } from './pmu-undo.service';
 
-/** `Model.findOne(...).select().lean().exec()` chain. */
+/** `Model.findOne(...).select().lean().exec()` chain (`.session()` too, for the transactional write). */
 function q<T>(result: T) {
   const chain: Record<string, unknown> = {};
-  for (const m of ['select', 'lean']) chain[m] = jest.fn().mockReturnValue(chain);
+  for (const m of ['select', 'lean', 'session']) chain[m] = jest.fn().mockReturnValue(chain);
   chain['exec'] = jest.fn().mockResolvedValue(result);
   return chain;
 }
@@ -22,12 +22,13 @@ const pmuUser = { _id: new Types.ObjectId().toString(), scope: Scope.PMU } as un
 const stateUser = { _id: new Types.ObjectId().toString(), scope: Scope.STATE } as unknown as AuthUser;
 
 describe('PmuUndoService', () => {
-  let sfcModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
+  let session: { startTransaction: jest.Mock; commitTransaction: jest.Mock; abortTransaction: jest.Mock; endSession: jest.Mock };
+  let sfcModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; db: { startSession: jest.Mock } };
   let sfcHistory: { create: jest.Mock };
-  let gtcModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock };
+  let gtcModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; db: { startSession: jest.Mock } };
   let gtcHistory: { create: jest.Mock };
   let rowForms: { undoElectedBody: jest.Mock; undoFcUnspent: jest.Mock };
-  let eligibility: { assertNoClaimLetterLocks: jest.Mock };
+  let eligibility: { touchClaimUndoGuard: jest.Mock; assertNoClaimLetterLocks: jest.Mock; assertPmuDecision: jest.Mock };
   let service: PmuUndoService;
 
   const formAt = (status: number, extra: Record<string, unknown> = {}) =>
@@ -37,12 +38,23 @@ describe('PmuUndoService', () => {
     service.undo({ stateId: stateOid.toString(), yearId: yearOid.toString(), ...dto } as PmuUndoDto, user, '1.1.1.1', 'jest');
 
   beforeEach(() => {
-    sfcModel = { findOne: formAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })) };
+    session = {
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      abortTransaction: jest.fn().mockResolvedValue(undefined),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+    const db = { startSession: jest.fn().mockResolvedValue(session) };
+    sfcModel = { findOne: formAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })), db };
     sfcHistory = { create: jest.fn().mockResolvedValue([]) };
-    gtcModel = { findOne: formAt(FORM_STATUS.RETURNED_BY_PMU, { installment: 1 }), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })) };
+    gtcModel = { findOne: formAt(FORM_STATUS.RETURNED_BY_PMU, { installment: 1 }), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })), db };
     gtcHistory = { create: jest.fn().mockResolvedValue([]) };
     rowForms = { undoElectedBody: jest.fn().mockResolvedValue('eulb'), undoFcUnspent: jest.fn().mockResolvedValue('fc') };
-    eligibility = { assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined) };
+    eligibility = {
+      touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined),
+      assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined),
+      assertPmuDecision: jest.fn().mockResolvedValue(undefined),
+    };
 
     service = new PmuUndoService(
       sfcModel as never,
@@ -73,6 +85,11 @@ describe('PmuUndoService', () => {
     it.each(['GTC', 'DEVOLUTION_FORMULA'] as const)('rejects %s without an installment', async (type) => {
       await expect(run({ type })).rejects.toThrow(BadRequestException);
     });
+
+    it('treats a null installment as missing, not as a lookup', async () => {
+      await expect(run({ type: 'GTC', installment: null as never })).rejects.toThrow(BadRequestException);
+      expect(gtcModel.findOne).not.toHaveBeenCalled();
+    });
   });
 
   describe('whole-form undo (SFC Status)', () => {
@@ -90,10 +107,38 @@ describe('PmuUndoService', () => {
       },
     );
 
-    it('refuses once a claim letter exists, before touching the form', async () => {
+    it('refuses once a claim letter exists, before touching the form, and rolls back', async () => {
       eligibility.assertNoClaimLetterLocks.mockRejectedValueOnce(new ConflictException('claim started'));
       await expect(run({ type: 'SFC_STATUS' })).rejects.toThrow(ConflictException);
       expect(sfcModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+    });
+
+    it('refuses a status the State reached before the PMU stage existed (no PMU decision in history)', async () => {
+      eligibility.assertPmuDecision.mockRejectedValueOnce(new ForbiddenException('not decided by PMU'));
+      await expect(run({ type: 'SFC_STATUS' })).rejects.toThrow(ForbiddenException);
+      expect(sfcModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('writes the guard, checks, status and both history entries in one transaction', async () => {
+      await run({ type: 'SFC_STATUS' });
+
+      expect(eligibility.touchClaimUndoGuard).toHaveBeenCalledWith(stateOid, yearOid, session);
+      expect(eligibility.assertNoClaimLetterLocks).toHaveBeenCalledWith(stateOid, yearOid, session);
+      expect(eligibility.assertPmuDecision).toHaveBeenCalledWith(
+        { type: 'SFC_STATUS', id: formOid },
+        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        session,
+      );
+      expect(sfcHistory.create).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ session }));
+      expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('rolls the status back when the history insert fails', async () => {
+      sfcHistory.create.mockRejectedValueOnce(new Error('insert failed'));
+      await expect(run({ type: 'SFC_STATUS' })).rejects.toThrow('insert failed');
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
     });
 
     it.each([FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.RETURNED_BY_PMU])(

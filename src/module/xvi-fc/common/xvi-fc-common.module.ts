@@ -15,6 +15,21 @@ import { StateFormPmuReviewHelper } from './services/state-form-pmu-review.helpe
 import { PmuRowReviewHelper } from './services/pmu-row-review.helper';
 import { PmuUndoEligibilityService } from './services/pmu-undo-eligibility.service';
 import { ClaimLetterUlbLock, ClaimLetterUlbLockSchema } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
+import { ClaimUndoGuard, ClaimUndoGuardSchema } from 'src/schemas/xvi-fc/state/claim-undo-guard.schema';
+import {
+  DevolutionFormulaFormHistory,
+  DevolutionFormulaFormHistorySchema,
+} from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
+import {
+  ElectedUrbanLocalBodiesFormHistory,
+  ElectedUrbanLocalBodiesFormHistorySchema,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form-history.schema';
+import {
+  XviFcUnspentStateFormHistory,
+  XviFcUnspentStateFormHistorySchema,
+} from 'src/schemas/xvi-fc/state/fc-unspent-state-form-history.schema';
+import { XviFcGtcHistory, XviFcGtcHistorySchema } from 'src/schemas/xvi-fc/state/gtc-form-history.schema';
+import { XviFcSfcStatusHistory, XviFcSfcStatusHistorySchema } from 'src/schemas/xvi-fc/state/sfc-status-history.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility.module';
@@ -32,6 +47,14 @@ import {
       { name: Year.name, schema: YearSchema },
       { name: XviFcEligibilityExemption.name, schema: XviFcEligibilityExemptionSchema },
       { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
+      // PmuUndoEligibilityService: the claim/undo guard, and each State form's history to tell a PMU
+      // decision from a status set before the PMU stage existed.
+      { name: ClaimUndoGuard.name, schema: ClaimUndoGuardSchema },
+      { name: XviFcSfcStatusHistory.name, schema: XviFcSfcStatusHistorySchema },
+      { name: XviFcGtcHistory.name, schema: XviFcGtcHistorySchema },
+      { name: DevolutionFormulaFormHistory.name, schema: DevolutionFormulaFormHistorySchema },
+      { name: ElectedUrbanLocalBodiesFormHistory.name, schema: ElectedUrbanLocalBodiesFormHistorySchema },
+      { name: XviFcUnspentStateFormHistory.name, schema: XviFcUnspentStateFormHistorySchema },
     ]),
     UlbEligibilityModule,
     FormJsonConfigModule,

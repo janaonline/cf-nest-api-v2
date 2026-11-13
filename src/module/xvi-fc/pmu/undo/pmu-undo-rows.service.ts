@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -59,6 +59,7 @@ import {
 } from '../fc-unspent-declaration/services/fc-unspent-pmu-row-review-domain.service';
 import type { FcUnspentPmuFormLean, FcUnspentPmuRowLean } from '../fc-unspent-declaration/types/fc-unspent-pmu-review.types';
 import type { PmuUndoResult } from './pmu-undo.service';
+import { runInTransaction } from './run-in-transaction';
 
 interface UndoContext {
   user: AuthUser;
@@ -105,7 +106,6 @@ export class PmuUndoRowFormsService {
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
 
     assertCanPmuUndoForm(form.currentFormStatus);
-    await this.eligibility.assertNoClaimLetterLocks(form.state, form.year);
 
     const activeRows = await this.rowHelper.getActiveRows<EulbRowDocument, EulbPmuRowLean>({
       rowModel: this.eulbRowModel,
@@ -118,7 +118,11 @@ export class PmuUndoRowFormsService {
     const userOid = new Types.ObjectId(ctx.user._id);
     const fromStatus = form.currentFormStatus;
 
-    return this.inTransaction<EulbFormDocument, XviFcApiResponse<PmuUndoResult>>(this.eulbFormModel, async (session) => {
+    return runInTransaction<EulbFormDocument, XviFcApiResponse<PmuUndoResult>>(this.eulbFormModel, async (session) => {
+      await this.eligibility.touchClaimUndoGuard(form.state, form.year, session);
+      await this.eligibility.assertNoClaimLetterLocks(form.state, form.year, session);
+      await this.eligibility.assertPmuDecision({ type: 'ELECTED_BODY', id: form._id }, fromStatus, session);
+
       const moved = await this.rowHelper.undoRows<EulbRowDocument, EulbRowHistoryDocument, EulbPmuRowLean>({
         rowModel: this.eulbRowModel,
         rowHistoryModel: this.eulbRowHistoryModel,
@@ -140,6 +144,9 @@ export class PmuUndoRowFormsService {
         setFields: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid, pmuRemarks: null },
         session,
         expectedStatus: fromStatus,
+        // The rows reopened above came from this dataset version; a State upload replacing it since
+        // would leave the new rows un-reopened, so the whole undo aborts (409) instead.
+        expectedFields: { activeDatasetVersion: form.activeDatasetVersion },
         notFoundMessage: 'Elected Urban Local Bodies form not found.',
       });
       await this.formHelper.writeUndoHistory<EulbFormHistoryDocument>({
@@ -184,7 +191,6 @@ export class PmuUndoRowFormsService {
     if (!form) throw new NotFoundException('FC Unspent Declaration form not found for this state and year.');
 
     assertCanPmuUndoForm(form.currentFormStatus);
-    await this.eligibility.assertNoClaimLetterLocks(form.state, form.year);
 
     let toReopen: FcUnspentPmuRowLean[] = [];
     if (form.isFcUnspent === true) {
@@ -210,7 +216,11 @@ export class PmuUndoRowFormsService {
     const fromStatus = form.currentFormStatus;
     const newAuditRevision = form.auditRevision + 1;
 
-    return this.inTransaction<XviFcUnspentStateFormDocument, XviFcApiResponse<PmuUndoResult>>(this.fcFormModel, async (session) => {
+    return runInTransaction<XviFcUnspentStateFormDocument, XviFcApiResponse<PmuUndoResult>>(this.fcFormModel, async (session) => {
+      await this.eligibility.touchClaimUndoGuard(form.state, form.year, session);
+      await this.eligibility.assertNoClaimLetterLocks(form.state, form.year, session);
+      await this.eligibility.assertPmuDecision({ type: 'FC_UNSPENT', id: form._id }, fromStatus, session);
+
       const moved = await this.rowHelper.undoRows<
         XviFcUnspentStateFormRowDocument,
         XviFcUnspentStateFormRowHistoryDocument,
@@ -294,24 +304,5 @@ export class PmuUndoRowFormsService {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
-  }
-
-  /** Runs `work` in a Mongo transaction on `model`'s connection, always ending the session. */
-  private async inTransaction<T, R>(
-    model: Model<T>,
-    work: (session: ClientSession) => Promise<R>,
-  ): Promise<R> {
-    const session = await model.db.startSession();
-    try {
-      session.startTransaction();
-      const result = await work(session);
-      await session.commitTransaction();
-      return result;
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
   }
 }

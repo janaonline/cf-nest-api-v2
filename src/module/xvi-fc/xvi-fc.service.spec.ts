@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { XviFcService } from './xvi-fc.service';
@@ -23,6 +23,7 @@ import { UlbEligibilityService } from '../ulb-eligibility/ulb-eligibility.servic
 import { SideMenuService } from './side-menu/side-menu.service';
 import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 import { FormJsonConfigService } from '../../master/form-json-config/form-json-config.service';
+import { UlbStateConditionsService } from './ulb-state-conditions.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 
@@ -46,6 +47,7 @@ describe('XviFcService', () => {
   let mockDurModel: { findOne: jest.Mock };
   let mockCacheService: { deleteByPattern: jest.Mock };
   let mockFormJsonService: { clearCache: jest.Mock };
+  let mockUlbStateConditions: { resolve: jest.Mock };
   let mockUlbEligibilityService: { getIneligibleUlbTypeIds: jest.Mock };
   let mockSideMenuService: { getSideMenu: jest.Mock; clearCache: jest.Mock };
   let mockExemptionResolverService: { resolveBulk: jest.Mock };
@@ -75,6 +77,7 @@ describe('XviFcService', () => {
     mockDurModel = { findOne: jest.fn().mockReturnValue(q(null)) };
     mockCacheService = { deleteByPattern: jest.fn().mockResolvedValue(0) };
     mockFormJsonService = { clearCache: jest.fn().mockResolvedValue(0) };
+    mockUlbStateConditions = { resolve: jest.fn().mockResolvedValue({ sfcStatus: { visible: false } }) };
     mockUlbEligibilityService = { getIneligibleUlbTypeIds: jest.fn().mockResolvedValue([]) };
     mockSideMenuService = { getSideMenu: jest.fn(), clearCache: jest.fn().mockResolvedValue(0) };
     mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
@@ -102,6 +105,7 @@ describe('XviFcService', () => {
         { provide: SideMenuService, useValue: mockSideMenuService },
         { provide: ExemptionResolverService, useValue: mockExemptionResolverService },
         { provide: FormJsonConfigService, useValue: mockFormJsonConfigService },
+        { provide: UlbStateConditionsService, useValue: mockUlbStateConditions },
       ],
     }).compile();
 
@@ -460,8 +464,19 @@ describe('XviFcService', () => {
     const ulbId = new Types.ObjectId().toString();
     const designYearId = new Types.ObjectId().toString();
 
+    it("refuses a State user reading another State's ULB, and allows its own", async () => {
+      const ownState = new Types.ObjectId();
+      const stateUser: AuthUser = { ...mockUser, role: 'STATE', scope: Scope.STATE, state: ownState };
+
+      mockUlbModel.findById.mockReturnValue(q({ state: new Types.ObjectId() }));
+      await expect(service.getFormStatus(ulbId, designYearId, stateUser)).rejects.toThrow(ForbiddenException);
+
+      mockUlbModel.findById.mockReturnValue(q({ state: ownState }));
+      await expect(service.getFormStatus(ulbId, designYearId, stateUser)).resolves.toBeDefined();
+    });
+
     it('returns xviFcBankAccount as NOT_STARTED using form-status field names when no bank-account record exists', async () => {
-      const result = await service.getFormStatus(ulbId, designYearId);
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(result.xviFcBankAccount).toEqual({
         form_status: 'NOT_STARTED',
@@ -472,7 +487,7 @@ describe('XviFcService', () => {
     it('returns xviFcBankAccount with stored status using form-status field names when record exists', async () => {
       mockBankAccountModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
 
-      const result = await service.getFormStatus(ulbId, designYearId);
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(result.xviFcBankAccount).toEqual({
         form_status: 'UNDER_REVIEW_BY_STATE',
@@ -500,7 +515,7 @@ describe('XviFcService', () => {
       );
       mockDisclosureModel.findOne.mockReturnValue(q({ formStatus: 'SUBMITTED' }));
 
-      const result = await service.getFormStatus(ulbId, designYearId);
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(result).toMatchObject({
         annualAccountId: annualAccountId.toString(),
@@ -521,7 +536,7 @@ describe('XviFcService', () => {
     });
 
     it('returns detailedUtilisationReport as NOT_STARTED using form-status field names when no DUR record exists', async () => {
-      const result = await service.getFormStatus(ulbId, designYearId);
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(result.detailedUtilisationReport).toEqual({
         form_status: 'NOT_STARTED',
@@ -532,7 +547,7 @@ describe('XviFcService', () => {
     it('returns detailedUtilisationReport with stored status when a DUR record exists', async () => {
       mockDurModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
 
-      const result = await service.getFormStatus(ulbId, designYearId);
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(result.detailedUtilisationReport).toEqual({
         form_status: 'UNDER_REVIEW_BY_STATE',
@@ -544,7 +559,7 @@ describe('XviFcService', () => {
       const chain = q(null);
       mockBankAccountModel.findOne.mockReturnValue(chain);
 
-      await service.getFormStatus(ulbId, designYearId);
+      await service.getFormStatus(ulbId, designYearId, mockUser);
 
       expect(mockBankAccountModel.findOne).toHaveBeenCalledWith({
         ulb: new Types.ObjectId(ulbId),
@@ -560,7 +575,7 @@ describe('XviFcService', () => {
           filter.designYear ? q(null) : q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
         );
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.xviFcBankAccount).toEqual({
           form_status: 'UNDER_REVIEW_BY_STATE',
@@ -573,7 +588,7 @@ describe('XviFcService', () => {
         mockFormJsonConfigService.findByFormId.mockResolvedValue({ formId: 33, submissionScope: 'ONCE_EVER' });
         mockBankAccountModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }));
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.xviFcBankAccount.form_status_id).toBe(FORM_STATUS.APPROVED_BY_STATE);
         expect(mockBankAccountModel.findOne).toHaveBeenCalledTimes(1);
@@ -583,7 +598,7 @@ describe('XviFcService', () => {
         // mockFormJsonConfigService default resolves null (PER_YEAR/unconfigured) - see beforeEach.
         mockBankAccountModel.findOne.mockReturnValue(q(null));
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.xviFcBankAccount).toEqual({ form_status: 'NOT_STARTED', form_status_id: FORM_STATUS.NOT_STARTED });
         expect(mockBankAccountModel.findOne).toHaveBeenCalledTimes(1);
@@ -600,7 +615,7 @@ describe('XviFcService', () => {
           new Map([[String(ulb._id), { exempted: true, source: 'AUTOMATIC' }]]),
         );
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.serviceLevelBenchmarks).toEqual({
           form_status: 'EXEMPTED_ACKNOWLEDGED',
@@ -618,7 +633,7 @@ describe('XviFcService', () => {
           new Map([[String(ulb._id), { exempted: false, source: null }]]),
         );
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.serviceLevelBenchmarks).toEqual({
           form_status: 'NOT_STARTED',
@@ -629,7 +644,7 @@ describe('XviFcService', () => {
       it('reports NOT_STARTED without calling the exemption resolver when the ULB record cannot be found', async () => {
         mockUlbModel.findById.mockReturnValue(q(null));
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.serviceLevelBenchmarks).toEqual({
           form_status: 'NOT_STARTED',
@@ -641,13 +656,14 @@ describe('XviFcService', () => {
       it('uses the real SLB document status as-is when one already exists, even for an exempt ULB — golden rule', async () => {
         mockSlbFormModel.findOne.mockReturnValue(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.serviceLevelBenchmarks).toEqual({
           form_status: 'UNDER_REVIEW_BY_STATE',
           form_status_id: FORM_STATUS.UNDER_REVIEW_BY_STATE,
         });
-        expect(mockUlbModel.findById).not.toHaveBeenCalled();
+        // Only the State lookup for stateConditions — no second ULB read for the exemption check.
+        expect(mockUlbModel.findById).toHaveBeenCalledTimes(1);
         expect(mockExemptionResolverService.resolveBulk).not.toHaveBeenCalled();
       });
 
@@ -663,7 +679,7 @@ describe('XviFcService', () => {
           new Map([[String(ulb._id), { exempted: false, source: null }]]), // admin has since undone the exemption
         );
 
-        const result = await service.getFormStatus(ulbId, designYearId);
+        const result = await service.getFormStatus(ulbId, designYearId, mockUser);
 
         expect(result.serviceLevelBenchmarks).toEqual({
           form_status: 'NOT_STARTED',
@@ -811,6 +827,40 @@ describe('XviFcService', () => {
     it('should always return a Thursday as the next support hour', () => {
       const { nextSupportHour } = service.getSupportHours();
       expect(nextSupportHour.date).toMatch(/Thursday/);
+    });
+  });
+
+  describe('getFormStatus — State-filed conditions and ULB scoping', () => {
+    const ulbId = new Types.ObjectId().toString();
+    const designYearId = new Types.ObjectId().toString();
+    const stateId = new Types.ObjectId();
+    const ulbUser = (ulb: string): AuthUser => ({ ...mockUser, role: 'ULB', scope: Scope.ULB, ulb });
+
+    it("returns the State's conditions for the ULB's own State", async () => {
+      mockUlbModel.findById.mockReturnValue(q({ _id: new Types.ObjectId(ulbId), state: stateId }));
+
+      const result = await service.getFormStatus(ulbId, designYearId, ulbUser(ulbId));
+
+      expect(mockUlbStateConditions.resolve).toHaveBeenCalledWith(
+        stateId,
+        new Types.ObjectId(ulbId),
+        new Types.ObjectId(designYearId),
+      );
+      expect(result.stateConditions).toEqual({ sfcStatus: { visible: false } });
+    });
+
+    it('returns stateConditions null, without a lookup, when the ULB has no State', async () => {
+      const result = await service.getFormStatus(ulbId, designYearId, mockUser);
+
+      expect(result.stateConditions).toBeNull();
+      expect(mockUlbStateConditions.resolve).not.toHaveBeenCalled();
+    });
+
+    it("refuses a ULB user reading another ULB's status before any lookup", async () => {
+      await expect(
+        service.getFormStatus(ulbId, designYearId, ulbUser(new Types.ObjectId().toString())),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockAnnualAccountModel.find).not.toHaveBeenCalled();
     });
   });
 });

@@ -40,7 +40,7 @@ export class FileService {
    * and opens the S3 read stream. Throws an `HttpException` on any failure
    * so the controller stays free of business logic.
    */
-  async prepareDownload(signature: string): Promise<PreparedDownload> {
+  async prepareDownload(signature: string, disposition?: string): Promise<PreparedDownload> {
     if (!signature) {
       throw new HttpException('signature is required', HttpStatus.BAD_REQUEST);
     }
@@ -54,26 +54,40 @@ export class FileService {
       throw new HttpException(tokenErrorType ?? 'invalid_token', status);
     }
 
-    const key = this.s3Service.getKeyFromS3Url(payload.path);
-    if (!key) {
+    const decodedKey = this.s3Service.getKeyFromS3Url(payload.path);
+    if (!decodedKey) {
       throw new HttpException('Invalid token payload', HttpStatus.BAD_REQUEST);
     }
 
-    const filename = sanitizeFilename(path.posix.basename(key)) || 'download';
+    const filename = sanitizeFilename(path.posix.basename(decodedKey)) || 'download';
     const contentType = getContentType(filename);
-    const contentDisposition = buildContentDisposition(contentType, filename, payload.disposition);
+    // PDFs open in the browser tab by default regardless of the disposition baked into the token
+    // (which defaults to 'attachment'); callers can still force a download with ?disposition=attachment.
+    const requestedDisposition =
+      disposition === 'attachment' || disposition === 'inline'
+        ? disposition
+        : contentType === 'application/pdf'
+          ? 'inline'
+          : payload.disposition;
+    const contentDisposition = buildContentDisposition(contentType, filename, requestedDisposition);
 
-    let stream: Readable;
-    try {
-      stream = await this.s3Service.getObjectStream(key);
-    } catch (err: unknown) {
-      if (isS3NotFoundError(err)) {
-        throw new HttpException('File not found', HttpStatus.NOT_FOUND);
+    // Objects may be stored with a decoded name ("a b.xlsx") or, when uploaded by
+    // another service, with a literal URL-encoded name ("a%20b.xlsx"). Try both.
+    const encodedKey = decodedKey.split('/').map(encodeURIComponent).join('/');
+    const candidates = encodedKey === decodedKey ? [decodedKey] : [decodedKey, encodedKey];
+
+    for (const key of candidates) {
+      try {
+        const stream = await this.s3Service.getObjectStream(key);
+        return { key, stream, headers: { contentType, contentDisposition } };
+      } catch (err: unknown) {
+        if (isS3NotFoundError(err)) continue;
+        this.logger.error(`S3 stream init failed for key "${key}": ${getErrorMessage(err)}`);
+        throw new HttpException('Failed to initiate file download', HttpStatus.INTERNAL_SERVER_ERROR);
       }
-      this.logger.error(`S3 stream init failed for key "${key}": ${getErrorMessage(err)}`);
-      throw new HttpException('Failed to initiate file download', HttpStatus.INTERNAL_SERVER_ERROR);
     }
 
-    return { key, stream, headers: { contentType, contentDisposition } };
+    this.logger.warn(`File not found for keys: ${candidates.join(' | ')}`);
+    throw new HttpException('File not found', HttpStatus.NOT_FOUND);
   }
 }

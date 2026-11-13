@@ -280,12 +280,21 @@ export class FormReturnedNotificationService {
 
       const subject = interpolate(template.subject, variables);
       const html = interpolate(template.body, variables);
+      // One recipient's enqueue failing must not cost the rest their notification.
+      let queued = 0;
       for (const recipient of recipients) {
-        await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
+        try {
+          await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
+          queued += 1;
+        } catch (err) {
+          this.logger.warn(
+            `Failed to queue State return notification for ${String(recipient.email)} (state ${stateId.toString()}, ${formName}): ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
 
       this.logger.log(
-        `State return notification queued for state ${stateId.toString()} (${formName}) → ${recipients.length} recipient(s)`,
+        `State return notification queued for state ${stateId.toString()} (${formName}) → ${queued}/${recipients.length} recipient(s)`,
       );
     } catch (err) {
       this.logger.warn(

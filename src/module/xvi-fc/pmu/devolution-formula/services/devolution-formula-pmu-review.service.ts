@@ -152,7 +152,7 @@ export class DevolutionFormulaPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
-    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'DEVOLUTION_FORMULA', id: doc._id });
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const mainFormFields = getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS');

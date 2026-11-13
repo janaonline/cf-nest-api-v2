@@ -127,7 +127,7 @@ export class GtcPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
-    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'GTC', id: doc._id });
 
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID);
     if (!formJson.data?.length) throw new NotFoundException('GTC form configuration not found');

@@ -5,7 +5,10 @@ import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/c
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
-import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+import {
+  PmuUndoEligibilityService,
+  type PmuUndoFormType,
+} from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { assertCanPmuUndoForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import { assertPmuReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
@@ -26,6 +29,7 @@ import {
 } from 'src/schemas/xvi-fc/state/sfc-status-history.schema';
 import { PmuUndoRowFormsService } from './pmu-undo-rows.service';
 import type { PmuUndoDto } from './pmu-undo.dto';
+import { runInTransaction } from './run-in-transaction';
 
 export interface PmuUndoResult {
   currentFormStatus: number;
@@ -76,6 +80,7 @@ export class PmuUndoService {
       case 'SFC_STATUS':
         return this.undoFormLevel<XviFcSfcStatusDocument, XviFcSfcStatusHistoryDocument>(
           {
+            type: 'SFC_STATUS',
             label: 'SFC Status',
             formModel: this.sfcModel,
             historyModel: this.sfcHistoryModel,
@@ -88,6 +93,7 @@ export class PmuUndoService {
         const installment = this.requireInstallment(dto);
         return this.undoFormLevel<XviFcGtcDocument, XviFcGtcHistoryDocument>(
           {
+            type: 'GTC',
             label: 'GTC',
             formModel: this.gtcModel,
             historyModel: this.gtcHistoryModel,
@@ -101,6 +107,7 @@ export class PmuUndoService {
         const installment = this.requireInstallment(dto);
         return this.undoFormLevel<DevolutionFormulaFormDocument, DevolutionFormulaFormHistoryDocument>(
           {
+            type: 'DEVOLUTION_FORMULA',
             label: 'ULB-wise Allocation',
             formModel: this.dfModel,
             historyModel: this.dfHistoryModel,
@@ -117,11 +124,12 @@ export class PmuUndoService {
     }
   }
 
-  /** The generic whole-form path: load, gate (status + claim letter), conditional write, two history entries.
-   *  Non-transactional, like the form's own approve/reject — the conditional status write is what stops a
-   *  concurrent decision from being overwritten, and the history only follows a write that matched. */
+  /** The generic whole-form path: load, gate on status, then in one transaction: the claim/undo guard, the
+   *  claim-letter and PMU-decision checks, the conditional status write and both history entries — so the
+   *  form is never reopened without its undo record, and a claim letter can't take its locks in between. */
   private async undoFormLevel<TForm, THistory>(
     cfg: {
+      type: PmuUndoFormType;
       label: string;
       formModel: Model<TForm>;
       historyModel: Model<THistory>;
@@ -139,38 +147,45 @@ export class PmuUndoService {
     if (!form) throw new NotFoundException(`${cfg.label} form not found for this state and year.`);
 
     assertCanPmuUndoForm(form.currentFormStatus);
-    await this.eligibility.assertNoClaimLetterLocks(form.state, form.year);
 
     const userOid = new Types.ObjectId(ctx.user._id);
     const fromStatus = form.currentFormStatus;
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
 
-    await this.formHelper.transitionForm<TForm>({
-      formModel: cfg.formModel,
-      formId: form._id,
-      setFields: { currentFormStatus: toStatus, updatedBy: userOid, pmuRemarks: null },
-      expectedStatus: fromStatus,
-      notFoundMessage: `${cfg.label} form not found.`,
-    });
+    await runInTransaction(cfg.formModel, async (session) => {
+      await this.eligibility.touchClaimUndoGuard(form.state, form.year, session);
+      await this.eligibility.assertNoClaimLetterLocks(form.state, form.year, session);
+      await this.eligibility.assertPmuDecision({ type: cfg.type, id: form._id }, fromStatus, session);
 
-    await this.formHelper.writeUndoHistory<THistory>({
-      historyModel: cfg.historyModel,
-      fromStatus,
-      buildDocument: (step) => ({
-        [cfg.historyFormField]: form._id,
-        state: form.state,
-        year: form.year,
-        ...(form.installment !== undefined && { installment: form.installment }),
-        action: FormHistoryAction.PMU_UNDO,
-        fromStatus: step.fromStatus,
-        toStatus: step.toStatus,
-        changedBy: userOid,
-        changedAt: step.changedAt,
-        ip: ctx.ip,
-        userAgent: ctx.userAgent,
-        // The remark being cleared is kept on the first entry so the reason survives in history.
-        remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? null) : null,
-      }),
+      await this.formHelper.transitionForm<TForm>({
+        formModel: cfg.formModel,
+        formId: form._id,
+        setFields: { currentFormStatus: toStatus, updatedBy: userOid, pmuRemarks: null },
+        session,
+        expectedStatus: fromStatus,
+        notFoundMessage: `${cfg.label} form not found.`,
+      });
+
+      await this.formHelper.writeUndoHistory<THistory>({
+        historyModel: cfg.historyModel,
+        fromStatus,
+        session,
+        buildDocument: (step) => ({
+          [cfg.historyFormField]: form._id,
+          state: form.state,
+          year: form.year,
+          ...(form.installment !== undefined && { installment: form.installment }),
+          action: FormHistoryAction.PMU_UNDO,
+          fromStatus: step.fromStatus,
+          toStatus: step.toStatus,
+          changedBy: userOid,
+          changedAt: step.changedAt,
+          ip: ctx.ip,
+          userAgent: ctx.userAgent,
+          // The remark being cleared is kept on the first entry so the reason survives in history.
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? null) : null,
+        }),
+      });
     });
 
     return xviFcSuccess(`${cfg.label} decision undone.`, {
@@ -181,7 +196,7 @@ export class PmuUndoService {
 
   /** GTC and Devolution Formula are installment-scoped — a missing one is a client error, not a default. */
   private requireInstallment(dto: PmuUndoDto): 1 | 2 {
-    if (dto.installment === undefined) {
+    if (dto.installment == null) {
       throwXviFcValidationError({
         installment: [{ field: 'installment', code: 'required', message: `installment is required for ${dto.type}.` }],
       });

@@ -1,5 +1,5 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
-import { IsBoolean, IsEnum, IsOptional } from 'class-validator';
+import { IsBoolean, IsDateString, IsEnum, IsIn, IsOptional } from 'class-validator';
 import { DigitizationV3Statuses } from 'src/schemas/afs/enums';
 import { DigitizationReportQueryDto } from './digitization-report-query.dto';
 
@@ -22,4 +22,24 @@ export class AfsDigitizationV3QueryDto extends DigitizationReportQueryDto {
   @IsOptional()
   @IsBoolean()
   isMismatch?: boolean;
+
+  @ApiPropertyOptional({ description: 'Only files digitized at or after this time (ISO 8601)' })
+  @IsOptional()
+  @IsDateString()
+  digitizedFrom?: string;
+
+  @ApiPropertyOptional({ description: 'Only files digitized at or before this time (ISO 8601)' })
+  @IsOptional()
+  @IsDateString()
+  digitizedTo?: string;
+
+  @ApiPropertyOptional({ description: 'Column to sort by; rows with no value come last', enum: ['digitizedAt', 'pages'] })
+  @IsOptional()
+  @IsIn(['digitizedAt', 'pages'])
+  sortColumn?: 'digitizedAt' | 'pages';
+
+  @ApiPropertyOptional({ description: 'Sort direction (default desc)', enum: ['asc', 'desc'] })
+  @IsOptional()
+  @IsIn(['asc', 'desc'])
+  sortDirection?: 'asc' | 'desc';
 }

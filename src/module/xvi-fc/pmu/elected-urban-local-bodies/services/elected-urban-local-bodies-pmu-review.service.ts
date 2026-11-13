@@ -135,7 +135,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const rowSummary = await this.domainService.getRowSummary(doc._id, doc.activeDatasetVersion ?? 0);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
-    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'ELECTED_BODY', id: doc._id });
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
