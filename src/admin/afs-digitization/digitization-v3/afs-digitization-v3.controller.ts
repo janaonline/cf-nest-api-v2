@@ -75,4 +75,11 @@ export class AfsDigitizationV3Controller {
   enqueueByFilter(@Body() body: AfsDigitizationV3QueryDto) {
     return this.digitizationV3Service.enqueueByFilter(body);
   }
+
+  /** Digitizes the PDFs an admin uploaded for the given rows (`ulbId` required). Skips rows with no upload or already queued / digitized. */
+  @Post('enqueue-afs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  enqueueAfs(@Body() body: AfsDigitizationV3QueryDto) {
+    return this.digitizationV3Service.enqueueAfs(body);
+  }
 }

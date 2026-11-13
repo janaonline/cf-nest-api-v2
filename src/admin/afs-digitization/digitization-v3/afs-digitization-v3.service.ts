@@ -92,6 +92,13 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.createdAt': 1,
 };
 
+/** The same small fields of an AFS upload (`afsFile`), so its digitization can be shown next to the ULB file's */
+const AFS_FILE_PROJECTION = Object.fromEntries(
+  Object.keys(ULB_FILE_PROJECTION)
+    .filter((path) => path.startsWith('ulbFile.'))
+    .map((path) => [path.replace('ulbFile.', 'afsFile.'), 1]),
+);
+
 /** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
 const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
 
@@ -186,7 +193,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const page = query.page > 0 ? query.page : 1;
     const limit = query.limit > 0 ? query.limit : 100;
 
-    const { rows, records, afsPdfs } = await this.loadSelection(query);
+    const { rows, records, afsPdfs, afsRecords } = await this.loadSelection(query);
     const metrics = this.computeMetrics(rows, records);
 
     const matching = rows.filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query));
@@ -209,7 +216,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     }
     const data = matching
       .slice((page - 1) * limit, page * limit)
-      .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString()), afsPdfs.get(row.ulb.toString())));
+      .map((row) => {
+        const key = row.ulb.toString();
+        return this.shapeRow(row, query.docType, records.get(key), afsPdfs.get(key), afsRecords.get(key));
+      });
 
     return { success: true, data, totalCount: matching.length, metrics };
   }
@@ -292,20 +302,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       }
 
       try {
-        const jobId = `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
-        // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
-        const finished = await this.digitizationV3Queue.getJob(jobId);
-        if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
-
-        await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
-          // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
-          jobId,
-          attempts: 2,
-          backoff: { type: 'exponential', delay: 30_000 },
-          // Kept for a while so they can be inspected; age is in seconds
-          removeOnComplete: { age: 2 * 24 * 60 * 60 },
-          removeOnFail: { age: 20 * 24 * 60 * 60 },
-        });
+        await this.addJob(data);
         summary.queued++;
       } catch (error) {
         summary.failedToQueue++;
@@ -321,6 +318,101 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     return { success: true, ...summary };
   }
 
+  /**
+   * Queues the PDFs an admin uploaded (`afsFile`) for the selected rows. Same rules as `enqueueByFilter`, but the file
+   * is the AFS upload and the result is saved on `afsFile`. Rows with no AFS upload, or already queued / digitized, are skipped.
+   * Meant for specific rows (`ulbId`), so the status / consolidated / mismatch filters (which describe the ULB file) are ignored.
+   */
+  async enqueueAfs(query: AfsDigitizationV3QueryDto) {
+    this.assertSupported(query);
+    if (!query.ulbId?.length) throw new BadRequestException('ulbId is required to digitize AFS uploads');
+
+    const { rows, afsPdfs, afsRecords } = await this.loadSelection(query);
+    const matching = rows.slice(0, MAX_ENQUEUE_BATCH);
+
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+    const batchId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-${randomBytes(2).toString('hex')}`;
+    const summary = {
+      batchId,
+      matched: matching.length,
+      queued: 0,
+      skippedNoPdf: 0,
+      skippedDuplicate: 0,
+      skippedAlreadyQueued: 0,
+      skippedAlreadyDigitized: 0,
+      failedToQueue: 0,
+    };
+
+    for (const row of matching) {
+      const key = row.ulb.toString();
+      const afsPdf = afsPdfs.get(key);
+      if (!afsPdf) {
+        summary.skippedNoPdf++;
+        continue;
+      }
+
+      const current = afsRecords.get(key)?.status;
+      if (current === DigitizationV3Statuses.DIGITIZED) {
+        summary.skippedAlreadyDigitized++;
+        continue;
+      }
+      if (current === DigitizationV3Statuses.QUEUED || current === DigitizationV3Statuses.PROCESSING) {
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+
+      const data: AfsDigitizationV3JobData = {
+        source: 'AFS',
+        annualAccountsId: row._id.toString(),
+        ulb: key,
+        year: query.yearId,
+        auditType: query.auditType as string,
+        docType: query.docType,
+        pdfUrl: afsPdf.pdfUrl,
+        ulbName: row.ulbName,
+        batchId,
+      };
+
+      if (!(await this.claim(data))) {
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+      try {
+        await this.addJob(data);
+        summary.queued++;
+      } catch (error) {
+        summary.failedToQueue++;
+        this.logger.error(
+          `Failed to add AFS upload digitization v3 job for ulb ${data.ulb}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        await this.markFailed(data, 'Could not add the job to the queue');
+      }
+    }
+
+    this.logger.log(`AFS digitization v3 enqueue-afs: ${JSON.stringify(summary)}`);
+    return { success: true, ...summary };
+  }
+
+  /** Adds one job to Redis. The job id is per file and source, so a ULB file and its AFS upload can run side by side. */
+  private async addJob(data: AfsDigitizationV3JobData): Promise<void> {
+    const tag = data.source === 'AFS' ? 'afs-' : '';
+    const jobId = `digitize-v3-${tag}${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
+    // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
+    const finished = await this.digitizationV3Queue.getJob(jobId);
+    if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
+
+    await this.digitizationV3Queue.add(`digitize-v3-${tag}${data.ulb}-${data.year}-${data.docType}`, data, {
+      // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
+      jobId,
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 30_000 },
+      // Kept for a while so they can be inspected; age is in seconds
+      removeOnComplete: { age: 2 * 24 * 60 * 60 },
+      removeOnFail: { age: 20 * 24 * 60 * 60 },
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Writes used by the queue service
   // ---------------------------------------------------------------------------
@@ -334,26 +426,32 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     };
   }
 
+  /** The slot of the record a job writes to: the ULB's own PDF, or the one an admin uploaded */
+  private slot(data: Pick<AfsDigitizationV3JobData, 'source'>): 'ulbFile' | 'afsFile' {
+    return data.source === 'AFS' ? 'afsFile' : 'ulbFile';
+  }
+
   /**
-   * Atomically moves the ULB's file to `queued`. Returns false if it is already queued, or already digitized by v3.
+   * Atomically moves the file to `queued`. Returns false if it is already queued, or already digitized by v3.
    * Upserts so ULBs that were never digitized (no afs_xl_files record yet) can be queued too.
    *
-   * Only dotted `ulbFile.*` paths are written, so nothing else in the item is overwritten, and without
-   * defaults no empty `data[]` is created.
+   * Only dotted `ulbFile.*` (or `afsFile.*` for an AFS upload) paths are written, so nothing else in the item is
+   * overwritten, and without defaults no empty `data[]` is created.
    */
   private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
     const key = this.recordKey(data);
+    const f = this.slot(data);
     try {
       const previous = await this.afsExcelFileModel
         .findOneAndUpdate(
           {
             ...key,
             $nor: [
-              { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
+              { [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED },
               // `detectedDocTypes` exists only on items v3 has digitized
               {
-                'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
-                'ulbFile.detectedDocTypes': { $exists: true },
+                [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
+                [`${f}.detectedDocTypes`]: { $exists: true },
               },
             ],
           },
@@ -363,19 +461,19 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
             },
             $set: {
-              'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-              'ulbFile.uploadedBy': 'ULB',
-              'ulbFile.pdfUrl': data.pdfUrl,
-              ...(data.batchId && { 'ulbFile.batchId': data.batchId }),
-              'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
+              [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED,
+              [`${f}.uploadedBy`]: data.source === 'AFS' ? 'AFS' : 'ULB',
+              [`${f}.pdfUrl`]: data.pdfUrl,
+              ...(data.batchId && { [`${f}.batchId`]: data.batchId }),
+              [`${f}.queue`]: { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
             },
             // A re-run starts clean
             $unset: {
-              'ulbFile.digitizationMsg': '',
-              'ulbFile.detectedDocTypes': '',
-              'ulbFile.segments': '',
-              'ulbFile.isConsolidated': '',
-              'ulbFile.isMismatch': '',
+              [`${f}.digitizationMsg`]: '',
+              [`${f}.detectedDocTypes`]: '',
+              [`${f}.segments`]: '',
+              [`${f}.isConsolidated`]: '',
+              [`${f}.isMismatch`]: '',
             },
           },
           // new: false returns the record as it was (null when inserted), so the counters know what it moved from
@@ -383,7 +481,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         )
         .lean()
         .exec();
-      await this.recordTransition(this.statusOf(previous), DigitizationV3Statuses.QUEUED);
+      // The overall counters track ULB files only
+      if (data.source !== 'AFS') await this.recordTransition(this.statusOf(previous), DigitizationV3Statuses.QUEUED);
       return true;
     } catch (error: any) {
       // Unique index {ulb, year, auditType, docType}: the record exists but does not match the filter above.
@@ -393,15 +492,16 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   }
 
   async markProcessing(data: AfsDigitizationV3JobData, bullJobId?: string) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.queue.status': QueueStatus.PROCESSING,
-          'ulbFile.queue.processedOn': new Date(),
-          ...(bullJobId && { 'ulbFile.queue.jobId': bullJobId }),
+          [`${f}.queue.status`]: QueueStatus.PROCESSING,
+          [`${f}.queue.processedOn`]: new Date(),
+          ...(bullJobId && { [`${f}.queue.jobId`]: bullJobId }),
         },
-        $unset: { 'ulbFile.digitizationMsg': '' },
+        $unset: { [`${f}.digitizationMsg`]: '' },
       },
       DigitizationV3Statuses.PROCESSING,
     );
@@ -412,37 +512,39 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * so a running or failed job can still be traced in FastAPI.
    */
   async markSubmitted(data: AfsDigitizationV3JobData, afsDigitizationJobId: string, version?: string) {
+    const f = this.slot(data);
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        'ulbFile.requestId': afsDigitizationJobId,
+        [`${f}.requestId`]: afsDigitizationJobId,
         // Pipeline version FastAPI stamped on the job (e.g. "v3")
-        ...(version && { 'ulbFile.version': version }),
+        ...(version && { [`${f}.version`]: version }),
       },
     });
   }
 
   async markDigitized(data: AfsDigitizationV3JobData, result: DigitizationV3Result) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+          [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
           // FastAPI job id; the full extraction and the Excel stay in FastAPI and are fetched by this id
-          'ulbFile.requestId': result.jobId,
-          'ulbFile.detectedDocTypes': result.detectedDocTypes,
-          'ulbFile.segments': result.segments,
-          'ulbFile.isConsolidated': result.isConsolidated,
-          'ulbFile.isMismatch': result.isMismatch,
-          'ulbFile.queue.status': QueueStatus.COMPLETED,
-          'ulbFile.queue.progress': 100,
-          'ulbFile.queue.finishedOn': new Date(),
-          ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
-          ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
-          ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
+          [`${f}.requestId`]: result.jobId,
+          [`${f}.detectedDocTypes`]: result.detectedDocTypes,
+          [`${f}.segments`]: result.segments,
+          [`${f}.isConsolidated`]: result.isConsolidated,
+          [`${f}.isMismatch`]: result.isMismatch,
+          [`${f}.queue.status`]: QueueStatus.COMPLETED,
+          [`${f}.queue.progress`]: 100,
+          [`${f}.queue.finishedOn`]: new Date(),
+          ...(result.excelKey && { [`${f}.excelUrl`]: result.excelKey }),
+          ...(result.noOfPages != null && { [`${f}.noOfPages`]: result.noOfPages }),
+          ...(result.processingMs != null && { [`${f}.totalProcessingTimeMs`]: result.processingMs }),
           // Non-fatal problem (e.g. Excel copy failed): shown on the row, status stays digitized
-          ...(result.warning && { 'ulbFile.digitizationMsg': result.warning }),
+          ...(result.warning && { [`${f}.digitizationMsg`]: result.warning }),
         },
-        ...(!result.warning && { $unset: { 'ulbFile.digitizationMsg': '' } }),
+        ...(!result.warning && { $unset: { [`${f}.digitizationMsg`]: '' } }),
       },
       DigitizationV3Statuses.DIGITIZED,
     );
@@ -450,15 +552,16 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   async markFailed(data: AfsDigitizationV3JobData, error: string) {
     const message = error.slice(0, 1000);
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.FAILED,
-          'ulbFile.digitizationMsg': message,
-          'ulbFile.queue.status': QueueStatus.FAILED,
-          'ulbFile.queue.failedReason': message,
-          'ulbFile.queue.finishedOn': new Date(),
+          [`${f}.digitizationStatus`]: DigitizationStatuses.FAILED,
+          [`${f}.digitizationMsg`]: message,
+          [`${f}.queue.status`]: QueueStatus.FAILED,
+          [`${f}.queue.failedReason`]: message,
+          [`${f}.queue.finishedOn`]: new Date(),
         },
       },
       DigitizationV3Statuses.FAILED,
@@ -467,13 +570,14 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   /** Put the file back to `queued` between BullMQ retries so it is not shown as failed. */
   async markRetrying(data: AfsDigitizationV3JobData, error: string) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-          'ulbFile.digitizationMsg': error.slice(0, 1000),
-          'ulbFile.queue.status': QueueStatus.QUEUED,
+          [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED,
+          [`${f}.digitizationMsg`]: error.slice(0, 1000),
+          [`${f}.queue.status`]: QueueStatus.QUEUED,
         },
       },
       DigitizationV3Statuses.QUEUED,
@@ -722,6 +826,11 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     update: UpdateQuery<AfsExcelFileDocument>,
     next: DigitizationV3Statuses,
   ) {
+    // The overall counters track ULB files only; an AFS upload is just updated
+    if (data.source === 'AFS') {
+      await this.afsExcelFileModel.updateOne(this.recordKey(data), update);
+      return;
+    }
     const previous = await this.afsExcelFileModel
       .findOneAndUpdate(this.recordKey(data), update, { new: false, projection: ULB_FILE_PROJECTION })
       .lean()
@@ -832,19 +941,22 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        { ...ULB_FILE_PROJECTION, 'afsFile.pdfUrl': 1, 'afsFile.noOfPages': 1 },
+        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1 },
       )
       .lean()
       .exec();
     const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
-    // PDFs an admin uploaded from this page (afsFile), shown next to the ULB's own PDF
+    // PDFs an admin uploaded (afsFile), shown next to the ULB's own PDF, and where their digitization stands
     const afsPdfs = new Map<string, AfsPdf>();
+    const afsRecords = new Map<string, V3Record>();
     for (const r of existing) {
-      if (r.afsFile?.pdfUrl) afsPdfs.set(r.ulb.toString(), { pdfUrl: r.afsFile.pdfUrl, noOfPages: r.afsFile.noOfPages });
+      if (!r.afsFile?.pdfUrl) continue;
+      afsPdfs.set(r.ulb.toString(), { pdfUrl: r.afsFile.pdfUrl, noOfPages: r.afsFile.noOfPages });
+      afsRecords.set(r.ulb.toString(), this.toView(r.afsFile));
     }
     await this.followOriginals(rows, records, yearId, auditType);
 
-    return { rows, records, afsPdfs };
+    return { rows, records, afsPdfs, afsRecords };
   }
 
   /**
@@ -1015,8 +1127,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     return record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
   }
 
-  private shapeRow(row: UlbRow, docType: string, record: V3Record, afsPdf?: AfsPdf) {
+  private shapeRow(row: UlbRow, docType: string, record: V3Record, afsPdf?: AfsPdf, afsRecord?: V3Record) {
     const excelUrl = this.displayStatus(record) === DigitizationV3Statuses.DIGITIZED ? record?.excelUrl : undefined;
+    const afsExcelUrl =
+      this.displayStatus(afsRecord) === DigitizationV3Statuses.DIGITIZED ? afsRecord?.excelUrl : undefined;
     return {
       _id: row._id,
       ulb: row.ulb,
@@ -1035,6 +1149,13 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       afsPdfUrl: afsPdf?.pdfUrl ?? null,
       afsPdfUrlSigned: afsPdf ? this.fileTokenService.signFileUrl(afsPdf.pdfUrl) : null,
       afsPdfPageCount: afsPdf?.noOfPages || null,
+      // Digitization of the uploaded AFS PDF (same shape as `digitization`); absent until a PDF is uploaded
+      afsDigitization: afsPdf
+        ? afsRecord
+          ? { ...afsRecord, status: this.displayStatus(afsRecord) }
+          : { status: DigitizationV3Statuses.NOT_DIGITIZED }
+        : null,
+      afsExcelUrlSigned: afsExcelUrl ? this.fileTokenService.signFileUrl(afsExcelUrl) : null,
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,
       excelUrlSigned: excelUrl ? this.fileTokenService.signFileUrl(excelUrl) : null,

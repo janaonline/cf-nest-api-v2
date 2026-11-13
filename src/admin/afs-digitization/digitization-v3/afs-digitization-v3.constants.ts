@@ -46,7 +46,12 @@ export interface DigitizationV3Result {
   isMismatch: boolean;
 }
 
+/** Which PDF of a record a job digitizes: the ULB's own (`ulbFile`, the default) or one an admin uploaded (`afsFile`) */
+export type AfsDigitizationV3Source = 'ULB' | 'AFS';
+
 export interface AfsDigitizationV3JobData {
+  /** Absent on jobs queued before AFS uploads could be digitized: those are ULB jobs */
+  source?: AfsDigitizationV3Source;
   annualAccountsId?: string;
   ulb: string;
   year: string;
