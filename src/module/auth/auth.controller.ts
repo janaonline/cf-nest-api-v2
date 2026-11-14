@@ -77,7 +77,9 @@ export class AuthController {
   async getMe(@CurrentUser() user: User) {
     // return this.authService.getUserById(user._id);
     const isEligibleForXviFc = await this.loginService.resolveXviFcEligibility(user);
-    return { user, isEligibleForXviFc };
+    // TS-1262: stateName isn't on req.user by default — see resolveStateName()'s doc comment.
+    const stateName = await this.loginService.resolveStateName(user.state);
+    return { user: { ...user, stateName }, isEligibleForXviFc };
   }
 
   @UseGuards(JwtAuthGuard)
