@@ -215,12 +215,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         return (va - vb) * dir;
       });
     }
-    const data = matching
-      .slice((page - 1) * limit, page * limit)
-      .map((row) => {
-        const key = row.ulb.toString();
-        return this.shapeRow(row, query.docType, records.get(key), afsPdfs.get(key), afsRecords.get(key));
-      });
+    const data = matching.slice((page - 1) * limit, page * limit).map((row) => {
+      const key = row.ulb.toString();
+      return this.shapeRow(row, query.docType, records.get(key), afsPdfs.get(key), afsRecords.get(key));
+    });
 
     return { success: true, data, totalCount: matching.length, metrics };
   }
