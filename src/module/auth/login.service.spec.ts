@@ -254,5 +254,120 @@ describe('LoginService', () => {
         expect(result.token).toBe('mock-token');
       });
     });
+
+    describe('role-check (TS-1262 unified sign-in picker)', () => {
+      it('allows login when the picked role matches the account', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'STATE',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+        const result = await service.login(
+          { identifier: 'test@example.com', password: 'pass', role: 'STATE' },
+          mockRes,
+        );
+        expect(result.token).toBe('mock-token');
+      });
+
+      it('rejects with the generic message, but only after the password has already been verified, when the picked role does not match', async () => {
+        // The role check must run AFTER bcrypt.compare, not before — otherwise a wrong-role guess
+        // short-circuits at a different cost/code-path than a wrong-password guess, letting an
+        // attacker who knows an identifier learn its role bucket (and, for a PENDING/REJECTED/
+        // locked account, its status) without ever supplying a valid password. See the comment
+        // above the role-check in login.service.ts for the full reasoning.
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'STATE',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+        await expect(
+          service.login({ identifier: 'test@example.com', password: 'pass', role: 'ULB' }, mockRes),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(bcrypt.compare).toHaveBeenCalled();
+      });
+
+      it('does not let a role mismatch bypass the account-status checks (no status/role oracle)', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'STATE',
+          status: 'PENDING',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+        // A mismatched role on a PENDING account must still surface the PENDING message, not the
+        // generic one — proving the status check runs before the role check can ever short-circuit.
+        await expect(
+          service.login({ identifier: 'test@example.com', password: 'pass', role: 'ULB' }, mockRes),
+        ).rejects.toThrow(new ForbiddenException('Waiting for admin action on request.'));
+      });
+
+      it('rejects a wrong password with the generic message even when the picked role is also wrong (no timing shortcut)', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'STATE',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(false);
+
+        await expect(
+          service.login({ identifier: 'test@example.com', password: 'wrong', role: 'ULB' }, mockRes),
+        ).rejects.toThrow(UnauthorizedException);
+        expect(bcrypt.compare).toHaveBeenCalled();
+      });
+
+      it('skips the check entirely for a role with no picker tile (e.g. ADMIN)', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'ADMIN',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+        const result = await service.login({ identifier: 'test@example.com', password: 'pass', role: 'ULB' }, mockRes);
+        expect(result.token).toBe('mock-token');
+      });
+
+      it('enforces nothing when no role is sent at all (backward compatible)', async () => {
+        mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+          ...mockLoginUser,
+          role: 'STATE',
+        });
+        (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+        const result = await service.login({ identifier: 'test@example.com', password: 'pass' }, mockRes);
+        expect(result.token).toBe('mock-token');
+      });
+
+      it.each(['constructor', 'toString', '__proto__', 'hasOwnProperty'])(
+        'rejects an inherited Object property name (%s) as a role with 401, not a 500',
+        async (role) => {
+          mockUsersRepository.findByIdentifierWithSensitiveFields.mockResolvedValue({
+            ...mockLoginUser,
+            role: 'STATE',
+          });
+          (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+
+          await expect(
+            service.login({ identifier: 'test@example.com', password: 'pass', role }, mockRes),
+          ).rejects.toThrow(UnauthorizedException);
+        },
+      );
+    });
+  });
+
+  describe('resolveStateName()', () => {
+    it('returns null when there is no state id', async () => {
+      await expect(service.resolveStateName(null)).resolves.toBeNull();
+    });
+
+    it('resolves the state document name', async () => {
+      mockStateModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue({ name: 'Kerala' }) });
+      await expect(service.resolveStateName('state-id-1')).resolves.toBe('Kerala');
+    });
+
+    it('returns null when the state id does not resolve to a document', async () => {
+      mockStateModel.findById.mockReturnValue({ exec: jest.fn().mockResolvedValue(null) });
+      await expect(service.resolveStateName('missing-id')).resolves.toBeNull();
+    });
   });
 });

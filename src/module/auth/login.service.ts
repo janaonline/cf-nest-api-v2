@@ -36,6 +36,23 @@ export class LoginService {
   private static readonly EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   private static readonly CODE_RE = /^\d{2,}$/;
 
+  /**
+   * TS-1262: the unified sign-in page's role picker only has 5 tiles (ULB/State/MoHUA/
+   * Institutional/DoE) — far fewer than the real `Role` enum. A role here maps to every backend
+   * Role that picker tile can legitimately represent, mirroring the frontend's own equivalence
+   * (e.g. its XVI-FC routing already treats ULB/XVIFC, and STATE/XVIFC_STATE, as the same bucket).
+   * Any Role NOT listed in any bucket below (ADMIN, AFS_ADMIN, AAINA, USER, PMU, MOHUA_PMU) has no
+   * corresponding picker tile today, so the check is skipped entirely for those accounts rather
+   * than guessing at an unconfirmed mapping — see loginService.login()'s use of this constant.
+   */
+  private static readonly PICKER_ROLE_BUCKETS: Record<string, Role[]> = {
+    ULB: [Role.ULB, Role.ULB_EDITOR, Role.ULB_VIEWER, Role.XVIFC],
+    STATE: [Role.STATE, Role.STATE_EDITOR, Role.STATE_VIEWER, Role.STATE_DASHBOARD, Role.XVIFC_STATE],
+    MOHUA: [Role.MoHUA],
+    PARTNER: [Role.PARTNER],
+    DOE: [Role.XVIFC_DOE],
+  };
+
   async checkUser(dto: CheckUserDto): Promise<{
     status: string;
     isXVIFCProfileVerified: boolean;
@@ -127,7 +144,9 @@ export class LoginService {
     }
 
     if ((dto.type === '16thFC' || dto.type === 'XVIFC') && user.isXviFcdeleted) {
-      throw new ForbiddenException('Your access to the XVI-FC portal has been removed. Please contact your administrator.');
+      throw new ForbiddenException(
+        'Your access to the XVI-FC portal has been removed. Please contact your administrator.',
+      );
     }
 
     if (dto.type) {
@@ -178,6 +197,28 @@ export class LoginService {
       throw new UnauthorizedException(invalidMsg);
     }
 
+    // Only reachable once credentials are confirmed valid — same reasoning as the Cantonment-Board
+    // check below: evaluating this earlier (e.g. right after the identifier lookup) would let an
+    // unauthenticated caller who merely knows an identifier learn an account's role bucket (and,
+    // for a PENDING/REJECTED/locked account, its status) via which of the 5 role values short-
+    // circuits fastest or returns a different message — without ever proving they hold the password.
+    if (dto.role) {
+      const isAccountInAnyPickerBucket = Object.values(LoginService.PICKER_ROLE_BUCKETS).some((roles) =>
+        roles.includes(user.role),
+      );
+      // Own-property lookup only: a value like 'constructor' or 'toString' would otherwise resolve to an
+      // inherited Object.prototype member and crash on .includes() (500). The DTO's @IsIn already rejects
+      // these at the HTTP boundary; this keeps the service safe for any other caller.
+      const pickedBucket = Object.hasOwn(LoginService.PICKER_ROLE_BUCKETS, dto.role)
+        ? LoginService.PICKER_ROLE_BUCKETS[dto.role]
+        : undefined;
+      if (isAccountInAnyPickerBucket && (!pickedBucket || !pickedBucket.includes(user.role))) {
+        // Same generic message as a bad password — a wrong role pick must not be distinguishable
+        // from a wrong credential.
+        throw new UnauthorizedException(invalidMsg);
+      }
+    }
+
     if (user.loginAttempts > 0) {
       await this.usersRepository.resetLoginAttempts(userId);
     }
@@ -226,5 +267,18 @@ export class LoginService {
     const ulb = await this.ulbModel.findOne({ _id: user.ulb, isActive: true }).exec();
     if (!ulb) return false;
     return this.ulbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC');
+  }
+
+  /**
+   * TS-1262 — `GET /auth/me` returns `req.user` straight from `JwtStrategy.validate()`, which
+   * (unlike /auth/login and /auth/refresh, see buildUserResponsePayload) never resolves `state`
+   * beyond its raw ObjectId. The frontend's Municipal Data Hub gating needs the actual state name
+   * (e.g. "Kerala"), so resolve it here the same way login/refresh already do, rather than adding
+   * a State lookup to every authenticated request via the JWT strategy.
+   */
+  async resolveStateName(stateId: unknown): Promise<string | null> {
+    if (!stateId) return null;
+    const state = await this.stateModel.findById(stateId as string).exec();
+    return state?.name ?? null;
   }
 }
