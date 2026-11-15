@@ -23,6 +23,14 @@ export class AfsDigitizationV3QueryDto extends DigitizationReportQueryDto {
   @IsBoolean()
   isMismatch?: boolean;
 
+  @ApiPropertyOptional({
+    description:
+      'Enqueue endpoints only: also queue files v3 has already digitized (re-digitize). Files already queued / processing are still skipped',
+  })
+  @IsOptional()
+  @IsBoolean()
+  redigitize?: boolean;
+
   @ApiPropertyOptional({ description: 'Only files digitized at or after this time (ISO 8601)' })
   @IsOptional()
   @IsDateString()
