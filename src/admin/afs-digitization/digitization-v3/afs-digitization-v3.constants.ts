@@ -40,6 +40,11 @@ export interface DigitizationV3Result {
   warning?: string;
   noOfPages?: number;
   processingMs?: number;
+  /** Scores from the FastAPI job; each is absent when that step did not run */
+  ocrConfidenceScore?: number;
+  accuracyScore?: number;
+  arithmeticAssessment?: string;
+  overallAssessment?: string;
   detectedDocTypes: string[];
   segments: { docType: string; startPage: number; endPage: number; title?: string; isDuplicate: boolean }[];
   isConsolidated: boolean;
