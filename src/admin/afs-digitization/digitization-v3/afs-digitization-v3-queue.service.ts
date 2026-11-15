@@ -57,6 +57,21 @@ interface FastApiJobStatus {
   started_at?: string | null;
   completed_at?: string | null;
   message?: string;
+  // Scores (also used to backfill files digitized before they were stored)
+  confidence_score?: number | null;
+  accuracy_score?: number | null;
+  arithmetic_assessment?: string | null;
+  overall_assessment?: string | null;
+}
+
+export interface ScoreBackfillSummary {
+  /** Digitized files that had a FastAPI job id but no stored scores */
+  candidates: number;
+  updated: number;
+  /** FastAPI has the job but it carries no scores (e.g. validation did not run) */
+  noScores: number;
+  /** Job not found / request failed; left untouched so a re-run retries them */
+  failed: number;
 }
 
 /** What the "view log" dialog shows for a FastAPI job. */
@@ -92,6 +107,10 @@ interface FastApiJobResult {
     excel_s3_key?: string | null;
     excel_s3_bucket?: string | null;
     processing_time_seconds?: number | null;
+    confidence_score?: number | null;
+    accuracy_score?: number | null;
+    arithmetic_assessment?: string | null;
+    overall_assessment?: string | null;
     error_messages?: string[];
   } | null;
 }
@@ -151,6 +170,48 @@ export class AfsDigitizationV3QueueService {
       else await this.digitizationV3Service.markRetrying(data, message);
       throw error;
     }
+  }
+
+  /**
+   * One-off: copies the scores of already-digitized files from FastAPI (`/jobs/{id}/status`, which is light
+   * compared to `/result`) into `afs_xl_files`. Files that already have scores are skipped, so it is safe to
+   * re-run. `limit` caps how many files one call handles (default 500) to keep the request short.
+   */
+  async backfillScores(limit = 500): Promise<ScoreBackfillSummary> {
+    const summary: ScoreBackfillSummary = { candidates: 0, updated: 0, noScores: 0, failed: 0 };
+    const candidates = await this.digitizationV3Service.findFilesMissingScores(limit);
+    summary.candidates = candidates.length;
+
+    const timeout = this.requestTimeout();
+    const concurrency = 5;
+    for (let i = 0; i < candidates.length; i += concurrency) {
+      await Promise.all(
+        candidates.slice(i, i + concurrency).map(async (c) => {
+          if (!AFS_DIGITIZATION_JOB_ID.test(c.requestId)) {
+            summary.failed++;
+            return;
+          }
+          try {
+            const { data } = await firstValueFrom(
+              this.http.get<FastApiJobStatus>(`${this.baseUrl()}/jobs/${c.requestId}/status`, { timeout }),
+            );
+            const scores = {
+              ocrConfidenceScore: data.confidence_score ?? undefined,
+              accuracyScore: data.accuracy_score ?? undefined,
+              arithmeticAssessment: data.arithmetic_assessment ?? undefined,
+              overallAssessment: data.overall_assessment ?? undefined,
+            };
+            if (await this.digitizationV3Service.saveScores(c.docId, c.slot, scores)) summary.updated++;
+            else summary.noScores++;
+          } catch (error) {
+            summary.failed++;
+            this.logger.warn(`Score backfill: job ${c.requestId} (${c.slot} of ${c.docId}): ${this.describeError(error)}`);
+          }
+        }),
+      );
+    }
+    this.logger.log(`Score backfill done: ${JSON.stringify(summary)}`);
+    return summary;
   }
 
   /** The FastAPI side of one job, for the page's "view log" dialog. */
@@ -341,6 +402,10 @@ export class AfsDigitizationV3QueueService {
       excelKey: result.result?.excel_s3_key ?? undefined,
       noOfPages: cls.page_count || undefined,
       processingMs: seconds != null ? Math.round(seconds * 1000) : undefined,
+      ocrConfidenceScore: result.result?.confidence_score ?? undefined,
+      accuracyScore: result.result?.accuracy_score ?? undefined,
+      arithmeticAssessment: result.result?.arithmetic_assessment ?? undefined,
+      overallAssessment: result.result?.overall_assessment ?? undefined,
       detectedDocTypes,
       segments,
       isConsolidated: detectedDocTypes.length > 1,
