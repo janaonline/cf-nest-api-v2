@@ -69,10 +69,30 @@ export class AfsDigitizationV3Controller {
     return { success: true, data: await this.queueService.getJobLog(afsDigitizationJobId) };
   }
 
+  /**
+   * to be removed once the FastAPI backfill is complete and the scores are stored in the DB.
+   * One-off backfill: copies scores from FastAPI for files digitized before scores were stored.
+   * Handles up to `limit` files per call (default 500); call again until `candidates` is 0.
+   */
+  @Post('scores/backfill')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async backfillScores(@Query('limit') limit?: string) {
+    const n = Math.min(Math.max(Number(limit) || 500, 1), 2000);
+    return { success: true, data: await this.queueService.backfillScores(n) };
+  }
+
   /** Filter once, queue every matching file. Skips files with no PDF or already queued / digitized. */
   @Post('enqueue-by-filter')
   @HttpCode(HttpStatus.ACCEPTED)
   enqueueByFilter(@Body() body: AfsDigitizationV3QueryDto) {
     return this.digitizationV3Service.enqueueByFilter(body);
+  }
+
+  /** Digitizes the PDFs an admin uploaded for the given rows (`ulbId` required). Skips rows with no upload or already queued / digitized. */
+  @Post('enqueue-afs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  enqueueAfs(@Body() body: AfsDigitizationV3QueryDto) {
+    return this.digitizationV3Service.enqueueAfs(body);
   }
 }
