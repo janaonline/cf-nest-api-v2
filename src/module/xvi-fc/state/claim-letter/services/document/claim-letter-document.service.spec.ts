@@ -255,6 +255,16 @@ describe('ClaimLetterDocumentService', () => {
   });
 
   describe('covering letter', () => {
+    it('prints -R<n> in the Ref No of a letter built after a return', async () => {
+      parent['resubmissionNumber'] = 1;
+
+      const { data } = await service.getDocument(claimLetterId, stateUser);
+
+      expect(data!.refNo).toBe('CL/SS/2026-27/1-2-R1');
+      expect(data!.resubmissionNumber).toBe(1);
+      expect(text(data!.letter.refAndDate)).toBe('CF Ref No.- CL/SS/2026-27/1-2-R1\nDate: 05 Nov 2026');
+    });
+
     it('fills the State-entered slots, formats dates and option labels, and keeps the ref number', async () => {
       const { data } = await service.getDocument(claimLetterId, stateUser);
       const letter = data!.letter;
@@ -266,6 +276,7 @@ describe('ClaimLetterDocumentService', () => {
       expect(placeholders(letter.letterhead)).toEqual(['<Email>']);
       expect(text(letter.letterNo)).toBe('Letter No.: UD/1');
       expect(text(letter.refAndDate)).toBe('CF Ref No.- CL/SS/2026-27/1-2\nDate: 05 Nov 2026');
+      expect(data!.resubmissionNumber).toBe(0);
       expect(text(letter.references[1])).toBe(
         'Ministry of Housing and Urban Affairs letter/guidelines, if applicable.',
       );

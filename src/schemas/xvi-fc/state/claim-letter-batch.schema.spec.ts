@@ -105,7 +105,8 @@ describe('ClaimLetterBatchSchema indexes', () => {
         fields['year'] === 1 &&
         fields['installment'] === 1 &&
         fields['batchNumber'] === 1 &&
-        fields['version'] === 1,
+        fields['version'] === 1 &&
+        fields['resubmissionNumber'] === undefined,
     );
 
     expect(target).toBeDefined();
@@ -114,6 +115,23 @@ describe('ClaimLetterBatchSchema indexes', () => {
     expect((opts as { partialFilterExpression?: Record<string, unknown> }).partialFilterExpression).toEqual({
       isAbandoned: false,
     });
+  });
+
+  it('defines the unique Ref No index, partial on submitted letters', () => {
+    const indexes = ClaimLetterBatchSchema.indexes() as IndexEntry[];
+    const target = indexes.find(([fields]) => fields['resubmissionNumber'] === 1);
+
+    expect(target).toBeDefined();
+    const [fields, opts] = target!;
+    expect(Object.keys(fields)).toEqual([
+      'state',
+      'year',
+      'installment',
+      'batchNumber',
+      'resubmissionNumber',
+      'version',
+    ]);
+    expect(opts).toMatchObject({ unique: true, partialFilterExpression: { submittedAt: { $type: 'date' } } });
   });
 
   it('defines a unique index on buildRequestId', () => {

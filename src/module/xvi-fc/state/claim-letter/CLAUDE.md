@@ -22,6 +22,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   allocation unless formjson 26 `meta.claimAmountEditable` is on, and how to turn it back on.
 - [docs/adr/0007-so-review-stage.md](docs/adr/0007-so-review-stage.md) - the MoHUA Section Officer's approve
   and return: the fresh re-check, exemptions in the letter's transaction, frozen rows, form history, emails.
+- [docs/adr/0008-ref-no-after-a-return.md](docs/adr/0008-ref-no-after-a-return.md) - a letter built in a slot a
+  returned letter held gets `-R<n>` in its Ref No and file names (`resubmissionNumber`).
 
 ## Layout
 
@@ -128,7 +130,8 @@ two can never disagree; the frontend renders the backend's text verbatim.
   getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
 - Names: each one names the State, FY, installment and batch. `fileBaseName` is
   `CF_TR_2026-27_1-1`, the printed Ref No `CL/TR/2026-27/1-1`, and the .docx, the final PDF download
-  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`.
+  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`. A letter built in a slot a returned
+  letter held adds `-R<n>` to all of them (`1-1-R1`, ADR 0008).
 
 ## Letter details
 

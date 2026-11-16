@@ -18,6 +18,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     claimLetterId: String(doc['_id']),
     installment: doc['installment'] as 1 | 2,
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
+    resubmissionNumber: (doc['resubmissionNumber'] as number | undefined) ?? 0,
     version: doc['version'] as number,
     currentFormStatus,
     // Abandon is a flag that leaves the status as it was, so the label is overridden. A return also sets the flag
