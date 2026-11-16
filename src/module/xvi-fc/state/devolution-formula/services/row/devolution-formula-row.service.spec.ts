@@ -95,6 +95,7 @@ describe('DevolutionFormulaRowService', () => {
       find: jest.fn().mockReturnValue(q([])),
       updateMany: jest.fn().mockReturnValue(q({ modifiedCount: 0 })),
       deleteMany: jest.fn().mockReturnValue(q({ deletedCount: 0 })),
+      exists: jest.fn().mockReturnValue(q(null)),
     };
     excelService = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(0)) };
     claimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
@@ -211,6 +212,21 @@ describe('DevolutionFormulaRowService', () => {
       expect(set['newUlbCount']).toBe(0);
       expect(set['missingUlbCount']).toBe(0);
       expect(set['duplicateUlbCount']).toBe(0);
+    });
+
+    it('refuses while a row is part of an approved claim letter (5 / 7), touching nothing', async () => {
+      rowModel['exists'] = jest.fn().mockReturnValue(q({ _id: new Types.ObjectId() }));
+
+      await expect(
+        service.deleteUploadedExcel(stateOid.toString(), yearOid.toString(), 1, adminUser),
+      ).rejects.toThrow(BadRequestException);
+      expect(rowModel['exists']).toHaveBeenCalledWith(
+        expect.objectContaining({
+          rowStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        }),
+      );
+      expect(rowModel['updateMany']).not.toHaveBeenCalled();
+      expect(formModel['findByIdAndUpdate']).not.toHaveBeenCalled();
     });
   });
 });

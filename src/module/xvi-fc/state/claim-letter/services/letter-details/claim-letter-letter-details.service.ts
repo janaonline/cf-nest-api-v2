@@ -59,7 +59,7 @@ export interface ClaimLetterLetterDetailsView extends ClaimLetterLetterDetailsSt
   fields: HydratedFieldConfig[];
   canEdit: boolean;
   previous: {
-    source: { yearLabel: string; installment: number; batchNumber: number };
+    source: { yearLabel: string; installment: number; batchNumber: number; resubmissionNumber: number };
     values: LetterValues;
   } | null;
 }
@@ -70,6 +70,15 @@ export interface ClaimLetterLetterDetailsSaveResult extends ClaimLetterLetterDet
 
 const PARENT_FIELDS =
   'state year installment batchNumber currentFormStatus isAbandoned signedClaimFile letterDetails letterDetailsUpdatedAt';
+
+type PreviousLetter = {
+  year: Types.ObjectId;
+  installment: number;
+  batchNumber: number;
+  resubmissionNumber?: number;
+  letterDetails?: LetterValues;
+};
+
 const NUMERIC_TYPES = new Set(['number', 'amount']);
 const OPTION_TYPES = new Set(['radio', 'select']);
 
@@ -304,14 +313,14 @@ export class ClaimLetterLetterDetailsService {
         letterDetailsUpdatedAt: { $ne: null },
       })
       .sort({ letterDetailsUpdatedAt: -1 })
-      .select('year installment batchNumber letterDetails')
-      .lean<{ year: Types.ObjectId; installment: number; batchNumber: number; letterDetails?: LetterValues } | null>()
+      .select('year installment batchNumber resubmissionNumber letterDetails')
+      .lean<PreviousLetter | null>()
       .exec();
   }
 
   /** Configured keys only, minus the skip-prefill ones (Letter No., Letter date). */
   private toPrevious(
-    previous: { year: Types.ObjectId; installment: number; batchNumber: number; letterDetails?: LetterValues },
+    previous: PreviousLetter,
     formConfig: ClaimLetterFormConfig,
   ): ClaimLetterLetterDetailsView['previous'] {
     const source = previous.letterDetails ?? {};
@@ -325,6 +334,7 @@ export class ClaimLetterLetterDetailsService {
         yearLabel: YearIdToLabel[String(previous.year)] ?? '',
         installment: previous.installment,
         batchNumber: previous.batchNumber,
+        resubmissionNumber: previous.resubmissionNumber ?? 0,
       },
       values,
     };

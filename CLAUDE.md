@@ -110,8 +110,9 @@ src/
 │   │                    # when it's merely been submitted.
 │   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
 │   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
-│   │                    # expected-ULB count; MOHUA/DOE (read-only)/ADMIN scope only, never cached — every dashboard read
-│   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
+│   │                    # expected-ULB count; MOHUA/DOE/PMU (read-only)/ADMIN scope only, never cached — the three dashboard
+│   │                    # controllers check `isNationalDashboardScope` (MoHUA + DoE + PMU, whose Overview is this same
+│   │                    # dashboard; common/utils/xvi-fc-scope.util.ts), other MoHUA reads `isMohuaViewScope`) plus the per-state
 │   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
 │   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
 │   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, unspent balance
@@ -129,13 +130,17 @@ src/
 │   │                    # state's first-claim status, installment allocation (half of basic + performance from grantAllocation) and amount claimed; .../state/:stateId/:yearId/:installment — one
 │   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs. Lists letters at status 15 (under SO review), 16 (returned by the SO),
 │   │                    # 5 (under MoHUA review), 6 (returned by MoHUA) and 7 (acknowledged, read-only) that are READY, not abandoned and not superseded — MOHUA_CLAIM_LETTERS_LISTED_STATUSES;
-│   │                    # each letter row carries its `batchNumber` (1, 2, 3... — no cap). A state's letters response also carries a
+│   │                    # each letter row carries its `batchNumber` (1 to 3, CLAIM_LETTER_MAX_BATCH_NUMBER). A state's letters response also carries a
 │   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
 │   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/ADMIN only; the State-side
 │   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a
 │   │                    # letter under SO review (UNDER_REVIEW_BY_SO, 15) to UNDER_REVIEW_BY_MOHUA (5) and logs it in one transaction,
-│   │                    # pinned on the status + `revision` the page showed. It also moves the letter's State/ULB forms (and rows) to 5
-│   │                    # in the same transaction (ClaimLetterFormStatusService, which refuses if a form changed since submit).
+│   │                    # pinned on the status + `revision` the page showed. It first re-runs the letter's conditions fresh, as submit
+│   │                    # does (409 naming the ULBs that no longer hold; the SO returns instead). It also moves the letter's State/ULB forms
+│   │                    # (and rows) to 5 and approves the pending exemptions it relied on, in the same transaction
+│   │                    # (ClaimLetterFormStatusService, which refuses if a form changed or was deleted since submit, and logs each moved
+│   │                    # form in that form's own history). A return emails the State users and each ULB whose own forms reopened, after
+│   │                    # commit (FormReturnedNotificationService.notifyClaimLetterReturned). See state/claim-letter ADR 0007.
 │   │                    # POST .../letter/:id/return is the SO's return (15 -> 16): the letter closes (also flagged isAbandoned, so its
 │   │                    # batch slot and ULB locks are freed and the State builds a new letter; MoHUA still lists it) and only what
 │   │                    # the SO marked goes to 16. The SO first marks the ULBs to return (PUT .../letter/:id/ulb/:ulbId/decision:

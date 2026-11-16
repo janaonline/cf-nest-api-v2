@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common';
 import { Types } from 'mongoose';
-import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { ClaimLetterFormStatusService } from './claim-letter-form-status.service';
 
 const oid = () => new Types.ObjectId();
@@ -16,6 +16,12 @@ describe('ClaimLetterFormStatusService', () => {
   const claimLetterId = oid();
   const userOid = oid();
   const session = { id: 'session' } as never;
+  const approval = {
+    status: 'APPROVED' as const,
+    note: null,
+    decidedBy: { userId: userOid, role: 'MoHUA', name: 'SO', ipAddress: '1.2.3.4', userAgent: 'jest' },
+    decidedAt: new Date('2026-11-12T10:00:00Z'),
+  };
   const stateId = oid();
   const yearId = oid();
 
@@ -29,6 +35,13 @@ describe('ClaimLetterFormStatusService', () => {
   /** What `find` returns per collection, for the ULB forms found live. */
   let findDocs: Record<string, Record<string, unknown>[]>;
   let enabledSources: unknown[];
+  /** Fields of a document the status write reads back by id (its status, state, ulb...), keyed by id. */
+  let storedDocs: Record<string, Record<string, unknown>>;
+  /** Only ids whose stored status equals the filter's are read back (the database's behaviour), when set. */
+  let honourStatusFilter: boolean;
+  /** History rows written, per collection. */
+  let inserted: { collection: string; rows: Record<string, unknown>[]; options: unknown }[];
+  const historyIn = (collection: string) => inserted.filter((i) => i.collection === collection).flatMap((i) => i.rows);
 
   const withChildren = (...sourceLists: unknown[][]) => {
     children = sourceLists.map((sources) => ({ ulbId: oid(), sources }));
@@ -41,7 +54,25 @@ describe('ClaimLetterFormStatusService', () => {
         return {
           updateMany,
           countDocuments,
-          find: () => ({ toArray: () => Promise.resolve(findDocs[name] ?? []) }),
+          // By id: the status write reading back what it will move. Otherwise: the live ULB-form lookup.
+          find: (filter: { _id?: { $in: Types.ObjectId[] }; [field: string]: unknown }) => ({
+            toArray: () =>
+              Promise.resolve(
+                filter._id
+                  ? filter._id.$in
+                      .filter(
+                        (id) =>
+                          !honourStatusFilter ||
+                          Object.entries(storedDocs[String(id)] ?? {}).some(([field, value]) => filter[field] === value),
+                      )
+                      .map((id) => ({ _id: id, ...(storedDocs[String(id)] ?? {}) }))
+                  : (findDocs[name] ?? []),
+              ),
+          }),
+          insertMany: (rows: Record<string, unknown>[], options: unknown) => {
+            inserted.push({ collection: name, rows, options });
+            return Promise.resolve({ insertedCount: rows.length });
+          },
         };
       }),
     };
@@ -88,11 +119,15 @@ describe('ClaimLetterFormStatusService', () => {
 
   beforeEach(() => {
     collections = [];
-    countDocuments = jest.fn().mockResolvedValue(0);
+    // Every id the guard asks about is still in an accepted status, unless a test says otherwise.
+    countDocuments = jest.fn((filter: { _id: { $in: unknown[] } }) => Promise.resolve(filter._id.$in.length));
     parentSources = [];
     children = [];
     findDocs = {};
     enabledSources = [];
+    storedDocs = {};
+    honourStatusFilter = false;
+    inserted = [];
     updateMany = jest.fn<Promise<{ modifiedCount: number }>, UpdateManyCall>((filter) =>
       Promise.resolve({ modifiedCount: filter._id.$in.length }),
     );
@@ -109,7 +144,7 @@ describe('ClaimLetterFormStatusService', () => {
       [{ formId: 33, result: 'PASSED', formDocumentId: bankB }],
     );
 
-    const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(collections).toEqual(expect.arrayContaining(['xvifc_sfc', 'xvifc_bankaccounts']));
     const sfcCall = updateMany.mock.calls.find(([f]) => f._id.$in.length === 1);
@@ -126,6 +161,59 @@ describe('ClaimLetterFormStatusService', () => {
     expect(summary.moved).toEqual({ 22: 1, 33: 2 });
   });
 
+  it("writes one history row per moved form, in the form's own history collection and the same session", async () => {
+    const sfc = oid();
+    const bank = oid();
+    const ulb = oid();
+    parentSources = [{ formId: 22, result: 'PASSED', formDocumentId: sfc }];
+    withChildren([{ formId: 33, result: 'PASSED', formDocumentId: bank }]);
+    storedDocs = {
+      [String(sfc)]: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, state: stateId, year: yearId },
+      [String(bank)]: { currentFormStatus: FORM_STATUS.APPROVED_BY_STATE, ulb, designYear: yearId },
+    };
+
+    await service.moveFormsToMohuaReview(claimLetterId, approval, session);
+
+    expect(historyIn('xvifc_sfc_logs')).toEqual([
+      expect.objectContaining({
+        sfcStatusForm: sfc,
+        state: stateId,
+        year: yearId,
+        action: FormHistoryAction.SO_APPROVE,
+        fromStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+        toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        changedBy: userOid,
+        data: { claimLetter: claimLetterId },
+      }),
+    ]);
+    expect(historyIn('xvifc_bankaccount_form_logs')).toEqual([
+      expect.objectContaining({
+        bankAccountId: bank,
+        ulb,
+        designYear: yearId,
+        action: 'APPROVED',
+        actorStage: 'MOHUA',
+        toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        toStatusLabel: 'Under Review by MoHUA',
+        userInfo: approval.decidedBy,
+      }),
+    ]);
+    expect(inserted.every((i) => (i.options as { session: unknown }).session === session)).toBe(true);
+  });
+
+  it('logs and writes nothing for a form the conditional write no longer matches (an earlier letter moved it)', async () => {
+    const sfc = oid();
+    parentSources = [{ formId: 22, result: 'PASSED', formDocumentId: sfc }];
+    storedDocs = { [String(sfc)]: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } };
+    honourStatusFilter = true;
+
+    const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
+
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(inserted).toEqual([]);
+    expect(summary.moved).toEqual({ 22: 0 });
+  });
+
   it('writes Annual Accounts through form_status_id and the status text, both sections in one write', async () => {
     const audited = oid();
     const unaudited = oid();
@@ -134,7 +222,7 @@ describe('ClaimLetterFormStatusService', () => {
       { formId: 31, result: 'PASSED', formDocumentId: unaudited },
     ]);
 
-    await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(updateMany).toHaveBeenCalledTimes(1);
     const [filter, update] = updateMany.mock.calls[0];
@@ -146,7 +234,7 @@ describe('ClaimLetterFormStatusService', () => {
     const row = oid();
     withChildren([{ formId: 23, result: 'PASSED', formDocumentId: oid(), rowDocumentId: row }]);
 
-    await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(collections).toContain('xvifc_elected_ulb_rows');
     const rowCall = updateMany.mock.calls.find(([f]) => 'rowStatus' in f);
@@ -162,11 +250,11 @@ describe('ClaimLetterFormStatusService', () => {
     children[0].devolutionRowId = rowA;
     children[1].devolutionRowId = rowB;
 
-    const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(collections).toContain('xvifc_devolution_rows');
     expect(countDocuments).toHaveBeenCalledWith(
-      { _id: { $in: [rowA, rowB] }, rowStatus: { $nin: [null, FORM_STATUS.UNDER_REVIEW_BY_SO, 5, 7] } },
+      { _id: { $in: [rowA, rowB] }, rowStatus: { $in: [null, FORM_STATUS.UNDER_REVIEW_BY_SO, 5, 7] } },
       { session },
     );
     const rowCall = updateMany.mock.calls.find(([f]) => 'rowStatus' in f);
@@ -185,7 +273,7 @@ describe('ClaimLetterFormStatusService', () => {
       { formId: 99, result: 'PASSED', formDocumentId: oid() },
     ];
 
-    const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(updateMany).not.toHaveBeenCalled();
     expect(summary.moved).toEqual({});
@@ -198,7 +286,7 @@ describe('ClaimLetterFormStatusService', () => {
       Promise.resolve({ modifiedCount: Math.floor(filter._id.$in.length / 2) }),
     );
 
-    const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+    const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
     expect(updateMany).toHaveBeenCalledTimes(3);
     expect(summary.moved[32]).toBe(500 + 500 + 250);
@@ -207,13 +295,31 @@ describe('ClaimLetterFormStatusService', () => {
   it('refuses the whole move, writing nothing, when a form changed since the letter was submitted', async () => {
     const bank = oid();
     withChildren([{ formId: 33, result: 'PASSED', formDocumentId: bank }]);
-    countDocuments.mockResolvedValue(1);
+    countDocuments.mockResolvedValue(0); // not in an accepted status any more
 
-    await expect(service.moveFormsToMohuaReview(claimLetterId, userOid, session)).rejects.toThrow(ConflictException);
+    await expect(service.moveFormsToMohuaReview(claimLetterId, approval, session)).rejects.toThrow(ConflictException);
 
     expect(countDocuments).toHaveBeenCalledWith(
-      { _id: { $in: [bank] }, currentFormStatus: { $nin: [FORM_STATUS.APPROVED_BY_STATE, 5, 7] } },
+      { _id: { $in: [bank] }, currentFormStatus: { $in: [FORM_STATUS.APPROVED_BY_STATE, 5, 7] } },
       { session },
+    );
+    expect(updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses the move when a relied-on row was deleted since submit (a missing document counts as changed)', async () => {
+    const rowA = oid();
+    const rowB = oid();
+    parentSources = [{ formId: 24, result: 'PASSED', formDocumentId: oid() }];
+    withChildren([], []);
+    children[0].devolutionRowId = rowA;
+    children[1].devolutionRowId = rowB;
+    // Only one of the two rows still exists.
+    countDocuments.mockImplementation((filter: { _id: { $in: unknown[] } }) =>
+      Promise.resolve(filter._id.$in.length === 2 ? 1 : filter._id.$in.length),
+    );
+
+    await expect(service.moveFormsToMohuaReview(claimLetterId, approval, session)).rejects.toThrow(
+      /1 form\(s\) in this claim letter changed/,
     );
     expect(updateMany).not.toHaveBeenCalled();
   });
@@ -250,7 +356,7 @@ describe('ClaimLetterFormStatusService', () => {
         xvifc_slb_forms: [{ _id: slb, ulb: children[0].ulbId, currentFormStatus: 8 }],
       };
 
-      const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+      const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
       const bankCall = updateMany.mock.calls.find(([f]) => f._id.$in.some((id: Types.ObjectId) => id.equals(bank)));
       expect(bankCall?.[0].currentFormStatus).toBe(FORM_STATUS.APPROVED_BY_STATE);
@@ -260,6 +366,9 @@ describe('ClaimLetterFormStatusService', () => {
       });
       expect(summary.moved[32]).toBe(1);
       expect(summary.moved[33]).toBe(1);
+      // SLB is deemed approved: its status moves, but it keeps no history.
+      expect(historyIn('xvifc_slb_form_logs')).toEqual([]);
+      expect(historyIn('xvifc_bankaccount_form_logs')).toHaveLength(1);
     });
 
     it('skips a live form that is not at 8 and does not refuse the approval for it', async () => {
@@ -267,7 +376,7 @@ describe('ClaimLetterFormStatusService', () => {
       enabledSources = [bankFormJson];
       findDocs = { xvifc_bankaccounts: [{ _id: oid(), ulb: children[0].ulbId, currentFormStatus: 3 }] };
 
-      const summary = await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+      const summary = await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
       expect(updateMany).not.toHaveBeenCalled();
       expect(summary.moved).toEqual({});
@@ -278,7 +387,7 @@ describe('ClaimLetterFormStatusService', () => {
       enabledSources = [bankFormJson];
       findDocs = { xvifc_bankaccounts: [{ _id: oid(), ulb: children[0].ulbId, currentFormStatus: 8 }] };
 
-      await service.moveFormsToMohuaReview(claimLetterId, userOid, session);
+      await service.moveFormsToMohuaReview(claimLetterId, approval, session);
 
       expect(updateMany).not.toHaveBeenCalled();
     });
@@ -396,6 +505,43 @@ describe('ClaimLetterFormStatusService', () => {
       });
       expect(callOn(bankB)).toBeUndefined();
       expect(returned).toEqual([expect.objectContaining({ formId: 33, formDocumentId: bankA, remark: 'Wrong IFSC' })]);
+    });
+
+    it('logs each returned form and row with SO_RETURN and the remark that reopened it', async () => {
+      const form = oid();
+      const row = oid();
+      parentSources = [{ formId: 23, result: 'PASSED', formDocumentId: form }];
+      withChildren([{ formId: 23, result: 'PASSED', formDocumentId: form, rowDocumentId: row }]);
+      storedDocs = {
+        [String(form)]: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, state: stateId, year: yearId },
+        [String(row)]: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, form, state: stateId, year: yearId },
+      };
+
+      await service.returnFormsForCorrection(
+        claimLetterId,
+        selection({ ulbReturns: [ulbReturn(children[0].ulbId, { rowFormIds: [23], remark: 'Wrong ward count' })] }),
+        decision,
+        session,
+      );
+
+      expect(historyIn('xvifc_elected_ulb_row_logs')).toEqual([
+        expect.objectContaining({
+          row,
+          form,
+          previousStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+          currentStatus: FORM_STATUS.RETURNED_BY_SO,
+          createdBy: userOid,
+        }),
+      ]);
+      expect(historyIn('xvifc_elected_ulb_form_logs')).toEqual([
+        expect.objectContaining({
+          eulbForm: form,
+          action: FormHistoryAction.SO_RETURN,
+          fromStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          toStatus: FORM_STATUS.RETURNED_BY_SO,
+          remarks: 'Fix this',
+        }),
+      ]);
     });
 
     it('refuses a ULB outside the letter or a State form the letter did not use', async () => {

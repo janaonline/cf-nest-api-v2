@@ -14,6 +14,9 @@ export interface TransitionPmuFormParams<TFormDoc> {
   /** When given, the write only applies while the form is still in this status — a 409 otherwise.
    *  Used by undo so it can never overwrite a decision someone else made in the meantime. */
   expectedStatus?: number;
+  /** More fields the form must still hold for the write to apply (a 409 otherwise), e.g. the dataset
+   *  version the caller read its rows from. Needs `expectedStatus`. */
+  expectedFields?: Record<string, unknown>;
 }
 
 export interface WritePmuHistoryParams<THistoryDoc> {
@@ -41,7 +44,10 @@ export class StateFormPmuReviewHelper {
    *  NotFoundException if the form vanished between read and write (e.g. a concurrent action). */
   async transitionForm<TFormDoc>(params: TransitionPmuFormParams<TFormDoc>): Promise<TFormDoc> {
     const filter: Record<string, unknown> = { _id: params.formId };
-    if (params.expectedStatus !== undefined) filter['currentFormStatus'] = params.expectedStatus;
+    if (params.expectedStatus !== undefined) {
+      filter['currentFormStatus'] = params.expectedStatus;
+      Object.assign(filter, params.expectedFields);
+    }
 
     const query = params.formModel.findOneAndUpdate(filter, { $set: params.setFields }, { new: true });
     if (params.session) query.session(params.session);

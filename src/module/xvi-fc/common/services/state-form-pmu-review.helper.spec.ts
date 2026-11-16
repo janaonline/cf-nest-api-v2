@@ -1,4 +1,4 @@
-import { NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '@nestjs/common';
 import { Types } from 'mongoose';
 import { StateFormPmuReviewHelper } from './state-form-pmu-review.helper';
 
@@ -35,6 +35,26 @@ describe('StateFormPmuReviewHelper', () => {
         { new: true },
       );
       expect(result).toBe(updatedDoc);
+    });
+
+    it('also pins expectedFields, and reports a 409 when the form no longer holds them', async () => {
+      const formId = new Types.ObjectId();
+      const formModel = { findOneAndUpdate: jest.fn().mockReturnValue(q(null)) };
+
+      await expect(
+        helper.transitionForm({
+          formModel: formModel as never,
+          formId,
+          setFields: { currentFormStatus: 13 },
+          expectedStatus: 5,
+          expectedFields: { activeDatasetVersion: 2 },
+        }),
+      ).rejects.toThrow(ConflictException);
+      expect(formModel.findOneAndUpdate).toHaveBeenCalledWith(
+        { _id: formId, currentFormStatus: 5, activeDatasetVersion: 2 },
+        { $set: { currentFormStatus: 13 } },
+        { new: true },
+      );
     });
 
     it('attaches the session to the query when provided', async () => {

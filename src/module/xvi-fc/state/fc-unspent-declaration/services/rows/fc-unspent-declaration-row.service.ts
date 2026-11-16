@@ -50,6 +50,17 @@ type FcUnspentExistingRowLean = {
  * collection (reactivate/deactivate, never hard-delete), and inserting immutable
  * row-history entries only for actual `rowStatus` transitions.
  */
+/**
+ * Row statuses a resubmission or a branch switch never deactivates: under PMU review, PMU-approved (under SO review),
+ * SO-approved (under MoHUA review) and acknowledged.
+ */
+const FC_UNSPENT_KEPT_ROW_STATUSES: number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
 @Injectable()
 export class FcUnspentDeclarationRowService {
   constructor(
@@ -327,10 +338,18 @@ export class FcUnspentDeclarationRowService {
     return { transitions, preservedLockedRows };
   }
 
-  /** Deactivates every active row for a form (No-branch / branch switch). No rowStatus change, no history. */
+  /**
+   * Deactivates every active row for a form (No-branch / branch switch), except rows already under review or approved
+   * (`FC_UNSPENT_KEPT_ROW_STATUSES`): switching the answer must not drop a row a claim letter relied on. No rowStatus
+   * change, no history.
+   */
   async deactivateAllRows(formId: Types.ObjectId, userOid: Types.ObjectId, session: ClientSession): Promise<void> {
     await this.rowModel
-      .updateMany({ form: formId, isActive: true }, { $set: { isActive: false, updatedBy: userOid } }, { session })
+      .updateMany(
+        { form: formId, isActive: true, rowStatus: { $nin: FC_UNSPENT_KEPT_ROW_STATUSES } },
+        { $set: { isActive: false, updatedBy: userOid } },
+        { session },
+      )
       .exec();
   }
 
@@ -409,13 +428,7 @@ export class FcUnspentDeclarationRowService {
           form: formId,
           isActive: true,
           ulbId: { $nin: submittedUlbIds },
-          rowStatus: {
-            $nin: [
-              FORM_STATUS.UNDER_REVIEW_BY_SO,
-              FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-              FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-            ],
-          },
+          rowStatus: { $nin: FC_UNSPENT_KEPT_ROW_STATUSES },
         },
         { $set: { isActive: false, updatedBy: userOid } },
         { session },

@@ -1,5 +1,6 @@
 import {
   amountsAreEqual,
+  buildClaimLetterBatchLabel,
   buildClaimLetterFileBaseName,
   buildClaimLetterRefNo,
   computeDifferenceAmount,
@@ -140,22 +141,41 @@ describe('amountsAreEqual', () => {
   });
 });
 
+describe('buildClaimLetterBatchLabel', () => {
+  it('is <installment>-<batchnumber> for a letter that is not a resubmission', () => {
+    expect(buildClaimLetterBatchLabel(1, 2, 0)).toBe('1-2');
+  });
+
+  it('adds -R<n> for the n-th letter in a slot after a return', () => {
+    expect(buildClaimLetterBatchLabel(1, 2, 1)).toBe('1-2-R1');
+    expect(buildClaimLetterBatchLabel(1, 2, 2)).toBe('1-2-R2');
+  });
+});
+
 describe('buildClaimLetterFileBaseName', () => {
   it('formats as CF_<statecode>_<designyear>_<installment>-<batchnumber>', () => {
-    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 1)).toBe('CF_KA_2026-27_1-1');
-    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 3)).toBe('CF_KA_2026-27_1-3');
+    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 1, 0)).toBe('CF_KA_2026-27_1-1');
+    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 3, 0)).toBe('CF_KA_2026-27_1-3');
+  });
+
+  it('adds -R<n> for a resubmission', () => {
+    expect(buildClaimLetterFileBaseName('KA', '2026-27', 1, 2, 1)).toBe('CF_KA_2026-27_1-2-R1');
   });
 });
 
 describe('buildClaimLetterRefNo', () => {
+  const base = { stateCode: 'AP', designYearLabel: '2026-27', installment: 1 as const, batchNumber: 1 };
+
   it('formats as CL/<statecode>/<designyear>/<installment>-<batchnumber>', () => {
-    expect(buildClaimLetterRefNo({ stateCode: 'AP', designYearLabel: '2026-27', installment: 1, batchNumber: 1 })).toBe(
-      'CL/AP/2026-27/1-1',
-    );
+    expect(buildClaimLetterRefNo({ ...base, resubmissionNumber: 0 })).toBe('CL/AP/2026-27/1-1');
+  });
+
+  it('adds -R<n> for a resubmission', () => {
+    expect(buildClaimLetterRefNo({ ...base, resubmissionNumber: 2 })).toBe('CL/AP/2026-27/1-1-R2');
   });
 
   it('is deterministic for the same inputs', () => {
-    const params = { stateCode: 'KA', designYearLabel: '2028-29', installment: 2 as const, batchNumber: 3 };
+    const params = { ...base, installment: 2 as const, batchNumber: 3, resubmissionNumber: 1 };
     expect(buildClaimLetterRefNo(params)).toBe(buildClaimLetterRefNo(params));
   });
 });

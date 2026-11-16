@@ -224,6 +224,13 @@ describe('SlbService', () => {
       await expect(service.assertCanReadSlb(mohuaUser(), otherUlbOid.toString())).resolves.toBeUndefined();
     });
 
+    it('allows a PMU user to read any ULB (its Overview is the MoHUA dashboard)', async () => {
+      const pmuUser = { _id: new Types.ObjectId().toString(), role: 'MOHUA_PMU', scope: Scope.PMU, xviFcSubrole: 'viewer' };
+      await expect(
+        service.assertCanReadSlb(pmuUser as unknown as AuthUser, otherUlbOid.toString()),
+      ).resolves.toBeUndefined();
+    });
+
     it('rejects a MOHUA user whose view permission has been denied', async () => {
       await expect(
         service.assertCanReadSlb(mohuaUser([Permission.VIEW_STATUS_REPORTS]), ulbOid.toString()),

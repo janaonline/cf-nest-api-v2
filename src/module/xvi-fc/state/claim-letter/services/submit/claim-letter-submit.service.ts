@@ -17,10 +17,6 @@ import {
   type ClaimLetterInstallment,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
-  ClaimLetterBatchUlb,
-  ClaimLetterBatchUlbDocument,
-} from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
-import {
   CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
@@ -71,8 +67,6 @@ export class ClaimLetterSubmitService {
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
-    @InjectModel(ClaimLetterBatchUlb.name)
-    private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
   ) {}
 
   /** Idempotent on retry (ADR 0001); the checks before the transaction are listed in ADR 0003. */
@@ -212,37 +206,17 @@ export class ClaimLetterSubmitService {
     year: Types.ObjectId;
     installment: ClaimLetterInstallment;
   }): Promise<void> {
-    const stateId = String(scope.state);
-    const yearId = String(scope.year);
-    const [children, gate] = await Promise.all([
-      this.batchUlbModel
-        .find({ claimLetter: scope._id })
-        .select('ulbId ulbSnapshot.name')
-        .lean<{ ulbId: Types.ObjectId; ulbSnapshot: { name: string } }[]>()
-        .exec(),
-      this.eligibilityService.evaluateStateLevelGate(stateId, yearId, scope.installment),
-    ]);
-    if (!gate.passed) {
-      const failed = gate.sources.filter((s) => s.result === 'FAILED').map((s) => s.displayLabel ?? s.formType);
+    const { failedStateConditions, ineligibleUlbs } = await this.eligibilityService.recheckClaimLetter(scope);
+    if (failedStateConditions.length) {
       throw new BadRequestException(
-        `The State-level claim conditions are no longer met: ${failed.join(', ')}. Resolve them before submitting.`,
+        `The State-level claim conditions are no longer met: ${failedStateConditions.join(', ')}. Resolve them before submitting.`,
       );
     }
-
-    const ulbLevel = await this.eligibilityService.resolveUlbLevelEligibility(
-      stateId,
-      yearId,
-      scope.installment,
-      children.map((c) => String(c.ulbId)),
-    );
-    const ineligible = children
-      .filter((c) => ulbLevel.perUlbEligible.get(String(c.ulbId)) === false)
-      .map((c) => c.ulbSnapshot.name);
-    if (ineligible.length === 0) return;
-    const shown = ineligible.slice(0, 10);
-    const suffix = ineligible.length > shown.length ? ` and ${ineligible.length - shown.length} more` : '';
+    if (ineligibleUlbs.length === 0) return;
+    const shown = ineligibleUlbs.slice(0, 10).map((u) => u.name);
+    const suffix = ineligibleUlbs.length > shown.length ? ` and ${ineligibleUlbs.length - shown.length} more` : '';
     throw new BadRequestException(
-      `${ineligible.length} ULB(s) in this batch are no longer eligible: ${shown.join(', ')}${suffix}. ` +
+      `${ineligibleUlbs.length} ULB(s) in this batch are no longer eligible: ${shown.join(', ')}${suffix}. ` +
         'Remove them from the batch before submitting.',
     );
   }

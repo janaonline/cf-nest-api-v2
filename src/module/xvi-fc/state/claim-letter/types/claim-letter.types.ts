@@ -134,6 +134,8 @@ export interface ClaimLetterBatchSummary {
   claimLetterId: string;
   installment: ClaimLetterInstallment;
   batchNumber: ClaimLetterBatchNumber;
+  /** Above 0 for a letter built in a slot a returned letter held: the UI shows "2-R1". */
+  resubmissionNumber: number;
   version: number;
   currentFormStatus: number;
   currentFormStatusLabel: string;

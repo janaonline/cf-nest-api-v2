@@ -48,6 +48,11 @@ function mockUser(overrides: Partial<AuthUser> = {}): AuthUser {
 }
 
 describe('mapClaimLetterBatchDocToSummary', () => {
+  it('returns the -R number, 0 for a letter saved before the field existed', () => {
+    expect(mapClaimLetterBatchDocToSummary(batchDoc(), mockUser()).resubmissionNumber).toBe(0);
+    expect(mapClaimLetterBatchDocToSummary(batchDoc({ resubmissionNumber: 2 }), mockUser()).resubmissionNumber).toBe(2);
+  });
+
   describe('finalClaimLetterStage', () => {
     const signed = { signedClaimFile: { path: 'x/signed.pdf' } };
     const finalClaimPdf = { file: { path: 'final/x.pdf' }, sourceKey: 'k' };

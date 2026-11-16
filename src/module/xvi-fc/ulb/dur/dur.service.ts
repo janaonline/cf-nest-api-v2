@@ -25,7 +25,7 @@ import {
 } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
 import { Adc, AdcDocument } from 'src/schemas/adc.schema';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { toObjectIdString } from 'src/common/utils/objectid.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { S3Service } from 'src/core/s3/s3.service';
@@ -195,7 +195,7 @@ export class DurService {
     );
   }
 
-  private assertCanUlbUpload(dur: { currentFormStatus: number; documents: XviFcDur['documents'] }, docId: XviFcDurDocId) {
+  assertCanUlbUpload(dur: { currentFormStatus: number; documents: XviFcDur['documents'] }, docId: XviFcDurDocId) {
     if (!canUlbEditForm(dur.currentFormStatus)) {
       throw new ForbiddenException(`This form cannot be edited while its status is ${getFormStatusLabel(dur.currentFormStatus)}.`);
     }
@@ -387,7 +387,25 @@ export class DurService {
 
     const docSlot = dur.documents.find((d) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('No upload found for this document');
+    if (docSlot.processingStatus === 'PASSED') {
+      throw new BadRequestException('This document has already passed validation and cannot be retried.');
+    }
 
+    // A retry starts a fresh validation, so the previous run's verdict and any manual-review request
+    // on it are cleared (as Annual Accounts' retry does). Without this a crash on the retry would keep
+    // the old FAIL and still pass the manual-review "real FAIL" check.
+    const resetOcrInfo = {
+      jobId: null,
+      status: null,
+      progressStep: null,
+      submittedAt: null,
+      completedAt: null,
+      validationStatus: null,
+      validationDetails: null,
+      failedChecks: [],
+      isManualReviewRequested: false,
+      manualReviewRequestedAt: null,
+    };
     const retryAt = new Date();
     await Promise.all([
       this.durModel.updateOne(
@@ -396,6 +414,9 @@ export class DurService {
           $set: {
             'documents.$.processingStatus': 'PROCESSING',
             'documents.$.currentUpload.retryValidationAt': retryAt,
+            ...Object.fromEntries(
+              Object.entries(resetOcrInfo).map(([k, v]) => [`documents.$.currentUpload.ocrInfo.${k}`, v]),
+            ),
           },
           $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
         },
@@ -403,7 +424,11 @@ export class DurService {
       this.uploadHistoryModel.updateOne(
         { uploadId: docSlot.currentUpload.uploadId },
         {
-          $set: { processingStatus: 'PROCESSING', retryValidationAt: retryAt },
+          $set: {
+            processingStatus: 'PROCESSING',
+            retryValidationAt: retryAt,
+            ...Object.fromEntries(Object.entries(resetOcrInfo).map(([k, v]) => [`ocrInfo.${k}`, v])),
+          },
           $inc: { retryValidationCount: 1 },
         },
       ),
@@ -492,10 +517,10 @@ export class DurService {
 
     // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
     // instead of showing a blank form. Never touches an existing record (see `if (!dur)` above).
-    // MoHUA and DoE only view: both of these can write (create or delete a stub), so they never run for them.
+    // MoHUA, DoE and PMU only view: both of these can write (create or delete a stub), so they never run for them.
     if (!dur) {
-      if (!isMohuaViewScope(user)) dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
-    } else if (dur.isExemptionStub && !isMohuaViewScope(user)) {
+      if (!isNationalDashboardScope(user)) dur = await this.materializeExemptionStubIfNeeded(ulbId, designYearId, user);
+    } else if (dur.isExemptionStub && !isNationalDashboardScope(user)) {
       // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
       dur = await this.revalidateExemptionStubIfNeeded(dur, ulbId, designYearId);
     }

@@ -153,7 +153,7 @@ export class FcUnspentPmuReviewService {
 
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
     permissions.canUndo =
-      (await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid)) &&
+      (await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'FC_UNSPENT', id: doc._id })) &&
       !(await this.hasMohuaDecidedRows(doc._id, doc.isFcUnspent === true));
 
     const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);

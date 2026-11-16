@@ -80,7 +80,10 @@ export class AnnualAccountOcrResultWriter {
     });
     if (!claimed) return;
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(ctx, processingStatus);
+    // Only a PASS or an explicit FAIL verdict moves the post-rejection state; a run that completed
+    // without a verdict never judged the file, the same as a crash (writeFailed).
+    const hasVerdict = processingStatus === 'PASSED' || validationStatus?.toUpperCase() === 'FAIL';
+    const postRejectionUpdate = hasVerdict ? await this.computePostRejectionUpdate(ctx, processingStatus) : {};
     const res = await this.annualAccountModel.updateOne(this.slotFilter(ctx), {
       $set: {
         'documents.$.processingStatus': processingStatus,
@@ -110,13 +113,13 @@ export class AnnualAccountOcrResultWriter {
     });
     if (!claimed) return;
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(ctx, 'FAILED');
+    // A technical failure (the OCR job crashed) never judged the file, so it is not a strike against
+    // the post-rejection attempts; only a real FAIL from writeResult counts.
     const res = await this.annualAccountModel.updateOne(this.slotFilter(ctx), {
       $set: {
         'documents.$.processingStatus': 'FAILED',
         'documents.$.currentUpload.ocrInfo.status': 'FAILED',
         'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
-        ...postRejectionUpdate,
       },
     });
     this.warnIfSuperseded(res.matchedCount, ctx);
