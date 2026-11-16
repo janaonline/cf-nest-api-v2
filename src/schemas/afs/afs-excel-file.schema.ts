@@ -103,6 +103,10 @@ export class AfsExcelFileItem {
   @Prop({ type: Number })
   noOfPages: number;
 
+  /** Size of the source PDF in bytes (same meaning as `pdf.fileSizeBytes` on the annual account's PDF) */
+  @Prop({ type: Number })
+  fileSizeBytes?: number;
+
   @Prop({ type: String })
   excelUrl: string;
 
@@ -128,6 +132,22 @@ export class AfsExcelFileItem {
   // True when the uploaded doc type (record docType) is not among detectedDocTypes
   @Prop({ type: Boolean })
   isMismatch?: boolean;
+
+  /** OCR confidence, 0-100 (FastAPI `confidence_score`); absent when the engine gives none or on older records */
+  @Prop({ type: Number })
+  ocrConfidenceScore?: number;
+
+  /** Gemini cross-check accuracy vs the source PDF, 0-100 (FastAPI `accuracy_score`) */
+  @Prop({ type: Number })
+  accuracyScore?: number;
+
+  /** PASS / FAIL / NOT_APPLICABLE (FastAPI `arithmetic_assessment`) */
+  @Prop({ type: String })
+  arithmeticAssessment?: string;
+
+  /** PASS / PARTIAL / FAIL / UNVERIFIED (FastAPI `overall_assessment`) */
+  @Prop({ type: String })
+  overallAssessment?: string;
 
   @Prop({ type: QueueSchema })
   queue: Queue;}
