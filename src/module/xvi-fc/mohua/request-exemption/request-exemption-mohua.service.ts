@@ -1,6 +1,6 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, Model, Types } from 'mongoose';
+import { ClientSession, Connection, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
@@ -105,6 +105,8 @@ export class RequestExemptionMohuaService {
     user: AuthUser,
     ip: string,
     userAgent: string,
+    /** The caller's transaction (the SO approving a claim letter): the decision commits or rolls back with it. */
+    session?: ClientSession,
   ): Promise<XviFcApiResponse<RequestExemptionDecideResponseData>> {
     this.assertReviewAccess(user);
 
@@ -124,10 +126,7 @@ export class RequestExemptionMohuaService {
     const userOid = new Types.ObjectId(user._id);
     const now = new Date();
 
-    const session = await this.connection.startSession();
-    try {
-      session.startTransaction();
-
+    await this.inTransaction(session, async (s) => {
       const updateResult = await this.exemptionModel
         .findOneAndUpdate(
           { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
@@ -140,7 +139,7 @@ export class RequestExemptionMohuaService {
               updatedBy: userOid,
             },
           },
-          { session },
+          { session: s },
         )
         .exec();
       this.assertUpdateMatched(updateResult);
@@ -159,16 +158,9 @@ export class RequestExemptionMohuaService {
             userInfo: { userId: userOid, role: user.role, ipAddress: ip ?? null, userAgent: userAgent ?? null },
           },
         ],
-        { session },
+        { session: s },
       );
-
-      await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
+    });
 
     return xviFcSuccess(
       'Exemption request approved.',
@@ -191,6 +183,8 @@ export class RequestExemptionMohuaService {
     user: AuthUser,
     ip: string,
     userAgent: string,
+    /** The caller's transaction (the SO returning a claim letter): the decision commits or rolls back with it. */
+    session?: ClientSession,
   ): Promise<XviFcApiResponse<RequestExemptionDecideResponseData>> {
     this.assertReviewAccess(user);
 
@@ -215,10 +209,7 @@ export class RequestExemptionMohuaService {
     const userOid = new Types.ObjectId(user._id);
     const now = new Date();
 
-    const session = await this.connection.startSession();
-    try {
-      session.startTransaction();
-
+    await this.inTransaction(session, async (s) => {
       const updateResult = await this.exemptionModel
         .findOneAndUpdate(
           { _id: requestOid, data: { $elemMatch: { formId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA } } },
@@ -231,7 +222,7 @@ export class RequestExemptionMohuaService {
               updatedBy: userOid,
             },
           },
-          { session },
+          { session: s },
         )
         .exec();
       this.assertUpdateMatched(updateResult);
@@ -251,16 +242,9 @@ export class RequestExemptionMohuaService {
             mohuaRemarks,
           },
         ],
-        { session },
+        { session: s },
       );
-
-      await session.commitTransaction();
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
+    });
 
     return xviFcSuccess(
       'Exemption request rejected.',
@@ -269,6 +253,22 @@ export class RequestExemptionMohuaService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** Runs `work` in the caller's transaction when given one (it commits or aborts), else in a transaction of its own. */
+  private async inTransaction(session: ClientSession | undefined, work: (s: ClientSession) => Promise<void>): Promise<void> {
+    if (session) return work(session);
+    const own = await this.connection.startSession();
+    try {
+      own.startTransaction();
+      await work(own);
+      await own.commitTransaction();
+    } catch (err) {
+      await own.abortTransaction();
+      throw err;
+    } finally {
+      await own.endSession();
+    }
+  }
 
   /** Fast pre-transaction check - not a full race guard on its own, see `assertUpdateMatched`. */
   private assertPending(entry: ExemptionEntryLean): void {

@@ -14,8 +14,11 @@ edit changes content, not workflow position.
 
 A history row (`ClaimLetterHistoryService.recordTransition`) is written **only** for these, in V1:
 - Draft creation (`null` → `IN_PROGRESS`, in `ClaimLetterAssemblyService.createDraftRaw`).
-- Submit (`IN_PROGRESS` → `UNDER_REVIEW_BY_MOHUA`, in `ClaimLetterSubmitService.submit`). Its row also
+- Submit (`IN_PROGRESS` → `UNDER_REVIEW_BY_SO`, 15, in `ClaimLetterSubmitService.submit`). Its row also
   records `submittedFiles`: the signed letter as uploaded and the final claim letter (`finalClaimPdf`).
+- The MoHUA Section Officer's approve (`UNDER_REVIEW_BY_SO` → `UNDER_REVIEW_BY_MOHUA`, 15 → 5) and return
+  (15 → `RETURNED_BY_SO`, 16), in `mohua/claim-letters`. The return's row lists every reopened form, row
+  and rejected exemption in `rejectedSourceRefs`. See ADR 0007.
 - Abandon (`IN_PROGRESS` → `IN_PROGRESS`, a same-status transition recorded purely for audit
   purposes, in `ClaimLetterAssemblyService.abandonDraftRaw`).
 
@@ -52,6 +55,10 @@ artifact, and the final-PDF endpoints keep serving it (never rebuilt) after subm
 
 Every history write happens **inside the same DB transaction as the status change it records** - a
 transition and its audit row can never diverge (one committing without the other landing).
+
+The SO's approve and return also move the letter's source forms, and each form or row moved gets a row in
+that form's own history collection, in the same transaction (`SO_APPROVE` / `SO_RETURN` on the State
+forms, a MOHUA-stage `APPROVED` / `RETURNED` on the ULB forms; ADR 0007).
 
 Two mechanisms are wired but have no caller yet in V1 - built ahead of need, not speculative:
 - `createNewVersion` - carries forward the previous version's ULB/amount selections through the

@@ -313,7 +313,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<DevolutionFormulaPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus activeDatasetVersion pmuRemarks')
+      .select('state year installment currentFormStatus activeDatasetVersion rejectionRemarks')
       .lean<DevolutionFormulaPmuFormLean>()
       .exec();
   }

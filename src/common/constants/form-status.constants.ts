@@ -42,6 +42,10 @@ export enum FormHistoryAction {
   PMU_UNDO = 'PMU_UNDO',
   /** State edited and resubmitted a PMU-rejected row, reopening PMU review */
   ROW_RESUBMIT = 'ROW_RESUBMIT',
+  /** The MoHUA Section Officer approved the claim letter that relied on this form (15 -> 5). */
+  SO_APPROVE = 'SO_APPROVE',
+  /** The Section Officer returned this form with its claim letter (-> 16). */
+  SO_RETURN = 'SO_RETURN',
 }
 
 export const FORM_STATUS_LABELS: Readonly<Record<FormStatusType, string>> = {

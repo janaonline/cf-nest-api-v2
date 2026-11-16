@@ -69,7 +69,7 @@ interface UndoContext {
 
 /**
  * The undo for the two row-bearing forms (Elected Body, FC Unspent): the form and every PMU-decided row
- * (5 or 14) go back to 13 together, in one transaction, logged `5|14 -> 10 -> 13` on the form and per row.
+ * (15 or 14) go back to 13 together, in one transaction, logged `15|14 -> 10 -> 13` on the form and per row.
  * The status writes are conditional, so a decision made in the meantime aborts the whole thing with a 409.
  * Called by `PmuUndoService`, which has already checked the caller's PMU access.
  */
@@ -100,7 +100,7 @@ export class PmuUndoRowFormsService {
   ): Promise<XviFcApiResponse<PmuUndoResult>> {
     const form = await this.eulbFormModel
       .findOne({ state, year, formType: EULB_FORM_TYPE })
-      .select('state year currentFormStatus activeDatasetVersion pmuRemarks')
+      .select('state year currentFormStatus activeDatasetVersion rejectionRemarks')
       .lean<EulbPmuFormLean>()
       .exec();
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
@@ -141,7 +141,7 @@ export class PmuUndoRowFormsService {
       await this.formHelper.transitionForm<EulbFormDocument>({
         formModel: this.eulbFormModel,
         formId: form._id,
-        setFields: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid, pmuRemarks: null },
+        setFields: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid, rejectionRemarks: null },
         session,
         expectedStatus: fromStatus,
         // The rows reopened above came from this dataset version; a State upload replacing it since
@@ -165,7 +165,7 @@ export class PmuUndoRowFormsService {
           ip: ctx.ip,
           userAgent: ctx.userAgent,
           snapshot: null,
-          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? undefined) : undefined,
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.rejectionRemarks ?? undefined) : undefined,
         }),
       });
 
@@ -247,7 +247,7 @@ export class PmuUndoRowFormsService {
           currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
           auditRevision: newAuditRevision,
           updatedBy: userOid,
-          pmuRemarks: null,
+          rejectionRemarks: null,
         },
         session,
         expectedStatus: fromStatus,
@@ -272,7 +272,7 @@ export class PmuUndoRowFormsService {
             checkboxConfirmation: form.checkboxConfirmation,
           },
           snapshot: [],
-          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? undefined) : undefined,
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.rejectionRemarks ?? undefined) : undefined,
           changedBy: userOid,
           changedAt: step.changedAt,
           ip: ctx.ip,
@@ -284,10 +284,10 @@ export class PmuUndoRowFormsService {
     });
   }
 
-  /** The rows PMU had decided: approved onward (5) or returned (14). Anything else is left exactly as it is. */
+  /** The rows PMU had decided: approved onward to the SO (15) or returned (14). Anything else is left exactly as it is. */
   private pmuDecidedRows<TRow extends { rowStatus: number | null }>(rows: TRow[]): TRow[] {
     return rows.filter(
-      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA || r.rowStatus === FORM_STATUS.RETURNED_BY_PMU,
+      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.RETURNED_BY_PMU,
     );
   }
 

@@ -44,7 +44,7 @@ import {
 } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import { attachAdcOwnership } from 'src/module/xvi-fc/common/utils/xvi-fc-adc-rows.util';
 import { Adc, AdcDocument } from 'src/schemas/adc.schema';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   canStateReviewForm,
   canStateUndoFormApproval,
@@ -911,9 +911,9 @@ export class BankAccountService {
       return normalizedRequestedUlbId;
     }
 
-    if (user.scope === Scope.ADMIN || isMohuaViewScope(user)) {
+    if (user.scope === Scope.ADMIN || isNationalDashboardScope(user)) {
       if (!normalizedRequestedUlbId) {
-        throw new BadRequestException('ulbId is required for ADMIN, MoHUA and DoE users.');
+        throw new BadRequestException('ulbId is required for ADMIN, MoHUA, DoE and PMU users.');
       }
       return normalizedRequestedUlbId;
     }
@@ -931,8 +931,9 @@ export class BankAccountService {
 
     if (user.scope === Scope.ADMIN) return null;
 
-    // MoHUA and DoE are central roles (not scoped to a state) and only ever view the bank account.
-    if (isMohuaViewScope(user)) {
+    // MoHUA, DoE and PMU are central roles (not scoped to a state) and only ever view the bank account
+    // (PMU from its Overview, which is the MoHUA dashboard).
+    if (isNationalDashboardScope(user)) {
       if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
         throw new ForbiddenException('You do not have permission to view bank account forms.');
       }

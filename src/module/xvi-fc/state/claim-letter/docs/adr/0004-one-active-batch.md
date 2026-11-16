@@ -20,8 +20,9 @@ future need.
 ## Decision
 
 At most one batch per (state, year, installment) is *active*: the earliest-created batch that is
-`READY`, not abandoned, not superseded, and in `IN_PROGRESS`, `UNDER_REVIEW_BY_SO`, `RETURNED_BY_SO`
-or `RETURNED_BY_MOHUA`. Any later batch in those statuses is blocked (409 `CLAIM_LETTER_BATCH_BLOCKED`,
+`READY`, not abandoned, not superseded, and in `IN_PROGRESS`, `UNDER_REVIEW_BY_SO` or
+`RETURNED_BY_MOHUA`. A letter the SO returned (`RETURNED_BY_SO`, 16) is always abandoned too, so it is
+never active and is not in the list. Any later batch in those statuses is blocked (409 `CLAIM_LETTER_BATCH_BLOCKED`,
 message naming the active batch) for:
 - preview and .docx download (`ClaimLetterDocumentService.loadParent`);
 - letter-details save (`ClaimLetterLetterDetailsService.save`; `canEdit` is false on GET);
@@ -44,8 +45,8 @@ page, the history list and every guard. An abandoned batch is refused on its own
 
 ## Consequences
 
-- A letter the SO approved (`UNDER_REVIEW_BY_MOHUA`, 5) is treated as approved and is not active, so
-  the State can start its next batch (2026-11-02). MoHUA's final step (5 -> 7) is not used for now.
+- A letter the SO approved (`UNDER_REVIEW_BY_MOHUA`, 5) has passed the SO's review and is not active, so
+  the State can start its next batch (2026-11-02). MoHUA's own final step (5 -> 7) comes later (ADR 0007).
   Risk once MoHUA's own return (5 -> 6) is built: that letter turns active again and, being the
   oldest, blocks any newer batch; close it on return the way the SO return does (status 16 +
   `isAbandoned`), or keep 6 out of `ACTIVE_STATUSES`.

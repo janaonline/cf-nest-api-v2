@@ -233,7 +233,7 @@ export class GtcPmuReviewService {
   private async findForm(stateId: string, yearId: string, installment: GtcInstallment): Promise<GtcPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus data pmuRemarks')
+      .select('state year installment currentFormStatus data rejectionRemarks')
       .lean<GtcPmuFormLean>()
       .exec();
   }
