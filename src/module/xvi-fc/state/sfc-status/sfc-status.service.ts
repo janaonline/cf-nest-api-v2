@@ -322,7 +322,7 @@ export class SfcStatusService {
       updatedBy: _updatedBy,
       updatedAt: _updatedAt,
       ...createdWithoutAuditFields
-    } = created.toObject() as Record<string, unknown>;
+    } = created.toObject() as unknown as Record<string, unknown>;
     return xviFcSuccess('SFC Status form saved as draft.', {
       ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),

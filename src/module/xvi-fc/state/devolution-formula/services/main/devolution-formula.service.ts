@@ -320,7 +320,7 @@ export class DevolutionFormulaService {
       // Status-guarded filter matched nothing and the upsert tried (and failed) to insert a
       // duplicate - status changed since it was read (e.g. a concurrent final submit).
       if (!isMongoDuplicateKeyError(error)) throw error;
-      await assertFreshFormStatus(
+      return assertFreshFormStatus(
         async () =>
           (await this.model.findOne(filter, { currentFormStatus: 1 }).lean<{ currentFormStatus?: number }>().exec())
             ?.currentFormStatus,

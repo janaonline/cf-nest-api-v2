@@ -33,6 +33,17 @@ export function buildReviewerFormPermissions(
 }
 
 /** What all 5 PMU review services actually call — pins the PMU-specific permission pair and gates. */
+// With row review asked for, `canReviewRows` is always set, so the row-review forms get it as required.
+export function buildPmuReviewerFormPermissions(
+  user: AuthUser,
+  status: number,
+  opts: { includeRowReview: true },
+): PmuReviewPermissions & { canReviewRows: boolean };
+export function buildPmuReviewerFormPermissions(
+  user: AuthUser,
+  status: number,
+  opts?: { includeRowReview?: boolean },
+): PmuReviewPermissions;
 export function buildPmuReviewerFormPermissions(
   user: AuthUser,
   status: number,
