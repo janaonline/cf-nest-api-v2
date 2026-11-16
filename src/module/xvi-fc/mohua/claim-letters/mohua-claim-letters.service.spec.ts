@@ -37,9 +37,10 @@ describe('MohuaClaimLettersService', () => {
   let grantAllocationModel: { find: jest.Mock };
   let lockModel: { deleteMany: jest.Mock };
   let fileTokens: { signFileUrlForSession: jest.Mock };
-  let eligibility: { getClaimStatusBreakdown: jest.Mock; resolveRemainingUlbIds: jest.Mock };
+  let eligibility: { getClaimStatusBreakdown: jest.Mock; resolveRemainingUlbIds: jest.Mock; recheckClaimLetter: jest.Mock };
   let expectedUlbs: { resolve: jest.Mock };
   let formStatus: { moveFormsToMohuaReview: jest.Mock; returnFormsForCorrection: jest.Mock };
+  let returnNotifications: { notifyClaimLetterReturned: jest.Mock };
   let history: { recordTransition: jest.Mock; findLatestRejection: jest.Mock };
   let session: {
     startTransaction: jest.Mock;
@@ -90,6 +91,8 @@ describe('MohuaClaimLettersService', () => {
     fileTokens = { signFileUrlForSession: jest.fn().mockReturnValue('https://signed/file') };
 
     eligibility = {
+      // The letter still meets its conditions unless a test says otherwise (SO approve re-checks them).
+      recheckClaimLetter: jest.fn().mockResolvedValue({ failedStateConditions: [], ineligibleUlbs: [] }),
       getClaimStatusBreakdown: jest.fn().mockResolvedValue({
         totalAlreadyAcknowledged: 0,
         totalClaimInProgress: 0,
@@ -124,6 +127,7 @@ describe('MohuaClaimLettersService', () => {
       insertMany: jest.fn().mockResolvedValue([]),
     };
 
+    returnNotifications = { notifyClaimLetterReturned: jest.fn().mockResolvedValue(undefined) };
     service = new MohuaClaimLettersService(
       stateModel as never,
       yearModel as never,
@@ -140,6 +144,7 @@ describe('MohuaClaimLettersService', () => {
       exemptionModel as never,
       exemptionService as never,
       omUlbModel as never,
+      returnNotifications as never,
     );
   });
 
@@ -157,8 +162,11 @@ describe('MohuaClaimLettersService', () => {
       expect(batchModel.find).toHaveBeenCalledWith(
         expect.objectContaining({
           assemblyStatus: 'READY',
-          // An SO-returned letter is flagged abandoned to free its slot but is still listed.
-          $or: [{ isAbandoned: false }, { currentFormStatus: FORM_STATUS.RETURNED_BY_SO }],
+          // A returned letter is flagged abandoned to free its slot but is still listed.
+          $or: [
+            { isAbandoned: false },
+            { currentFormStatus: { $in: [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA] } },
+          ],
           supersededBy: null,
           currentFormStatus: { $in: MOHUA_CLAIM_LETTERS_LISTED_STATUSES },
           installment: 1,
@@ -301,7 +309,7 @@ describe('MohuaClaimLettersService', () => {
       expect(summary.balance).toBe(0);
     });
 
-    it("leaves a returned letter's amount out of the states table claimed total, but keeps its ULBs", async () => {
+    it("leaves a returned letter's amount and ULBs out of the states table (its ULBs go into the next letter)", async () => {
       batchModel.find.mockReturnValue(
         q([
           batch({ currentFormStatus: FORM_STATUS.RETURNED_BY_MOHUA }),
@@ -311,7 +319,7 @@ describe('MohuaClaimLettersService', () => {
 
       const { states } = await service.listStates(yearId, 1);
 
-      expect(states[0]).toMatchObject({ amountClaimed: 50_000_000, ulbsIncluded: 10 });
+      expect(states[0]).toMatchObject({ amountClaimed: 50_000_000, ulbsIncluded: 6 });
     });
 
     it('404s for an unknown state', async () => {
@@ -676,6 +684,32 @@ describe('MohuaClaimLettersService', () => {
       expect(session.commitTransaction).toHaveBeenCalled();
     });
 
+    it('emails the State and the returned ULBs after the return committed, naming every returned item', async () => {
+      stateModel.findById.mockReturnValue(q({ code: 'TR' }));
+
+      await service.returnForCorrection(String(batchId), dto(), so);
+
+      expect(returnNotifications.notifyClaimLetterReturned).toHaveBeenCalledWith({
+        stateId: expect.anything() as unknown,
+        refNo: expect.stringMatching(/^CL\/TR\/2026-27\/1-/) as unknown,
+        stateRemark: 'Fix the SFC status',
+        stateItems: ['SFC Status'],
+        ulbs: [{ ulbId, items: ['Elected Body Status', 'Bank Account'], ownForms: ['Bank Account'], remark: 'Wrong IFSC' }],
+      });
+      expect(returnNotifications.notifyClaimLetterReturned.mock.invocationCallOrder[0]).toBeGreaterThan(
+        session.commitTransaction.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('still returns the letter when the ref-no lookup for the email fails', async () => {
+      stateModel.findById.mockImplementation(() => {
+        throw new Error('db down');
+      });
+
+      await expect(service.returnForCorrection(String(batchId), dto(), so)).resolves.toBeDefined();
+      expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
     it('refuses, and writes nothing else, when the letter changed since the page loaded', async () => {
       batchModel.findOneAndUpdate.mockReturnValue(q(null));
 
@@ -758,26 +792,58 @@ describe('MohuaClaimLettersService', () => {
       await expect(decide({ rejectExemptionFormIds: [23], remark: 'x' })).rejects.toThrow(ConflictException);
     });
 
-    it('approving the letter approves every exemption still under review, before the letter moves', async () => {
+    it("approving the letter approves every exemption still under review, inside the letter's transaction", async () => {
       batchUlbModel.find.mockReturnValue(q([exemptChild()]));
       exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
 
       await service.approve(String(batchId), 3, undefined, so, '1.2.3.4', 'jest');
 
       expect(exemptionService.approve).toHaveBeenCalledTimes(1);
-      expect(exemptionService.approve).toHaveBeenCalledWith(String(exemptionId), 23, so, '1.2.3.4', 'jest');
-      expect(exemptionService.approve.mock.invocationCallOrder[0]).toBeLessThan(
-        connection.startSession.mock.invocationCallOrder[0],
+      expect(exemptionService.approve).toHaveBeenCalledWith(String(exemptionId), 23, so, '1.2.3.4', 'jest', session);
+      expect(exemptionService.approve.mock.invocationCallOrder[0]).toBeGreaterThan(
+        session.startTransaction.mock.invocationCallOrder[0],
       );
+      expect(session.commitTransaction).toHaveBeenCalled();
     });
 
-    it('does not decide the letter when an exemption approval fails', async () => {
+    it('rolls the whole approval back when an exemption approval fails, so nothing is left decided', async () => {
       batchUlbModel.find.mockReturnValue(q([exemptChild()]));
       exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
       exemptionService.approve.mockRejectedValue(new ConflictException('form moved on'));
 
       await expect(service.approve(String(batchId), 3, undefined, so)).rejects.toThrow(ConflictException);
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
+      expect(formStatus.moveFormsToMohuaReview).not.toHaveBeenCalled();
+    });
+
+    it('rolls the exemption approvals back when a later step of the approval fails', async () => {
+      batchUlbModel.find.mockReturnValue(q([exemptChild()]));
+      exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      formStatus.moveFormsToMohuaReview.mockRejectedValue(new ConflictException('a form changed'));
+
+      await expect(service.approve(String(batchId), 3, undefined, so)).rejects.toThrow('a form changed');
+      expect(exemptionService.approve).toHaveBeenCalledWith(String(exemptionId), 23, so, '', '', session);
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.commitTransaction).not.toHaveBeenCalled();
+    });
+
+    it('refuses to approve a letter whose conditions no longer hold, before deciding anything', async () => {
+      batchUlbModel.find.mockReturnValue(q([exemptChild()]));
+      exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      eligibility.recheckClaimLetter.mockResolvedValue({
+        failedStateConditions: [],
+        ineligibleUlbs: [
+          { ulbId: String(ulbId), name: 'Khowai', reason: 'NOT_ELIGIBLE' },
+          { ulbId: 'other', name: 'Melaghar', reason: 'NOT_ACTIVE' },
+        ],
+      });
+
+      await expect(service.approve(String(batchId), 3, undefined, so)).rejects.toThrow(
+        /2 ULB\(s\) no longer meet the conditions: Khowai, Melaghar \(no longer active\)\. Return the letter instead\./,
+      );
       expect(connection.startSession).not.toHaveBeenCalled();
+      expect(exemptionService.approve).not.toHaveBeenCalled();
     });
 
     describe('returning the letter', () => {
@@ -808,6 +874,7 @@ describe('MohuaClaimLettersService', () => {
           so,
           '1.2.3.4',
           'jest',
+          session,
         );
         expect(history.recordTransition).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -815,6 +882,16 @@ describe('MohuaClaimLettersService', () => {
           }),
           session,
         );
+      });
+
+      it("rolls the exemption rejection back when the return fails, so a retry rejects it once", async () => {
+        exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+        formStatus.returnFormsForCorrection.mockRejectedValueOnce(new Error('write failed'));
+
+        await expect(service.returnForCorrection(String(batchId), dto, so)).rejects.toThrow('write failed');
+        expect(exemptionService.reject).toHaveBeenCalledWith(String(exemptionId), 23, 'No election', so, '', '', session);
+        expect(session.abortTransaction).toHaveBeenCalled();
+        expect(session.commitTransaction).not.toHaveBeenCalled();
       });
 
       it('skips an exemption already rejected (a retry), and stops on one approved meanwhile', async () => {

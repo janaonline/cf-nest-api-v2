@@ -1,6 +1,8 @@
-import { ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { ArrayUnique, IsArray, IsIn, IsInt, IsString, MaxLength, Min, MinLength } from 'class-validator';
 import {
   MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH,
+  MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH,
   MOHUA_CLAIM_LETTER_RETURNABLE_STATE_FORM_IDS,
 } from './mohua-claim-letters.constants';
 
@@ -17,8 +19,12 @@ export class ReturnMohuaClaimLetterDto {
   @IsIn(MOHUA_CLAIM_LETTER_RETURNABLE_STATE_FORM_IDS, { each: true })
   stateFormIds!: number[];
 
-  @IsOptional()
+  /** Why the letter is returned — required, shared with the State. Trimmed before the length checks. */
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH, {
+    message: `Remarks must be at least ${MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH} characters.`,
+  })
   @MaxLength(MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH)
-  stateRemark?: string;
+  stateRemark!: string;
 }

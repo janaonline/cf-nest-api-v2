@@ -45,6 +45,7 @@ export class XviFcBankAccountFormLog {
       FORM_STATUS.APPROVED_BY_STATE,
       FORM_STATUS.AWAITING_CLAIM_LETTER,
       FORM_STATUS.UNDO,
+      FORM_STATUS.RETURNED_BY_SO,
     ],
     required: true,
   })

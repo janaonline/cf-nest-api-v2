@@ -23,6 +23,8 @@ import {
   ElectedUrbanLocalBodiesRowHistorySchema,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row-history.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
+import { ClaimLetterBatch, ClaimLetterBatchSchema } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockSchema } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { Year, YearSchema } from 'src/schemas/year.schema';
 import { ElectedUrbanLocalBodiesController } from 'src/module/xvi-fc/state/elected-urban-local-bodies/controllers/elected-urban-local-bodies.controller';
 import { ElectedUrbanLocalBodiesService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/main/elected-urban-local-bodies.service';
@@ -43,6 +45,8 @@ import { UlbEligibilityModule } from 'src/module/ulb-eligibility/ulb-eligibility
       { name: ElectedUrbanLocalBodiesRowHistory.name, schema: ElectedUrbanLocalBodiesRowHistorySchema },
       { name: Ulb.name, schema: UlbSchema },
       { name: Year.name, schema: YearSchema },
+      { name: ClaimLetterUlbLock.name, schema: ClaimLetterUlbLockSchema },
+      { name: ClaimLetterBatch.name, schema: ClaimLetterBatchSchema },
     ]),
     XviFcCommonModule,
     FormJsonModule,

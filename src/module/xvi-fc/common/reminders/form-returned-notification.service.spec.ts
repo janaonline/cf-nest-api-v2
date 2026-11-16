@@ -110,26 +110,115 @@ describe('FormReturnedNotificationService.seedTemplate', () => {
     return { service, templateModel };
   };
 
-  it('creates both the ULB and the State template when neither exists', async () => {
+  it('creates every template when none exists', async () => {
     const { service, templateModel } = build([]);
 
     await expect(service.seedTemplate()).resolves.toMatchObject({ created: true });
     const slugs = (templateModel.create.mock.calls as [{ slug: string }][]).map(([doc]) => doc.slug).sort();
-    expect(slugs).toEqual(['form-returned-notification', 'state-form-returned-notification']);
+    expect(slugs).toEqual(['claim-letter-returned-state', 'claim-letter-returned-ulb', 'form-returned-notification', 'state-form-returned-notification']);
   });
 
-  it('creates only the missing State template on an environment that already has the ULB one', async () => {
-    const { service, templateModel } = build(['form-returned-notification']);
+  it('creates only the missing templates on an environment that already has the older ones', async () => {
+    const { service, templateModel } = build(['form-returned-notification', 'state-form-returned-notification']);
 
     await expect(service.seedTemplate()).resolves.toMatchObject({ created: true });
-    expect(templateModel.create).toHaveBeenCalledTimes(1);
-    expect(templateModel.create).toHaveBeenCalledWith(expect.objectContaining({ slug: 'state-form-returned-notification' }));
+    const slugs = (templateModel.create.mock.calls as [{ slug: string }][]).map(([doc]) => doc.slug).sort();
+    expect(slugs).toEqual(['claim-letter-returned-state', 'claim-letter-returned-ulb']);
   });
 
-  it('is a no-op when both already exist', async () => {
-    const { service, templateModel } = build(['form-returned-notification', 'state-form-returned-notification']);
+  it('is a no-op when all already exist', async () => {
+    const { service, templateModel } = build(['claim-letter-returned-state', 'claim-letter-returned-ulb', 'form-returned-notification', 'state-form-returned-notification']);
 
     await expect(service.seedTemplate()).resolves.toMatchObject({ created: false });
     expect(templateModel.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('FormReturnedNotificationService.notifyClaimLetterReturned', () => {
+  const stateId = new Types.ObjectId();
+  const ulbA = new Types.ObjectId();
+  const ulbB = new Types.ObjectId();
+  const templates: Record<string, { subject: string; body: string }> = {
+    'claim-letter-returned-state': { subject: 'Returned {{refNo}}', body: '{{stateName}}|{{returnReasonBlock}}|{{returnedItemsBlock}}' },
+    'claim-letter-returned-ulb': { subject: 'Returned {{formName}}', body: '{{ulbName}}|{{formName}}|{{returnReasonBlock}}' },
+  };
+
+  let userModel: { find: jest.Mock; findOne: jest.Mock };
+  let emailQueue: { addEmailJob: jest.Mock };
+  let emailTemplates: { findBySlug: jest.Mock };
+  let service: FormReturnedNotificationService;
+
+  const params = () => ({
+    stateId,
+    refNo: 'CL/TR/2026-27/1-2',
+    stateRemark: 'Fix the SFC status',
+    stateItems: ['SFC Status'],
+    ulbs: [
+      { ulbId: ulbA, items: ['Bank Account'], ownForms: ['Bank Account'], remark: 'Wrong IFSC' },
+      { ulbId: ulbB, items: ['Elected Body Status'], ownForms: [], remark: '<i>ward</i>' },
+    ],
+  });
+  const sent = () => emailQueue.addEmailJob.mock.calls.map(([job]) => job as { to: string; subject: string; html: string });
+
+  beforeEach(() => {
+    userModel = {
+      find: jest.fn().mockReturnValue(q([{ email: 'a@state.gov' }])),
+      findOne: jest.fn().mockReturnValue(q({ email: 'nodal@ulb.gov' })),
+    };
+    const ulbModel = {
+      find: jest.fn().mockReturnValue(
+        q([
+          { _id: ulbA, name: 'Khowai' },
+          { _id: ulbB, name: 'Melaghar' },
+        ]),
+      ),
+    };
+    const stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Tripura' })) };
+    emailTemplates = { findBySlug: jest.fn((slug: string) => Promise.resolve(templates[slug])) };
+    emailQueue = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
+    const config = { get: jest.fn((key: string) => (key === 'CLIENT_URL' ? 'https://app.test' : undefined)) };
+
+    service = new FormReturnedNotificationService(
+      userModel as never,
+      ulbModel as never,
+      {} as never,
+      emailTemplates as never,
+      emailQueue as never,
+      config as never,
+      stateModel as never,
+    );
+  });
+
+  it('sends the State one email listing every returned item, and each ULB with its own forms one email', async () => {
+    await service.notifyClaimLetterReturned(params());
+
+    const [state, ulb] = sent();
+    expect(sent()).toHaveLength(2);
+    expect(state.to).toBe('a@state.gov');
+    expect(state.subject).toBe('Returned CL/TR/2026-27/1-2');
+    expect(state.html).toContain('<li>SFC Status</li>');
+    expect(state.html).toContain('<strong>Khowai</strong>: Bank Account &mdash; Wrong IFSC');
+    expect(state.html).toContain('<strong>Melaghar</strong>: Elected Body Status &mdash; &lt;i&gt;ward&lt;/i&gt;');
+    expect(state.html).toContain('Fix the SFC status');
+    // Melaghar was returned only through a State-form row: the State fixes it, so the ULB gets no email.
+    expect(ulb).toMatchObject({ to: 'nodal@ulb.gov', subject: 'Returned Bank Account' });
+    expect(ulb.html).toContain('Khowai|Bank Account|');
+  });
+
+  it('still emails the ULBs when the State email fails, and never throws', async () => {
+    userModel.find.mockImplementation(() => {
+      throw new Error('db down');
+    });
+
+    await expect(service.notifyClaimLetterReturned(params())).resolves.toBeUndefined();
+    expect(sent().map((m) => m.to)).toEqual(['nodal@ulb.gov']);
+  });
+
+  it('skips a ULB with neither a Nodal Officer nor an accountant email', async () => {
+    userModel.findOne.mockReturnValue(q(null));
+
+    await service.notifyClaimLetterReturned(params());
+
+    expect(sent().map((m) => m.to)).toEqual(['a@state.gov']);
   });
 });
