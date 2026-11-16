@@ -170,7 +170,7 @@ export class DurService {
     );
   }
 
-  private assertCanUlbUpload(dur: { currentFormStatus: number; documents: XviFcDur['documents'] }, docId: XviFcDurDocId) {
+  assertCanUlbUpload(dur: { currentFormStatus: number; documents: XviFcDur['documents'] }, docId: XviFcDurDocId) {
     if (!canUlbEditForm(dur.currentFormStatus)) {
       throw new ForbiddenException(`This form cannot be edited while its status is ${getFormStatusLabel(dur.currentFormStatus)}.`);
     }
@@ -362,7 +362,25 @@ export class DurService {
 
     const docSlot = dur.documents.find((d) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('No upload found for this document');
+    if (docSlot.processingStatus === 'PASSED') {
+      throw new BadRequestException('This document has already passed validation and cannot be retried.');
+    }
 
+    // A retry starts a fresh validation, so the previous run's verdict and any manual-review request
+    // on it are cleared (as Annual Accounts' retry does). Without this a crash on the retry would keep
+    // the old FAIL and still pass the manual-review "real FAIL" check.
+    const resetOcrInfo = {
+      jobId: null,
+      status: null,
+      progressStep: null,
+      submittedAt: null,
+      completedAt: null,
+      validationStatus: null,
+      validationDetails: null,
+      failedChecks: [],
+      isManualReviewRequested: false,
+      manualReviewRequestedAt: null,
+    };
     const retryAt = new Date();
     await Promise.all([
       this.durModel.updateOne(
@@ -371,6 +389,9 @@ export class DurService {
           $set: {
             'documents.$.processingStatus': 'PROCESSING',
             'documents.$.currentUpload.retryValidationAt': retryAt,
+            ...Object.fromEntries(
+              Object.entries(resetOcrInfo).map(([k, v]) => [`documents.$.currentUpload.ocrInfo.${k}`, v]),
+            ),
           },
           $inc: { 'documents.$.currentUpload.retryValidationCount': 1 },
         },
@@ -378,7 +399,11 @@ export class DurService {
       this.uploadHistoryModel.updateOne(
         { uploadId: docSlot.currentUpload.uploadId },
         {
-          $set: { processingStatus: 'PROCESSING', retryValidationAt: retryAt },
+          $set: {
+            processingStatus: 'PROCESSING',
+            retryValidationAt: retryAt,
+            ...Object.fromEntries(Object.entries(resetOcrInfo).map(([k, v]) => [`ocrInfo.${k}`, v])),
+          },
           $inc: { retryValidationCount: 1 },
         },
       ),

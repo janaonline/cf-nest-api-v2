@@ -2095,7 +2095,7 @@ export class AnnualAccountsService implements OnModuleInit {
    * Two-layer upload gate: the section must be ULB-editable (shared FORM_STATUS gate), and
    * this specific document must not already be individually APPROVED by STATE.
    */
-  private async assertCanUlbUpload(
+  async assertCanUlbUpload(
     ulbId: string,
     designYearId: string,
     section: AnnualAccountSectionKey,

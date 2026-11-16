@@ -110,6 +110,19 @@ describe('DurValidationResultWriter', () => {
     );
   });
 
+  it('does not count a crashed job as a strike, even inside a rejection cycle', async () => {
+    durModel.findOne.mockReturnValue(
+      findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),
+    );
+
+    await writer.writeFailed(durId, docId, uploadId, 'Gemini upload timed out');
+
+    const set = (durModel.updateOne.mock.calls[0]?.[1] as { $set: Record<string, unknown> }).$set;
+    expect(set['documents.$.processingStatus']).toBe('FAILED');
+    expect(set).not.toHaveProperty(['documents.$.postRejectionAttemptsUsed']);
+    expect(set).not.toHaveProperty(['documents.$.uploadBlockedUntil']);
+  });
+
   it('sets uploadBlockedUntil once attempts are exhausted for a document already in a rejection cycle', async () => {
     durModel.findOne.mockReturnValue(
       findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),

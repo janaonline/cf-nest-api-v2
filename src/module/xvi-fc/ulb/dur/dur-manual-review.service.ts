@@ -39,9 +39,11 @@ import {
 } from 'src/module/file/file-response.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import {
+  FIRST_ATTEMPT_MESSAGE,
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
+  isPastFirstAttempt,
   isUploadBlocked,
 } from 'src/common/utils/manual-review-cooldown.util';
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
@@ -118,6 +120,9 @@ export class DurManualReviewService {
     if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed validation.');
     }
+    if (!isPastFirstAttempt(docSlot.currentUpload)) {
+      throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
+    }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('Manual review has already been requested for this document.');
     }
@@ -134,6 +139,8 @@ export class DurManualReviewService {
           `After that, uploads will be temporarily blocked. For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`,
       );
     }
+    // Same gate as an upload: the form must still be ULB-editable.
+    this.durService.assertCanUlbUpload(dur, docId);
 
     const requestedAt = new Date();
     await this.durModel.updateOne(
@@ -199,11 +206,19 @@ export class DurManualReviewService {
     const deciderName = await resolveDeciderName(this.userModel, user._id);
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
-    const rejectionUpdate: Record<string, unknown> = {};
-    if (dto.decision === 'RETURNED') {
-      rejectionUpdate['documents.$.manualReviewRejectionCount'] = (docSlot.manualReviewRejectionCount ?? 0) + 1;
-      rejectionUpdate['documents.$.postRejectionAttemptsUsed'] = 0;
-    }
+    // An approval clears the strike counter and any old cooldown, the same as a validation PASS does;
+    // validationStatus keeps the validator's own FAIL verdict, the decision record is the override.
+    const decisionUpdate: Record<string, unknown> =
+      dto.decision === 'RETURNED'
+        ? {
+            'documents.$.manualReviewRejectionCount': (docSlot.manualReviewRejectionCount ?? 0) + 1,
+            'documents.$.postRejectionAttemptsUsed': 0,
+          }
+        : {
+            'documents.$.processingStatus': 'PASSED',
+            'documents.$.postRejectionAttemptsUsed': 0,
+            'documents.$.uploadBlockedUntil': null,
+          };
 
     // $elemMatch (not two separate 'documents.x' filters) so both conditions bind to the same
     // array element — combined with the in-memory check above, this also closes the race where
@@ -211,16 +226,16 @@ export class DurManualReviewService {
     // only the first updateOne can still match once manualReviewDecision is no longer null.
     const updateResult = await this.durModel.updateOne(
       { _id: dur._id, documents: { $elemMatch: { docId, manualReviewDecision: null } } },
-      {
-        $set: {
-          'documents.$.manualReviewDecision': decision,
-          ...(dto.decision === 'APPROVED' && { 'documents.$.processingStatus': 'PASSED' }),
-          ...rejectionUpdate,
-        },
-      },
+      { $set: { 'documents.$.manualReviewDecision': decision, ...decisionUpdate } },
     );
     if (updateResult.matchedCount === 0) {
       throw new ConflictException('This manual review request has already been decided.');
+    }
+    if (dto.decision === 'APPROVED') {
+      await this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { processingStatus: 'PASSED' } },
+      );
     }
 
     const decidedBy = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
