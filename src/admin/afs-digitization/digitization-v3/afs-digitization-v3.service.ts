@@ -645,9 +645,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * One-off: fills `scores` on digitized v3 files (ULB and uploaded-AFS slots) from FastAPI's job records,
    * read straight from the digitization database (`afs-digitization-jobs`, the scores sit in `result_json`).
    * Also moves a file-level `isMismatch` into `scores.isMismatch`. Files whose scores are already stored are
-   * skipped, so it is safe to re-run; a file whose job has no scores keeps matching. `limit` caps the files per call; `since` limits it to files digitized on or after that date.
+   * skipped, so it is safe to re-run; a file whose job has no scores keeps matching. `limit` caps the files per call.
+   * With `force`, files that already have scores are re-scored too (no paging: it always starts from the first `limit` files).
    */
-  async backfillScoresFromJobs(limit: number, since?: Date): Promise<ScoreBackfillSummary> {
+  async backfillScoresFromJobs(limit: number, force = false): Promise<ScoreBackfillSummary> {
     const summary: ScoreBackfillSummary = { candidates: 0, updated: 0, noScores: 0, notFound: 0 };
     type Candidate = { docId: Types.ObjectId; slot: 'ulbFile' | 'afsFile'; requestId: string; isMismatch?: boolean };
     const candidates: Candidate[] = [];
@@ -662,10 +663,11 @@ export class AfsDigitizationV3Service implements OnModuleInit {
             // Written only by v3 (`version` is not on files digitized before it was stamped)
             [`${slot}.detectedDocTypes`]: { $exists: true },
             [`${slot}.requestId`]: { $exists: true, $ne: null },
-            [`${slot}.scores.accuracyScore`]: { $exists: false },
-            [`${slot}.scores.overallAssessment`]: { $exists: false },
-            // Optional: only files that finished on or after this date
-            ...(since && { [`${slot}.queue.finishedOn`]: { $gte: since } }),
+            // Without `force`, only files with no scores stored yet
+            ...(!force && {
+              [`${slot}.scores.accuracyScore`]: { $exists: false },
+              [`${slot}.scores.overallAssessment`]: { $exists: false },
+            }),
           },
           { [`${slot}.requestId`]: 1, [`${slot}.isMismatch`]: 1 },
         )
