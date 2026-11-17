@@ -744,6 +744,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   /**
    * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
    * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI:
+   *   document mismatch (scores.isMismatch)        -> FAIL
    *   OCR confidence < 80                          -> FAIL
    *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
    *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
@@ -778,12 +779,14 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         const s = d[slot]?.scores ?? {};
         const { ocrConfidenceScore: ocr, accuracyScore: accuracy, arithmeticAssessment: arithmetic } = s;
         const old: string | undefined = s.overallAssessment;
-        if (typeof accuracy !== 'number') {
+        // A document mismatch fails the file whatever the other scores say, even with no crosscheck score
+        if (s.isMismatch !== true && typeof accuracy !== 'number') {
           summary.skipped++;
           continue;
         }
         let next: string;
-        if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
+        if (s.isMismatch === true) next = 'FAIL';
+        else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
         else {
           const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
           const arithmeticOk = arithmetic !== 'FAIL';
