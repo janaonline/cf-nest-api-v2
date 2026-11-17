@@ -43,6 +43,17 @@ export class AfsDigitizationV3BackfillController {
     return { success: true, data: await this.digitizationV3Service.backfillScoresByMatch(dryRun !== 'false', n) };
   }
 
+  /**
+   * Recomputes `scores.overallAssessment` on every digitized file from its stored OCR / crosscheck / arithmetic scores.
+   * Does not call FastAPI. A dry run by default: pass `dryRun=false` to write.
+   */
+  @Post('scores/recalculate-overall')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async recalculateOverall(@Query('dryRun') dryRun?: string) {
+    return { success: true, data: await this.digitizationV3Service.recalculateOverallAssessment(dryRun !== 'false') };
+  }
+
   /** Recounts the overall cards from the records. Only needed to fix drift; the cards are kept up to date by the jobs. */
   @Post('metrics/rebuild')
   @Public()

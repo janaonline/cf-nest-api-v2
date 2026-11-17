@@ -114,6 +114,17 @@ const AFS_FILE_PROJECTION = Object.fromEntries(
 /** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
 const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
 
+export interface OverallRecalcSummary {
+  scanned: number;
+  changed: number;
+  unchanged: number;
+  /** No stored crosscheck score, so no overall can be derived */
+  skipped: number;
+  dryRun: boolean;
+  /** e.g. `PARTIAL->PASS`: how many files moved between each pair */
+  transitions: Record<string, number>;
+}
+
 export interface ScoreBackfillSummary {
   /** Digitized files that had a FastAPI job id but no stored scores */
   candidates: number;
@@ -727,6 +738,73 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       await this.afsExcelFileModel.bulkWrite(ops, { ordered: false });
       await this.refreshScoreMetrics();
     }
+    return summary;
+  }
+
+  /**
+   * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
+   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI:
+   *   OCR confidence < 80                          -> FAIL
+   *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
+   *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
+   *   crosscheck < 80 and arithmetic FAIL          -> FAIL
+   *   otherwise                                    -> PARTIAL
+   * A file with no `ocrConfidenceScore` counts as OCR pass (as in FastAPI). FastAPI also fails OCR when nothing was
+   * extracted, which the file does not record, so such a file is judged on crosscheck + arithmetic only.
+   * `dryRun` (the default at the endpoint) only counts.
+   */
+  async recalculateOverallAssessment(dryRun: boolean): Promise<OverallRecalcSummary> {
+    const summary: OverallRecalcSummary = { scanned: 0, changed: 0, unchanged: 0, skipped: 0, dryRun, transitions: {} };
+    const BATCH = 1000;
+
+    for (const slot of ['ulbFile', 'afsFile'] as const) {
+      const cursor = this.afsExcelFileModel
+        .find(
+          { [`${slot}.digitizationStatus`]: DigitizationStatuses.DIGITIZED, [`${slot}.scores`]: { $exists: true } },
+          { [`${slot}.scores`]: 1 },
+        )
+        .lean()
+        .cursor();
+
+      let ops: any[] = [];
+      const flush = async () => {
+        if (!ops.length) return;
+        await this.afsExcelFileModel.bulkWrite(ops, { ordered: false });
+        ops = [];
+      };
+
+      for await (const d of cursor as AsyncIterable<any>) {
+        summary.scanned++;
+        const s = d[slot]?.scores ?? {};
+        const { ocrConfidenceScore: ocr, accuracyScore: accuracy, arithmeticAssessment: arithmetic } = s;
+        const old: string | undefined = s.overallAssessment;
+        if (typeof accuracy !== 'number') {
+          summary.skipped++;
+          continue;
+        }
+        let next: string;
+        if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
+        else {
+          const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
+          const arithmeticOk = arithmetic !== 'FAIL';
+          next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
+        }
+        if (next === old) {
+          summary.unchanged++;
+          continue;
+        }
+        summary.changed++;
+        const key = `${old ?? 'none'}->${next}`;
+        summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
+        if (!dryRun) {
+          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set: { [`${slot}.scores.overallAssessment`]: next } } } });
+          if (ops.length >= BATCH) await flush();
+        }
+      }
+      await flush();
+    }
+
+    if (!dryRun && summary.changed) await this.refreshScoreMetrics();
     return summary;
   }
 
