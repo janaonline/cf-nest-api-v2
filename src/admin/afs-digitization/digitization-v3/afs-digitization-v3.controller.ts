@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -71,15 +71,31 @@ export class AfsDigitizationV3Controller {
 
   /**
    * to be removed once the FastAPI backfill is complete and the scores are stored in the DB.
-   * One-off backfill: copies scores from FastAPI for files digitized before scores were stored.
+   * One-off backfill: copies scores from FastAPI's job records (`afs-digitization-jobs`) for files digitized before scores were stored.
    * Handles up to `limit` files per call (default 500); call again until `candidates` is 0.
    */
   @Post('scores/backfill')
   @Public()
   @HttpCode(HttpStatus.OK)
-  async backfillScores(@Query('limit') limit?: string) {
+  async backfillScores(@Query('limit') limit?: string, @Query('since') since?: string) {
     const n = Math.min(Math.max(Number(limit) || 500, 1), 2000);
-    return { success: true, data: await this.queueService.backfillScores(n) };
+    // `since` (e.g. 2026-10-01): only files digitized on or after that date
+    const sinceDate = since ? new Date(since) : undefined;
+    if (sinceDate && Number.isNaN(sinceDate.getTime())) throw new BadRequestException('since must be a valid date');
+    return { success: true, data: await this.digitizationV3Service.backfillScoresFromJobs(n, sinceDate) };
+  }
+
+  /**
+   * Backfill for jobs the files are not linked to by `requestId`: matches each job in `afs-digitization-jobs` to a
+   * file by its ULB name, financial year and doc type, and copies the scores onto a single digitized file that has
+   * none. Never creates files. A dry run by default: pass `dryRun=false` to write.
+   */
+  @Post('scores/backfill-by-match')
+  @Public()
+  @HttpCode(HttpStatus.OK)
+  async backfillScoresByMatch(@Query('dryRun') dryRun?: string, @Query('limit') limit?: string) {
+    const n = Math.min(Math.max(Number(limit) || 1000, 1), 5000);
+    return { success: true, data: await this.digitizationV3Service.backfillScoresByMatch(dryRun !== 'false', n) };
   }
 
   /** Filter once, queue every matching file. Skips files with no PDF or already queued / digitized. */
