@@ -42,6 +42,14 @@ export class AfsMetric {
     withArithmetic: number;
     withOverall: number;
     mismatches: number;
+    /** Crosscheck confidence (accuracyScore) at or above / below 80 */
+    confidenceHigh: number;
+    confidenceLow: number;
+    arithmeticPass: number;
+    arithmeticFail: number;
+    overallPass: number;
+    overallPartial: number;
+    overallFail: number;
     computedAt: Date;
   };
 

@@ -187,6 +187,9 @@ interface UniquenessCell {
   duplicates: number;
 }
 
+/** Crosscheck confidence at or above this counts as high on the metrics cards. */
+const CONFIDENCE_THRESHOLD = 80;
+
 /** How many v3-digitized files have each score. A snapshot: refreshed by `rebuildMetrics` and the score backfills. */
 export interface DigitizationV3ScoreMetrics {
   digitized: number;
@@ -196,6 +199,14 @@ export interface DigitizationV3ScoreMetrics {
   withArithmetic: number;
   withOverall: number;
   mismatches: number;
+  /** Crosscheck confidence (accuracyScore) at or above / below `CONFIDENCE_THRESHOLD` */
+  confidenceHigh: number;
+  confidenceLow: number;
+  arithmeticPass: number;
+  arithmeticFail: number;
+  overallPass: number;
+  overallPartial: number;
+  overallFail: number;
   /** digitized - mismatches */
   matches: number;
   computedAt: Date | null;
@@ -1116,6 +1127,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   async refreshScoreMetrics(): Promise<void> {
     try {
       const has = (path: string) => ({ $sum: { $cond: [{ $ne: [{ $type: path }, 'missing'] }, 1, 0] } });
+      const is = (path: string, value: string) => ({ $sum: { $cond: [{ $eq: [path, value] }, 1, 0] } });
       const [row] = await this.afsExcelFileModel
         .aggregate([
           {
@@ -1133,6 +1145,17 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               withAccuracy: has('$ulbFile.scores.accuracyScore'),
               withArithmetic: has('$ulbFile.scores.arithmeticAssessment'),
               withOverall: has('$ulbFile.scores.overallAssessment'),
+              confidenceHigh: {
+                $sum: { $cond: [{ $and: [{ $isNumber: '$ulbFile.scores.accuracyScore' }, { $gte: ['$ulbFile.scores.accuracyScore', CONFIDENCE_THRESHOLD] }] }, 1, 0] },
+              },
+              confidenceLow: {
+                $sum: { $cond: [{ $and: [{ $isNumber: '$ulbFile.scores.accuracyScore' }, { $lt: ['$ulbFile.scores.accuracyScore', CONFIDENCE_THRESHOLD] }] }, 1, 0] },
+              },
+              arithmeticPass: is('$ulbFile.scores.arithmeticAssessment', 'PASS'),
+              arithmeticFail: is('$ulbFile.scores.arithmeticAssessment', 'FAIL'),
+              overallPass: is('$ulbFile.scores.overallAssessment', 'PASS'),
+              overallPartial: is('$ulbFile.scores.overallAssessment', 'PARTIAL'),
+              overallFail: is('$ulbFile.scores.overallAssessment', 'FAIL'),
               // Files digitized before `isMismatch` moved into `scores` still carry it on the file itself
               mismatches: {
                 $sum: { $cond: [{ $ifNull: ['$ulbFile.scores.isMismatch', '$ulbFile.isMismatch'] }, 1, 0] },
@@ -1149,6 +1172,13 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         withArithmetic: 0,
         withOverall: 0,
         mismatches: 0,
+        confidenceHigh: 0,
+        confidenceLow: 0,
+        arithmeticPass: 0,
+        arithmeticFail: 0,
+        overallPass: 0,
+        overallPartial: 0,
+        overallFail: 0,
       };
       const runSummary = await this.computeRunSummary();
       await this.afsMetricModel.updateOne(
