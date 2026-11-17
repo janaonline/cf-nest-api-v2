@@ -18,7 +18,7 @@ export interface FcUnspentPmuFormLean {
   fcUnspentDeclaration: unknown;
   checkboxConfirmation: boolean;
   auditRevision: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 /** Lean row projection used throughout the PMU review domain (list, transitions, snapshots). */

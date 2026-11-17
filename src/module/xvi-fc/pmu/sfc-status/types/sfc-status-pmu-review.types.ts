@@ -11,7 +11,7 @@ export interface SfcStatusPmuFormLean {
   year: Types.ObjectId;
   currentFormStatus: number;
   data?: Record<string, unknown>;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 export type SfcStatusPmuReviewPermissions = PmuReviewPermissions;

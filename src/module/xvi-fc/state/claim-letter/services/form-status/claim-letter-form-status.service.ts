@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
-import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
+import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import { claimSourceFiltersByDesignYear } from 'src/module/xvi-fc/common/utils/claim-eligibility-source-query.util';
 import type { DecisionRecord } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
@@ -11,6 +11,32 @@ import {
   ClaimLetterBatchUlb,
   ClaimLetterBatchUlbDocument,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
+
+/** Who decided, and why: what each moved document's history row is built from. */
+interface HistoryContext {
+  approve: boolean;
+  toStatus: number;
+  decision: DecisionRecord;
+  /** The SO's remark on a return; null on approve. */
+  remark: string | null;
+  claimLetterId: Types.ObjectId;
+  connection: Connection;
+  session: ClientSession;
+}
+
+/** One document the write moved, with the status it moved from. */
+interface MovedDoc {
+  doc: Record<string, unknown>;
+  fromStatus: number | null;
+}
+
+/** The form's own history collection, and how one of its rows is built from a moved document. */
+interface HistoryWriter {
+  collection: string;
+  /** Fields of the moved document the rows read (besides `_id`). */
+  fields: string[];
+  rows: (moved: MovedDoc[], ctx: HistoryContext) => Record<string, unknown>[] | Promise<Record<string, unknown>[]>;
+}
 
 /**
  * Where one source form's status lives. State forms wait for a claim letter at UNDER_REVIEW_BY_SO (15),
@@ -33,14 +59,166 @@ interface FormTarget {
   buildReturnSet: (remark: string | null, decision: DecisionRecord) => Record<string, unknown>;
   /** Array filters `buildReturnSet`'s `$[name]` paths need (Annual Accounts' approved documents). */
   returnArrayFilters?: Record<string, unknown>[];
+  /** The form's history collection: one row per form the SO's decision moved. SLB has none: it is deemed approved. */
+  history?: HistoryWriter;
+  /** The row history collection, for row forms that have one (Elected Body, FC Unspent; Devolution rows have none). */
+  rowHistory?: HistoryWriter;
 }
+
+const stampedAt = (ctx: HistoryContext) => ({ createdAt: ctx.decision.decidedAt, updatedAt: ctx.decision.decidedAt });
+
+/** A State form's history row (SFC, GTC, Devolution, Elected Body): the shared `FormHistoryAction` shape. */
+const stateFormHistory = (
+  collection: string,
+  formField: string,
+  extra: Record<string, unknown> = {},
+  extraFields: string[] = [],
+): HistoryWriter => ({
+  collection,
+  fields: ['state', 'year', ...extraFields],
+  rows: (moved, ctx) =>
+    moved.map(({ doc, fromStatus }) => ({
+      [formField]: doc['_id'],
+      state: doc['state'],
+      year: doc['year'],
+      ...Object.fromEntries(extraFields.map((field) => [field, doc[field]])),
+      action: ctx.approve ? FormHistoryAction.SO_APPROVE : FormHistoryAction.SO_RETURN,
+      fromStatus,
+      toStatus: ctx.toStatus,
+      changedBy: ctx.decision.decidedBy.userId,
+      changedAt: ctx.decision.decidedAt,
+      ip: ctx.decision.decidedBy.ipAddress ?? undefined,
+      userAgent: ctx.decision.decidedBy.userAgent ?? undefined,
+      ...(ctx.remark && { remarks: ctx.remark }),
+      data: { claimLetter: ctx.claimLetterId },
+      ...extra,
+      isActive: true,
+      isDeleted: false,
+      ...stampedAt(ctx),
+    })),
+});
+
+/** FC Unspent's form history has no `action`; each row carries the form's `auditRevision`. */
+const fcUnspentFormHistory: HistoryWriter = {
+  collection: 'xvifc_unspent_state_form_logs',
+  fields: ['state', 'year', 'auditRevision'],
+  rows: (moved, ctx) =>
+    moved.map(({ doc, fromStatus }) => ({
+      fcUnspentForm: doc['_id'],
+      state: doc['state'],
+      year: doc['year'],
+      fromStatus,
+      toStatus: ctx.toStatus,
+      auditRevision: (doc['auditRevision'] as number | undefined) ?? 0,
+      applicableFc: null,
+      data: { claimLetter: ctx.claimLetterId, action: ctx.approve ? FormHistoryAction.SO_APPROVE : FormHistoryAction.SO_RETURN },
+      snapshot: [],
+      ...(ctx.remark && { remarks: ctx.remark }),
+      changedBy: ctx.decision.decidedBy.userId,
+      changedAt: ctx.decision.decidedAt,
+      ip: ctx.decision.decidedBy.ipAddress ?? undefined,
+      userAgent: ctx.decision.decidedBy.userAgent ?? undefined,
+      isActive: true,
+      isDeleted: false,
+      ...stampedAt(ctx),
+    })),
+};
+
+/** Elected Body / FC Unspent row history: previous and current status per row. */
+const rowHistory = (collection: string): HistoryWriter => ({
+  collection,
+  fields: ['form', 'state', 'year'],
+  rows: (moved, ctx) =>
+    moved.map(({ doc, fromStatus }) => ({
+      row: doc['_id'],
+      form: doc['form'],
+      state: doc['state'],
+      year: doc['year'],
+      previousStatus: fromStatus,
+      currentStatus: ctx.toStatus,
+      snapshot: null,
+      createdBy: ctx.decision.decidedBy.userId,
+      updatedBy: ctx.decision.decidedBy.userId,
+      ipAddress: ctx.decision.decidedBy.ipAddress,
+      userAgent: ctx.decision.decidedBy.userAgent,
+      ...stampedAt(ctx),
+    })),
+});
+
+/** The fields every ULB form log shares (Annual Accounts, Bank Account, DUR, SLB): a MoHUA-stage decision. */
+const ulbLogEntry = (ctx: HistoryContext) => ({
+  action: ctx.approve ? 'APPROVED' : 'RETURNED',
+  actorStage: 'MOHUA',
+  userInfo: { ...ctx.decision.decidedBy },
+  note: ctx.approve ? SO_APPROVE_NOTE : ctx.remark || DEFAULT_RETURN_REMARK,
+  ...stampedAt(ctx),
+});
+
+/** Bank Account, DUR and SLB logs: `<idField>` plus the status and its label. */
+const ulbFormHistory = (collection: string, idField: string, yearField: string): HistoryWriter => ({
+  collection,
+  fields: ['ulb', yearField],
+  rows: (moved, ctx) =>
+    moved.map(({ doc }) => ({
+      [idField]: doc['_id'],
+      ulb: doc['ulb'],
+      designYear: doc[yearField],
+      toStatus: ctx.toStatus,
+      toStatusLabel: getFormStatusLabel(ctx.toStatus),
+      ...ulbLogEntry(ctx),
+    })),
+});
+
+const ANNUAL_ACCOUNT_SECTIONS = {
+  audited: { section: 'auditedData', formId: 30 },
+  unaudited: { section: 'unauditedData', formId: 31 },
+} as const;
+
+/**
+ * Annual Accounts logs by section, against the audited document's id (the {ulb, year} anchor every existing log
+ * uses), so an unaudited section's anchor is looked up.
+ */
+const annualAccountHistory: HistoryWriter = {
+  collection: 'xvifc_annualaccount_form_logs',
+  fields: ['ulb', 'design_year', 'sectionType'],
+  rows: async (moved, ctx) => {
+    const unaudited = moved.filter(({ doc }) => doc['sectionType'] === 'unaudited').map(({ doc }) => doc);
+    const anchors = unaudited.length
+      ? await ctx.connection
+          .collection('xvifc_annualaccounts')
+          .find(
+            { sectionType: 'audited', $or: unaudited.map((d) => ({ ulb: d['ulb'], design_year: d['design_year'] })) },
+            { projection: { ulb: 1, design_year: 1 }, session: ctx.session },
+          )
+          .toArray()
+      : [];
+    const anchorOf = new Map(anchors.map((a) => [`${String(a['ulb'])}:${String(a['design_year'])}`, a['_id']]));
+    return moved.map(({ doc }) => {
+      const { section, formId } = ANNUAL_ACCOUNT_SECTIONS[doc['sectionType'] === 'unaudited' ? 'unaudited' : 'audited'];
+      return {
+        annualAccountId:
+          section === 'unauditedData'
+            ? (anchorOf.get(`${String(doc['ulb'])}:${String(doc['design_year'])}`) ?? doc['_id'])
+            : doc['_id'],
+        ulb: doc['ulb'],
+        designYear: doc['design_year'],
+        section,
+        formId,
+        toStatus: ANNUAL_ACCOUNT_STATUS_TEXT.get(ctx.toStatus),
+        ...ulbLogEntry(ctx),
+      };
+    });
+  },
+};
 
 const stateForm = (
   collection: string,
+  history: HistoryWriter,
   options: {
     rowCollection?: string;
     rowFromStatuses?: (number | null)[];
     rowRemarkField?: string;
+    rowHistory?: HistoryWriter;
   } = {},
 ): FormTarget => ({
   collection,
@@ -50,12 +228,15 @@ const stateForm = (
   rowCollection: options.rowCollection,
   rowFromStatuses: options.rowFromStatuses ?? [FORM_STATUS.UNDER_REVIEW_BY_SO],
   rowRemarkField: options.rowRemarkField,
+  history,
+  rowHistory: options.rowHistory,
   // The same field a PMU rejection fills, so the State's form always shows the latest return's reason.
   buildReturnSet: (remark) => ({ rejectionRemarks: remark }),
 });
 
-const ulbForm = (collection: string, withLabel = false): FormTarget => ({
+const ulbForm = (collection: string, history: HistoryWriter | undefined, withLabel = false): FormTarget => ({
   collection,
+  history,
   statusField: 'currentFormStatus',
   fromStatus: FORM_STATUS.APPROVED_BY_STATE,
   buildSet: (toStatus) => ({
@@ -72,6 +253,7 @@ const ANNUAL_ACCOUNT_STATUS_TEXT = new Map(
 
 const annualAccountForm = (): FormTarget => ({
   collection: 'xvifc_annualaccounts',
+  history: annualAccountHistory,
   statusField: 'form_status_id',
   fromStatus: FORM_STATUS.APPROVED_BY_STATE,
   // Annual Accounts keeps the status as text plus an id, per section document.
@@ -85,26 +267,34 @@ const annualAccountForm = (): FormTarget => ({
 
 /** formId (the claim-eligibility registry's ids, see master/form-json-config/CLAUDE.md) -> its storage. */
 const FORM_TARGETS: Readonly<Record<number, FormTarget>> = {
-  22: stateForm('xvifc_sfc'),
-  23: stateForm('xvifc_elected_ulb_forms', {
+  22: stateForm('xvifc_sfc', stateFormHistory('xvifc_sfc_logs', 'sfcStatusForm')),
+  23: stateForm('xvifc_elected_ulb_forms', stateFormHistory('xvifc_elected_ulb_form_logs', 'eulbForm', { snapshot: null }), {
     rowCollection: 'xvifc_elected_ulb_rows',
     rowRemarkField: 'rejectionRemark',
+    rowHistory: rowHistory('xvifc_elected_ulb_row_logs'),
   }),
   // Devolution rows have no PMU row review, so a row is still unset (null) when the SO approves its ULB's claim.
-  24: stateForm('xvifc_devolution_forms', {
-    rowCollection: 'xvifc_devolution_rows',
-    rowFromStatuses: [null, FORM_STATUS.UNDER_REVIEW_BY_SO],
-  }),
-  25: stateForm('xvifc_unspent_state_forms', {
+  // ponytail: Devolution rows have no history collection; the letter's own history covers which ULBs moved.
+  24: stateForm(
+    'xvifc_devolution_forms',
+    stateFormHistory('xvifc_devolution_form_logs', 'devolutionFormulaForm', { snapshot: null }),
+    {
+      rowCollection: 'xvifc_devolution_rows',
+      rowFromStatuses: [null, FORM_STATUS.UNDER_REVIEW_BY_SO],
+    },
+  ),
+  25: stateForm('xvifc_unspent_state_forms', fcUnspentFormHistory, {
     rowCollection: 'xvifc_unspent_state_form_rows',
     rowRemarkField: 'rejectionRemark',
+    rowHistory: rowHistory('xvifc_unspent_state_form_row_logs'),
   }),
-  35: stateForm('xvifc_gtc'),
+  35: stateForm('xvifc_gtc', stateFormHistory('xvifc_gtc_logs', 'gtcForm', {}, ['installment'])),
   30: annualAccountForm(),
   31: annualAccountForm(),
-  32: ulbForm('xvifc_slb_forms'),
-  33: ulbForm('xvifc_bankaccounts', true),
-  36: ulbForm('xvifc_dur_forms', true),
+  // SLB is deemed approved, so its status moves but it keeps no history.
+  32: ulbForm('xvifc_slb_forms', undefined),
+  33: ulbForm('xvifc_bankaccounts', ulbFormHistory('xvifc_bankaccount_form_logs', 'bankAccountId', 'designYear'), true),
+  36: ulbForm('xvifc_dur_forms', ulbFormHistory('xvifc_dur_forms_logs', 'durId', 'design_year'), true),
 };
 
 /** State forms whose rows carry each ULB's own status: an SO return reopens the row of each ULB it was picked for. */
@@ -115,6 +305,9 @@ const CLAIM_READY_STATUSES = [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUB
 
 /** Stored when the SO gave no remark: the letter history requires one per returned form. */
 const DEFAULT_RETURN_REMARK = 'Returned for correction';
+
+/** The note on a ULB form's log when the SO approves its claim letter. */
+const SO_APPROVE_NOTE = 'Approved by the MoHUA Section Officer with the claim letter.';
 
 /** A row form's own reason when the SO returned some of its rows and wrote nothing for the State. */
 const ROW_FORM_RETURN_REMARK = "Some ULBs' rows were returned for correction; see each row's remark.";
@@ -191,8 +384,9 @@ interface LoadedLetter {
  * form already at 5 (an earlier letter moved it), exempted, or changed since is skipped, never overwritten.
  * One `updateMany` per collection, not one write per form. An exempted source has nothing to move.
  *
- * Writes the status only. The claim letter's own history (ClaimLetterHistoryService) is the audit trail
- * for this move; the forms' own history collections get no row for it.
+ * Every form or row it moves also gets one row in that form's own history collection, in the same transaction:
+ * `SO_APPROVE` / `SO_RETURN` on the State forms, APPROVED / RETURNED at the MOHUA stage on the ULB forms. Only the
+ * documents the write actually moved are logged. Devolution rows have no history collection.
  */
 @Injectable()
 export class ClaimLetterFormStatusService {
@@ -206,12 +400,14 @@ export class ClaimLetterFormStatusService {
   /** SO approval: the letter's State and ULB forms (and rows) go from their waiting status to 5. */
   async moveFormsToMohuaReview(
     claimLetterId: Types.ObjectId,
-    userOid: Types.ObjectId,
+    decision: DecisionRecord,
     session: ClientSession,
   ): Promise<ClaimLetterFormMoveSummary> {
     const letter = await this.loadLetter(claimLetterId, session);
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
-    const now = new Date();
+    const userOid = decision.decidedBy.userId;
+    const now = decision.decidedAt;
+    const ctx = this.historyContext(true, toStatus, decision, null, claimLetterId, session);
 
     // Ids per collection: `guard` = forms the frozen evidence relied on, `write` = guard plus ULB forms found live.
     const byCollection = new Map<string, CollectionIds>();
@@ -241,9 +437,23 @@ export class ClaimLetterFormStatusService {
 
     await this.addSelectedUlbForms(letter, exemptUlbForms, byCollection, session);
 
-    const moved: Record<number, number> = {};
-    for (const { target, formIds, guard, write } of byCollection.values()) {
+    const rowMoves = [...rowIdsByFormId].flatMap(([formId, ids]) => {
+      const { rowCollection, rowHistory, rowFromStatuses } = FORM_TARGETS[formId];
+      if (!rowCollection) return [];
+      const from = rowFromStatuses ?? [FORM_STATUS.UNDER_REVIEW_BY_SO];
+      return [{ formId, rowCollection, rowHistory, from, ids: [...ids] }];
+    });
+
+    // Every guard runs before any write, so a refusal writes nothing.
+    for (const { target, guard } of byCollection.values()) {
       await this.assertNotChanged(target.collection, target.statusField, [target.fromStatus], [...guard], session);
+    }
+    for (const { rowCollection, from, ids } of rowMoves) {
+      await this.assertNotChanged(rowCollection, 'rowStatus', from, ids, session);
+    }
+
+    const moved: Record<number, number> = {};
+    for (const { target, formIds, write } of byCollection.values()) {
       const count = await this.updateStatus(
         target.collection,
         target.statusField,
@@ -251,22 +461,22 @@ export class ClaimLetterFormStatusService {
         [...write],
         { ...target.buildSet(toStatus), updatedBy: userOid, updatedAt: now },
         session,
+        undefined,
+        target.history ? { writer: target.history, ctx } : undefined,
       );
       moved[formIds[0]] = (moved[formIds[0]] ?? 0) + count;
     }
 
-    for (const [formId, ids] of rowIdsByFormId) {
-      const rowCollection = FORM_TARGETS[formId].rowCollection;
-      if (!rowCollection) continue;
-      const rowFrom = FORM_TARGETS[formId].rowFromStatuses ?? [FORM_STATUS.UNDER_REVIEW_BY_SO];
-      await this.assertNotChanged(rowCollection, 'rowStatus', rowFrom, [...ids], session);
+    for (const { formId, rowCollection, rowHistory, from, ids } of rowMoves) {
       const count = await this.updateStatus(
         rowCollection,
         'rowStatus',
-        rowFrom,
-        [...ids],
+        from,
+        ids,
         { rowStatus: toStatus, updatedBy: userOid, updatedAt: now },
         session,
+        undefined,
+        rowHistory && { writer: rowHistory, ctx },
       );
       moved[formId] = (moved[formId] ?? 0) + count;
     }
@@ -303,6 +513,8 @@ export class ClaimLetterFormStatusService {
     const returned: ClaimLetterReturnedSource[] = [];
     const passedSource = (formId: number) =>
       letter.stateSources.find((s) => s.formId === formId && s.result === 'PASSED' && s.formDocumentId);
+    const ctxFor = (remark: string | null, by: DecisionRecord = decision) =>
+      this.historyContext(false, toStatus, by, remark, claimLetterId, session);
     const returnStateForm = async (formId: number, formDocumentId: Types.ObjectId, remark: string | null) => {
       const target = FORM_TARGETS[formId];
       await this.updateStatus(
@@ -312,6 +524,8 @@ export class ClaimLetterFormStatusService {
         [String(formDocumentId)],
         { ...target.buildSet(toStatus), ...target.buildReturnSet(remark, decision), ...audit },
         session,
+        undefined,
+        target.history ? { writer: target.history, ctx: ctxFor(remark) } : undefined,
       );
       returned.push(this.returnedRef(formId, formDocumentId, null, null, remark));
     };
@@ -348,6 +562,8 @@ export class ClaimLetterFormStatusService {
           [String(rowId)],
           { rowStatus: toStatus, ...(target.rowRemarkField && { [target.rowRemarkField]: remark }), ...audit },
           session,
+          undefined,
+          target.rowHistory && { writer: target.rowHistory, ctx: ctxFor(remark) },
         );
         if (count) returned.push(this.returnedRef(formId, source.formDocumentId, rowId, ulbReturn.ulbId, remark));
       }
@@ -389,12 +605,26 @@ export class ClaimLetterFormStatusService {
           },
           session,
           form.target.returnArrayFilters,
+          form.target.history
+            ? { writer: form.target.history, ctx: ctxFor(ulbReturn.remark, ulbReturn.decision) }
+            : undefined,
         );
         if (count) returned.push(this.returnedRef(form.formId, form.id, null, form.ulbId, ulbReturn.remark));
       }
     }
 
     return returned;
+  }
+
+  private historyContext(
+    approve: boolean,
+    toStatus: number,
+    decision: DecisionRecord,
+    remark: string | null,
+    claimLetterId: Types.ObjectId,
+    session: ClientSession,
+  ): HistoryContext {
+    return { approve, toStatus, decision, remark, claimLetterId, connection: this.connection, session };
   }
 
   private returnedRef(
@@ -534,7 +764,8 @@ export class ClaimLetterFormStatusService {
    * The claim lock guard for this move: a form the letter relied on must still be waiting at `fromStatus`, or
    * already past it (5 or 7, moved by an earlier letter). Anything else means it changed after the letter was
    * submitted (e.g. the State undid a ULB form's approval), so the whole approval is refused rather than
-   * leaving a letter that claims a form no longer ready.
+   * leaving a letter that claims a form no longer ready. A form or row that no longer exists (deleted, e.g. by a
+   * re-upload) counts as changed too: the documents still in an accepted status are counted against the ids.
    */
   private async assertNotChanged(
     collection: string,
@@ -545,11 +776,13 @@ export class ClaimLetterFormStatusService {
   ): Promise<void> {
     const target = this.connection.collection(collection);
     const accepted = [...fromStatuses, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA];
-    let changed = 0;
-    for (let i = 0; i < ids.length; i += WRITE_CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + WRITE_CHUNK_SIZE).map((id) => new Types.ObjectId(id));
-      changed += await target.countDocuments({ _id: { $in: chunk }, [statusField]: { $nin: accepted } }, { session });
+    const uniqueIds = [...new Set(ids)];
+    let ready = 0;
+    for (let i = 0; i < uniqueIds.length; i += WRITE_CHUNK_SIZE) {
+      const chunk = uniqueIds.slice(i, i + WRITE_CHUNK_SIZE).map((id) => new Types.ObjectId(id));
+      ready += await target.countDocuments({ _id: { $in: chunk }, [statusField]: { $in: accepted } }, { session });
     }
+    const changed = uniqueIds.length - ready;
     if (changed > 0) {
       throw new ConflictException(
         `${changed} form(s) in this claim letter changed after it was submitted and are no longer ready. Return the letter to the State instead of approving it.`,
@@ -557,6 +790,10 @@ export class ClaimLetterFormStatusService {
     }
   }
 
+  /**
+   * The conditional status write. With `history`, the documents that match are read first (inside the transaction, so
+   * they are exactly what the update moves), updated by id, and each gets one history row.
+   */
   private async updateStatus(
     collection: string,
     statusField: string,
@@ -565,17 +802,33 @@ export class ClaimLetterFormStatusService {
     set: Record<string, unknown>,
     session: ClientSession,
     arrayFilters?: Record<string, unknown>[],
+    history?: { writer: HistoryWriter; ctx: HistoryContext },
   ): Promise<number> {
     const target = this.connection.collection(collection);
+    const statusFilter = Array.isArray(fromStatus) ? { $in: fromStatus } : fromStatus;
     let modified = 0;
     for (let i = 0; i < ids.length; i += WRITE_CHUNK_SIZE) {
-      const chunk = ids.slice(i, i + WRITE_CHUNK_SIZE).map((id) => new Types.ObjectId(id));
+      let chunk = ids.slice(i, i + WRITE_CHUNK_SIZE).map((id) => new Types.ObjectId(id));
+      let moved: MovedDoc[] = [];
+      if (history) {
+        const projection = Object.fromEntries([statusField, ...history.writer.fields].map((field) => [field, 1]));
+        const docs = await target
+          .find({ _id: { $in: chunk }, [statusField]: statusFilter }, { projection, session })
+          .toArray();
+        if (!docs.length) continue;
+        moved = docs.map((doc) => ({ doc, fromStatus: (doc[statusField] as number | null | undefined) ?? null }));
+        chunk = docs.map((doc) => doc['_id'] as Types.ObjectId);
+      }
       const result = await target.updateMany(
-        { _id: { $in: chunk }, [statusField]: Array.isArray(fromStatus) ? { $in: fromStatus } : fromStatus },
+        { _id: { $in: chunk }, [statusField]: statusFilter },
         { $set: set },
         { session, ...(arrayFilters && { arrayFilters }) },
       );
       modified += result.modifiedCount;
+      if (history && moved.length) {
+        const rows = await history.writer.rows(moved, history.ctx);
+        await this.connection.collection(history.writer.collection).insertMany(rows, { session });
+      }
     }
     return modified;
   }

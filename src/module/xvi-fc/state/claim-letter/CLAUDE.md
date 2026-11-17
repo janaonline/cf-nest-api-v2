@@ -20,6 +20,10 @@ Each decision below is cited from several files; read the ADR, not just the loca
   request under MoHUA review or approved counts; how the claim follows a later decision.
 - [docs/adr/0006-claim-amount-switch.md](docs/adr/0006-claim-amount-switch.md) - the claim is the
   allocation unless formjson 26 `meta.claimAmountEditable` is on, and how to turn it back on.
+- [docs/adr/0007-so-review-stage.md](docs/adr/0007-so-review-stage.md) - the MoHUA Section Officer's approve
+  and return: the fresh re-check, exemptions in the letter's transaction, frozen rows, form history, emails.
+- [docs/adr/0008-ref-no-after-a-return.md](docs/adr/0008-ref-no-after-a-return.md) - a letter built in a slot a
+  returned letter held gets `-R<n>` in its Ref No and file names (`resubmissionNumber`).
 
 ## Layout
 
@@ -52,8 +56,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
   live from 8 through the enabled ULB-level form-json sources, so a letter built before a ULB form became a condition
   still moves it (a ULB the letter recorded as exempt for a form is skipped). One conditional `updateMany` per
   collection. The forms the evidence relied on are also the claim lock guard: if one changed after submit (e.g. a
-  State undo of a ULB approval) the whole approval is refused (409). It writes the status only - the letter's own
-  history is the audit trail, the forms' history collections get no row.
+  State undo of a ULB approval, or a deleted form or row) the whole approval is refused (409). Each form or row
+  it moves also gets a row in that form's own history collection, in the same transaction (ADR 0007; Devolution
+  rows and SLB, which is deemed approved, have none).
   `returnFormsForCorrection` is the SO's return (mohua/claim-letters `return`): only what the SO marked goes to 16
   (Returned for Correction), everything else keeps its status. The SO marks each ULB first (its `soDecision` on the
   claim ULB row); the return takes each RETURNED ULB with its own picks and remark, plus the State-wide forms (SFC,
@@ -61,7 +66,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
   goes to 16 with its remark (`rejectionRemark`), and the form has to move with it because a row is only
   State-editable while its form is (the form's own `rejectionRemarks` is the State remark, or a pointer to the rows).
   An "Eligible via exemption" ULB is returned through its exemptions instead (`soDecision.rejectExemptionFormIds`,
-  rejected by the MoHUA service before this writer runs; see ADR 0005), so it reaches this writer with nothing to
+  rejected by the MoHUA service in the same transaction; see ADR 0005), so it reaches this writer with nothing to
   reopen. A RETURNED ULB's picked form goes 8 -> 16 with that ULB's `mohuaDecision` note; Annual Accounts also marks every State-approved document's `stateDecision` RETURNED
   with the SO's note (an approved document can't be re-uploaded), so the ULB sees Re-upload and must re-upload each
   before resubmitting, exactly as after a State return. The fix goes back through PMU (13) / the State (3). Devolution's final submit clears its
@@ -125,7 +130,8 @@ two can never disagree; the frontend renders the backend's text verbatim.
   getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
 - Names: each one names the State, FY, installment and batch. `fileBaseName` is
   `CF_TR_2026-27_1-1`, the printed Ref No `CL/TR/2026-27/1-1`, and the .docx, the final PDF download
-  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`.
+  and its stored `originalName` `CF_Tripura_Claim-letter-1-1_2026-27`. A letter built in a slot a returned
+  letter held adds `-R<n>` to all of them (`1-1-R1`, ADR 0008).
 
 ## Letter details
 
@@ -218,6 +224,6 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
 ## Known gaps
 
 - Installment 2 is rejected on every path (`assertInstallmentSupported`).
-- `createNewVersion` and `acknowledgeLocks` wait for the MoHUA rejection and approval steps (ADR 0003);
-  until approval exists, a submitted batch stays active and blocks the next one (ADR 0004).
+- `createNewVersion` and `acknowledgeLocks` wait for MoHUA's own final approval and return steps (5 -> 7 / 6;
+  ADR 0003, ADR 0007).
 - `detectAnomalies` has no route or schedule; it is only callable from code.

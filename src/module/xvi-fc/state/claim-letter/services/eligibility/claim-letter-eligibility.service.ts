@@ -36,6 +36,14 @@ import {
 import { sumAmountsExactly } from '../../helpers/claim-letter-financial.helpers';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 
+/** What no longer holds for a claim letter's ULBs (see `recheckClaimLetter`). Empty lists mean it still holds. */
+export interface ClaimLetterRecheck {
+  /** Display labels of the State-level conditions that now fail. */
+  failedStateConditions: string[];
+  /** Letter ULBs that no longer meet their criteria, or are no longer active / expected for the State. */
+  ineligibleUlbs: { ulbId: string; name: string; reason: 'NOT_ELIGIBLE' | 'NOT_ACTIVE' }[];
+}
+
 export interface ClaimLetterStateLevelGate {
   sources: EligibilityEvaluationResult[];
   passed: boolean;
@@ -431,6 +439,51 @@ export class ClaimLetterEligibilityService {
       rowEvidenceByFormId,
       perCriterion,
     };
+  }
+
+  /**
+   * Re-runs a claim letter's conditions, fresh (never the display cache): the State-level gate, each of its ULBs'
+   * criteria, and whether each ULB is still active and expected for the State (an inactive ULB drops out of that set).
+   * Returns what no longer holds rather than throwing, so the State's submit and the SO's approve each word their own
+   * message. A pending (5) exemption still counts; a rejected one fails its ULB.
+   */
+  async recheckClaimLetter(scope: {
+    _id: Types.ObjectId;
+    state: Types.ObjectId;
+    year: Types.ObjectId;
+    installment: 1 | 2;
+  }): Promise<ClaimLetterRecheck> {
+    const stateId = String(scope.state);
+    const yearId = String(scope.year);
+    const [children, gate, expected] = await Promise.all([
+      this.batchUlbModel
+        .find({ claimLetter: scope._id })
+        .select('ulbId ulbSnapshot.name')
+        .lean<{ ulbId: Types.ObjectId; ulbSnapshot: { name: string } }[]>()
+        .exec(),
+      this.evaluateStateLevelGate(stateId, yearId, scope.installment),
+      this.expectedUlbSetService.resolve(stateId, yearId),
+    ]);
+    const failedStateConditions = gate.passed
+      ? []
+      : gate.sources.filter((src) => src.result === 'FAILED').map((src) => src.displayLabel ?? src.formType);
+
+    const expectedIds = new Set(expected.map((u) => String(u.ulbId)));
+    const active = children.filter((c) => expectedIds.has(String(c.ulbId)));
+    const ulbLevel = await this.resolveUlbLevelEligibility(
+      stateId,
+      yearId,
+      scope.installment,
+      active.map((c) => String(c.ulbId)),
+    );
+    const ineligibleUlbs = children.flatMap((c): ClaimLetterRecheck['ineligibleUlbs'] => {
+      const ulbId = String(c.ulbId);
+      if (!expectedIds.has(ulbId)) return [{ ulbId, name: c.ulbSnapshot.name, reason: 'NOT_ACTIVE' as const }];
+      return ulbLevel.perUlbEligible.get(ulbId) === false
+        ? [{ ulbId, name: c.ulbSnapshot.name, reason: 'NOT_ELIGIBLE' as const }]
+        : [];
+    });
+    return { failedStateConditions, ineligibleUlbs };
   }
 
   /** ULBs locked in any batch. The picker excludes its own batch, so its picks stay selectable; the

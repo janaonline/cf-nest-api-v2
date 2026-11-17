@@ -12,6 +12,8 @@ import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban
 import type { EulbTypedFieldConfig } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import { ElectedUrbanLocalBodiesForm } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import { ElectedUrbanLocalBodiesRow } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -103,6 +105,7 @@ interface TestEulbRowError {
 
 interface TestEulbRow {
   _id: Types.ObjectId;
+  ulbId?: Types.ObjectId;
   form: Types.ObjectId;
   state: Types.ObjectId;
   year: Types.ObjectId;
@@ -411,6 +414,8 @@ describe('EulbPostSubmissionUpdateService', () => {
   let service: EulbPostSubmissionUpdateService;
   let formModel: Record<string, jest.Mock | Record<string, jest.Mock>>;
   let rowModel: Record<string, jest.Mock>;
+  let lockModel: { find: jest.Mock };
+  let batchModel: { find: jest.Mock };
   let mockSession: Record<string, jest.Mock>;
 
   beforeEach(async () => {
@@ -432,6 +437,9 @@ describe('EulbPostSubmissionUpdateService', () => {
       findByIdAndUpdate: jest.fn().mockReturnValue(q(null)),
       aggregate: jest.fn().mockReturnValue(q([])), // default: empty summary (all counts 0)
     };
+    // Default: no ULB is in any claim letter.
+    lockModel = { find: jest.fn().mockReturnValue(q([])) };
+    batchModel = { find: jest.fn().mockReturnValue(q([])) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -439,6 +447,8 @@ describe('EulbPostSubmissionUpdateService', () => {
         ElectedUrbanLocalBodiesValidator,
         { provide: getModelToken(ElectedUrbanLocalBodiesForm.name), useValue: formModel },
         { provide: getModelToken(ElectedUrbanLocalBodiesRow.name), useValue: rowModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: lockModel },
+        { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
         { provide: EulbFormJsonConfigService, useValue: mockEulbFormJsonConfigService },
         FileInfoNormalizerService,
         { provide: FileUrlNormalizerService, useValue: { toRawStoragePath: jest.fn((v: string) => v) } },
@@ -1280,6 +1290,47 @@ describe('EulbPostSubmissionUpdateService', () => {
           adminUser,
         ),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    describe('ULBs in a claim letter', () => {
+      const ulbId = new Types.ObjectId();
+      const letterId = new Types.ObjectId();
+      const run = () =>
+        service.validateBatch(
+          stateOid.toString(),
+          yearOid.toString(),
+          { rows: [{ rowId: rowOid.toString(), electedBodyStatus: 'Not Constituted' }] },
+          adminUser,
+        );
+
+      beforeEach(() => {
+        rowModel['find'] = jest.fn().mockReturnValue(q([makeEligibleRow({ ulbId, ulbName: 'Khowai' })]));
+        lockModel.find.mockReturnValue(q([{ ulbId, claimLetter: letterId }]));
+      });
+
+      it('refuses a ULB whose letter was submitted, naming it', async () => {
+        batchModel.find.mockReturnValue(q([{ _id: letterId }]));
+
+        const err = (await run().catch((e: unknown) => e)) as BadRequestException;
+
+        expect(err).toBeInstanceOf(BadRequestException);
+        expect(JSON.stringify(err.getResponse())).toContain("submitted claim letter and can't be updated: Khowai");
+        expect(batchModel.find.mock.calls[0][0]).toMatchObject({
+          currentFormStatus: {
+            $in: [
+              FORM_STATUS.UNDER_REVIEW_BY_SO,
+              FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+            ],
+          },
+        });
+      });
+
+      it('allows a ULB that is only in a draft letter', async () => {
+        batchModel.find.mockReturnValue(q([]));
+
+        await expect(run()).resolves.toMatchObject({ success: true });
+      });
     });
 
     it('passes isActive:true in the row model filter', async () => {

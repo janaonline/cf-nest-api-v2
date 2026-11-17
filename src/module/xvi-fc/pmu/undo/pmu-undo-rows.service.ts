@@ -1,6 +1,6 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Model, Types } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
@@ -59,6 +59,7 @@ import {
 } from '../fc-unspent-declaration/services/fc-unspent-pmu-row-review-domain.service';
 import type { FcUnspentPmuFormLean, FcUnspentPmuRowLean } from '../fc-unspent-declaration/types/fc-unspent-pmu-review.types';
 import type { PmuUndoResult } from './pmu-undo.service';
+import { runInTransaction } from './run-in-transaction';
 
 interface UndoContext {
   user: AuthUser;
@@ -68,7 +69,7 @@ interface UndoContext {
 
 /**
  * The undo for the two row-bearing forms (Elected Body, FC Unspent): the form and every PMU-decided row
- * (5 or 14) go back to 13 together, in one transaction, logged `5|14 -> 10 -> 13` on the form and per row.
+ * (15 or 14) go back to 13 together, in one transaction, logged `15|14 -> 10 -> 13` on the form and per row.
  * The status writes are conditional, so a decision made in the meantime aborts the whole thing with a 409.
  * Called by `PmuUndoService`, which has already checked the caller's PMU access.
  */
@@ -99,13 +100,12 @@ export class PmuUndoRowFormsService {
   ): Promise<XviFcApiResponse<PmuUndoResult>> {
     const form = await this.eulbFormModel
       .findOne({ state, year, formType: EULB_FORM_TYPE })
-      .select('state year currentFormStatus activeDatasetVersion pmuRemarks')
+      .select('state year currentFormStatus activeDatasetVersion rejectionRemarks')
       .lean<EulbPmuFormLean>()
       .exec();
     if (!form) throw new NotFoundException('Elected Urban Local Bodies form not found for this state and year.');
 
     assertCanPmuUndoForm(form.currentFormStatus);
-    await this.eligibility.assertNoClaimLetterLocks(form.state, form.year);
 
     const activeRows = await this.rowHelper.getActiveRows<EulbRowDocument, EulbPmuRowLean>({
       rowModel: this.eulbRowModel,
@@ -118,7 +118,11 @@ export class PmuUndoRowFormsService {
     const userOid = new Types.ObjectId(ctx.user._id);
     const fromStatus = form.currentFormStatus;
 
-    return this.inTransaction<EulbFormDocument, XviFcApiResponse<PmuUndoResult>>(this.eulbFormModel, async (session) => {
+    return runInTransaction<EulbFormDocument, XviFcApiResponse<PmuUndoResult>>(this.eulbFormModel, async (session) => {
+      await this.eligibility.touchClaimUndoGuard(form.state, form.year, session);
+      await this.eligibility.assertNoClaimLetterLocks(form.state, form.year, session);
+      await this.eligibility.assertPmuDecision({ type: 'ELECTED_BODY', id: form._id }, fromStatus, session);
+
       const moved = await this.rowHelper.undoRows<EulbRowDocument, EulbRowHistoryDocument, EulbPmuRowLean>({
         rowModel: this.eulbRowModel,
         rowHistoryModel: this.eulbRowHistoryModel,
@@ -137,9 +141,12 @@ export class PmuUndoRowFormsService {
       await this.formHelper.transitionForm<EulbFormDocument>({
         formModel: this.eulbFormModel,
         formId: form._id,
-        setFields: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid, pmuRemarks: null },
+        setFields: { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, updatedBy: userOid, rejectionRemarks: null },
         session,
         expectedStatus: fromStatus,
+        // The rows reopened above came from this dataset version; a State upload replacing it since
+        // would leave the new rows un-reopened, so the whole undo aborts (409) instead.
+        expectedFields: { activeDatasetVersion: form.activeDatasetVersion },
         notFoundMessage: 'Elected Urban Local Bodies form not found.',
       });
       await this.formHelper.writeUndoHistory<EulbFormHistoryDocument>({
@@ -158,7 +165,7 @@ export class PmuUndoRowFormsService {
           ip: ctx.ip,
           userAgent: ctx.userAgent,
           snapshot: null,
-          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? undefined) : undefined,
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.rejectionRemarks ?? undefined) : undefined,
         }),
       });
 
@@ -184,7 +191,6 @@ export class PmuUndoRowFormsService {
     if (!form) throw new NotFoundException('FC Unspent Declaration form not found for this state and year.');
 
     assertCanPmuUndoForm(form.currentFormStatus);
-    await this.eligibility.assertNoClaimLetterLocks(form.state, form.year);
 
     let toReopen: FcUnspentPmuRowLean[] = [];
     if (form.isFcUnspent === true) {
@@ -210,7 +216,11 @@ export class PmuUndoRowFormsService {
     const fromStatus = form.currentFormStatus;
     const newAuditRevision = form.auditRevision + 1;
 
-    return this.inTransaction<XviFcUnspentStateFormDocument, XviFcApiResponse<PmuUndoResult>>(this.fcFormModel, async (session) => {
+    return runInTransaction<XviFcUnspentStateFormDocument, XviFcApiResponse<PmuUndoResult>>(this.fcFormModel, async (session) => {
+      await this.eligibility.touchClaimUndoGuard(form.state, form.year, session);
+      await this.eligibility.assertNoClaimLetterLocks(form.state, form.year, session);
+      await this.eligibility.assertPmuDecision({ type: 'FC_UNSPENT', id: form._id }, fromStatus, session);
+
       const moved = await this.rowHelper.undoRows<
         XviFcUnspentStateFormRowDocument,
         XviFcUnspentStateFormRowHistoryDocument,
@@ -237,7 +247,7 @@ export class PmuUndoRowFormsService {
           currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
           auditRevision: newAuditRevision,
           updatedBy: userOid,
-          pmuRemarks: null,
+          rejectionRemarks: null,
         },
         session,
         expectedStatus: fromStatus,
@@ -262,7 +272,7 @@ export class PmuUndoRowFormsService {
             checkboxConfirmation: form.checkboxConfirmation,
           },
           snapshot: [],
-          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.pmuRemarks ?? undefined) : undefined,
+          remarks: step.toStatus === FORM_STATUS.UNDO ? (form.rejectionRemarks ?? undefined) : undefined,
           changedBy: userOid,
           changedAt: step.changedAt,
           ip: ctx.ip,
@@ -274,10 +284,10 @@ export class PmuUndoRowFormsService {
     });
   }
 
-  /** The rows PMU had decided: approved onward (5) or returned (14). Anything else is left exactly as it is. */
+  /** The rows PMU had decided: approved onward to the SO (15) or returned (14). Anything else is left exactly as it is. */
   private pmuDecidedRows<TRow extends { rowStatus: number | null }>(rows: TRow[]): TRow[] {
     return rows.filter(
-      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA || r.rowStatus === FORM_STATUS.RETURNED_BY_PMU,
+      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.RETURNED_BY_PMU,
     );
   }
 
@@ -294,24 +304,5 @@ export class PmuUndoRowFormsService {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
-  }
-
-  /** Runs `work` in a Mongo transaction on `model`'s connection, always ending the session. */
-  private async inTransaction<T, R>(
-    model: Model<T>,
-    work: (session: ClientSession) => Promise<R>,
-  ): Promise<R> {
-    const session = await model.db.startSession();
-    try {
-      session.startTransaction();
-      const result = await work(session);
-      await session.commitTransaction();
-      return result;
-    } catch (err) {
-      await session.abortTransaction();
-      throw err;
-    } finally {
-      await session.endSession();
-    }
   }
 }

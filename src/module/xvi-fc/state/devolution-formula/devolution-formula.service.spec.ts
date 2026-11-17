@@ -578,6 +578,37 @@ describe('DevolutionFormulaService', () => {
     });
   });
 
+  describe('saveDraft when its status-guarded write loses a race (duplicate key on the upsert)', () => {
+    const duplicateKeyWrite = () => {
+      const error = Object.assign(new Error('E11000 duplicate key error'), { code: 11000 });
+      return { lean: () => ({ exec: () => Promise.reject(error) }) };
+    };
+    const save = () =>
+      service.saveDraft(
+        { stateId: stateOid.toString(), yearId: YEAR_ID, installment: 1, data: { checkboxConfirmation: true } },
+        adminUser,
+      );
+
+    it('refuses with a conflict when the form is still editable, and writes no history', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.IN_PROGRESS }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(duplicateKeyWrite());
+
+      await expect(save()).rejects.toMatchObject({ response: { errors: { _form: [{ code: 'conflict' }] } } });
+      expect(mockHistoryModel.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses with the status error when the form moved to a status the State cannot edit', async () => {
+      mockFormModel.findOne
+        .mockReturnValueOnce(q({ _id: formOid, currentFormStatus: FORM_STATUS.IN_PROGRESS }))
+        .mockReturnValueOnce(q({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
+      mockFormModel.findOneAndUpdate.mockReturnValue(duplicateKeyWrite());
+
+      await expect(save()).rejects.toThrow('Form cannot be edited when status is Under Review by PMU.');
+    });
+  });
+
   // Test 12: URL normalization before save
   it('saveDraft normalizes a signed file URL to a raw storage path before persisting', async () => {
     const signedUrl = 'https://cdn.example.com/signed-file.xlsx?token=abc';
@@ -2280,7 +2311,7 @@ describe('DevolutionFormulaRowService', () => {
       expect(mockRowModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('queries the lock by state/year/installment/ulbId and lockState ACTIVE', async () => {
+    it('queries the lock by state/year/installment/ulbId, ACTIVE or ACKNOWLEDGED', async () => {
       mockSuccessfulEditChain();
       mockClaimLetterUlbLockModel.findOne.mockReturnValue(q(null));
 
@@ -2298,7 +2329,7 @@ describe('DevolutionFormulaRowService', () => {
         year: yearOid,
         installment: 1,
         ulbId: ulbOid,
-        lockState: 'ACTIVE',
+        lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] },
       });
     });
 

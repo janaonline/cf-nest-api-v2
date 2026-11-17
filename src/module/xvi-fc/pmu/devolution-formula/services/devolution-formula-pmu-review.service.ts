@@ -101,7 +101,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<DevolutionFormulaFormDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -152,7 +152,7 @@ export class DevolutionFormulaPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
-    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'DEVOLUTION_FORMULA', id: doc._id });
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const mainFormFields = getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS');
@@ -313,7 +313,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<DevolutionFormulaPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus activeDatasetVersion pmuRemarks')
+      .select('state year installment currentFormStatus activeDatasetVersion rejectionRemarks')
       .lean<DevolutionFormulaPmuFormLean>()
       .exec();
   }

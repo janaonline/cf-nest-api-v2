@@ -7,6 +7,7 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
@@ -75,6 +76,7 @@ describe('ClaimLetterAssemblyService', () => {
   let batchModel: {
     findOne: jest.Mock;
     find: jest.Mock;
+    countDocuments: jest.Mock;
     create: jest.Mock;
     findOneAndUpdate: jest.Mock;
     findById: jest.Mock;
@@ -188,6 +190,7 @@ describe('ClaimLetterAssemblyService', () => {
     batchModel = {
       findOne: jest.fn().mockReturnValue(q(null)),
       find: jest.fn().mockReturnValue(q([])),
+      countDocuments: jest.fn().mockReturnValue(q(0)),
       create: jest.fn().mockResolvedValue([{ _id: parentId, batchNumber: 1, version: 1 }]),
       findOneAndUpdate: jest.fn().mockReturnValue(
         q({
@@ -254,6 +257,7 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
+        { provide: PmuUndoEligibilityService, useValue: { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 
@@ -340,6 +344,30 @@ describe('ClaimLetterAssemblyService', () => {
   });
 
   // ─── Step 1-2: batch-number allocation + lock acquisition ──────────────────
+
+  it('names the first letter in a slot without an -R suffix', async () => {
+    await service.createDraft(baseInput());
+
+    const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(createArgs[0]).toMatchObject({ batchNumber: 1, resubmissionNumber: 0, fileBaseName: 'CF_KA_2026-27_1-1' });
+  });
+
+  it("numbers a letter built in a slot returned letters held, counting only that slot's returned letters", async () => {
+    batchModel.countDocuments.mockReturnValue(q(2));
+
+    await service.createDraft(baseInput());
+
+    expect(batchModel.countDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({
+        installment: 1,
+        batchNumber: 1,
+        isAbandoned: true,
+        currentFormStatus: { $in: [16, 6] },
+      }),
+    );
+    const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(createArgs[0]).toMatchObject({ resubmissionNumber: 2, fileBaseName: 'CF_KA_2026-27_1-1-R2' });
+  });
 
   it('throws ConflictException when all 3 batch slots are genuinely live (nothing to reclaim)', async () => {
     batchModel.find
@@ -1892,6 +1920,9 @@ describe('ClaimLetterAssemblyService', () => {
 
       const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
       expect(createArgs[0]).toMatchObject({ batchNumber: 1, version: 2, supersedes: parentId });
+      // A new version is the same letter: no recount, same Ref No.
+      expect(batchModel.countDocuments).not.toHaveBeenCalled();
+      expect(createArgs[0]).toMatchObject({ resubmissionNumber: 0, fileBaseName: 'CF_KA_2026-27_1-1' });
 
       expect(batchModel.updateOne).toHaveBeenCalledWith(
         { _id: parentId },
@@ -1903,6 +1934,23 @@ describe('ClaimLetterAssemblyService', () => {
         session,
       );
       expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it("keeps a resubmitted letter's -R number on its new version", async () => {
+      batchModel.findOne.mockReturnValue(q(previousParentDoc({ resubmissionNumber: 1 })));
+      batchModel.create.mockResolvedValue([{ _id: newParentId, batchNumber: 1, version: 2 }]);
+      batchUlbModel.find
+        .mockReturnValueOnce(q([{ ulbId: ulbAId, claimedAmount: 100 }]))
+        .mockReturnValueOnce(q([persistedChild({ claimLetter: newParentId, version: 2 })]));
+      lockModel.find.mockReturnValue(q([{ ulbId: ulbAId }]));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({ _id: newParentId, assemblyStatus: 'READY', batchNumber: 1, version: 2, supersedes: parentId }),
+      );
+
+      await service.createNewVersion(parentId.toString(), 'reason', stateUser);
+
+      const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
+      expect(createArgs[0]).toMatchObject({ resubmissionNumber: 1, fileBaseName: 'CF_KA_2026-27_1-1-R1' });
     });
 
     it.each([

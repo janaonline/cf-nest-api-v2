@@ -28,12 +28,12 @@ describe('PmuUndoRowFormsService', () => {
   let fcFormModel: { findOne: jest.Mock; db: { startSession: jest.Mock } };
   let formHelper: { transitionForm: jest.Mock; writeUndoHistory: jest.Mock };
   let rowHelper: { getActiveRows: jest.Mock; undoRows: jest.Mock };
-  let eligibility: { assertNoClaimLetterLocks: jest.Mock };
+  let eligibility: { touchClaimUndoGuard: jest.Mock; assertNoClaimLetterLocks: jest.Mock; assertPmuDecision: jest.Mock };
   let service: PmuUndoRowFormsService;
 
   const eulbForm = (status: number, extra: Record<string, unknown> = {}) =>
     jest.fn().mockReturnValue(
-      q({ _id: formOid, state: stateOid, year: yearOid, currentFormStatus: status, activeDatasetVersion: 2, pmuRemarks: 'Old', ...extra }),
+      q({ _id: formOid, state: stateOid, year: yearOid, currentFormStatus: status, activeDatasetVersion: 2, rejectionRemarks: 'Old', ...extra }),
     );
   const fcForm = (status: number, extra: Record<string, unknown> = {}) =>
     jest.fn().mockReturnValue(
@@ -47,7 +47,7 @@ describe('PmuUndoRowFormsService', () => {
         fcUnspentDeclaration: null,
         checkboxConfirmation: true,
         auditRevision: 4,
-        pmuRemarks: 'Old',
+        rejectionRemarks: 'Old',
         ...extra,
       }),
     );
@@ -59,11 +59,15 @@ describe('PmuUndoRowFormsService', () => {
       abortTransaction: jest.fn().mockResolvedValue(undefined),
       endSession: jest.fn().mockResolvedValue(undefined),
     };
-    eulbFormModel = { findOne: eulbForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), db: { startSession: jest.fn().mockResolvedValue(session) } };
+    eulbFormModel = { findOne: eulbForm(FORM_STATUS.UNDER_REVIEW_BY_SO), db: { startSession: jest.fn().mockResolvedValue(session) } };
     fcFormModel = { findOne: fcForm(FORM_STATUS.RETURNED_BY_PMU), db: { startSession: jest.fn().mockResolvedValue(session) } };
     formHelper = { transitionForm: jest.fn().mockResolvedValue({}), writeUndoHistory: jest.fn().mockResolvedValue(undefined) };
     rowHelper = { getActiveRows: jest.fn().mockResolvedValue([]), undoRows: jest.fn().mockResolvedValue(0) };
-    eligibility = { assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined) };
+    eligibility = {
+      touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined),
+      assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined),
+      assertPmuDecision: jest.fn().mockResolvedValue(undefined),
+    };
 
     service = new PmuUndoRowFormsService(
       eulbFormModel as never,
@@ -95,15 +99,28 @@ describe('PmuUndoRowFormsService', () => {
       },
     );
 
-    it('refuses once a claim letter exists, before reading rows or opening a transaction', async () => {
+    it('refuses once a claim letter exists: checked in the transaction, after the guard, before any row moves', async () => {
       eligibility.assertNoClaimLetterLocks.mockRejectedValueOnce(new ConflictException('claim started'));
       await expect(service.undoElectedBody(stateOid, yearOid, ctx)).rejects.toThrow(ConflictException);
-      expect(rowHelper.getActiveRows).not.toHaveBeenCalled();
-      expect(eulbFormModel.db.startSession).not.toHaveBeenCalled();
+      expect(eligibility.touchClaimUndoGuard).toHaveBeenCalledWith(stateOid, yearOid, session);
+      expect(eligibility.assertNoClaimLetterLocks).toHaveBeenCalledWith(stateOid, yearOid, session);
+      expect(rowHelper.undoRows).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a form that reached 5 before the PMU stage existed (no PMU decision in its history)', async () => {
+      eligibility.assertPmuDecision.mockRejectedValueOnce(new ForbiddenException('not decided by PMU'));
+      await expect(service.undoElectedBody(stateOid, yearOid, ctx)).rejects.toThrow(ForbiddenException);
+      expect(eligibility.assertPmuDecision).toHaveBeenCalledWith(
+        { type: 'ELECTED_BODY', id: formOid },
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
+        session,
+      );
+      expect(rowHelper.undoRows).not.toHaveBeenCalled();
     });
 
     it('reopens only the PMU-decided rows (5 and 14), then the form conditionally, and commits', async () => {
-      const approved = row(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      const approved = row(FORM_STATUS.UNDER_REVIEW_BY_SO);
       const returned = row(FORM_STATUS.RETURNED_BY_PMU);
       rowHelper.getActiveRows.mockResolvedValue([approved, returned, row(FORM_STATUS.UNDER_REVIEW_BY_PMU), row(null)]);
       rowHelper.undoRows.mockResolvedValue(2);
@@ -115,13 +132,15 @@ describe('PmuUndoRowFormsService', () => {
       expect(undoArgs.rows).toEqual([approved, returned]);
 
       const transition = formHelper.transitionForm.mock.calls[0][0] as Record<string, unknown>;
-      expect(transition['expectedStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(transition['expectedStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
+      // A State upload replacing the dataset the rows came from makes the form write miss (409).
+      expect(transition['expectedFields']).toEqual({ activeDatasetVersion: 2 });
       expect(transition['session']).toBe(session);
-      expect(transition['setFields']).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, pmuRemarks: null });
+      expect(transition['setFields']).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, rejectionRemarks: null });
 
       const history = formHelper.writeUndoHistory.mock.calls[0][0] as { fromStatus: number; buildDocument: (s: unknown) => Record<string, unknown> };
-      expect(history.fromStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
-      const first = history.buildDocument({ fromStatus: 5, toStatus: FORM_STATUS.UNDO, changedAt: new Date() });
+      expect(history.fromStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
+      const first = history.buildDocument({ fromStatus: 15, toStatus: FORM_STATUS.UNDO, changedAt: new Date() });
       const second = history.buildDocument({ fromStatus: FORM_STATUS.UNDO, toStatus: 13, changedAt: new Date() });
       expect(first['remarks']).toBe('Old'); // the cleared remark survives on the first entry
       expect(second['remarks']).toBeUndefined();
@@ -133,7 +152,7 @@ describe('PmuUndoRowFormsService', () => {
     });
 
     it('aborts with a 409 when a row moved under it (fewer rows updated than expected), writing no form change', async () => {
-      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), row(FORM_STATUS.RETURNED_BY_PMU)]);
+      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.UNDER_REVIEW_BY_SO), row(FORM_STATUS.RETURNED_BY_PMU)]);
       rowHelper.undoRows.mockResolvedValue(1);
 
       await expect(service.undoElectedBody(stateOid, yearOid, ctx)).rejects.toThrow(ConflictException);
@@ -161,21 +180,21 @@ describe('PmuUndoRowFormsService', () => {
     });
 
     it('refuses once MoHUA has decided any row, before opening a transaction', async () => {
-      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), row(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA)]);
+      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.UNDER_REVIEW_BY_SO), row(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA)]);
 
       await expect(service.undoFcUnspent(stateOid, REAL_YEAR, ctx)).rejects.toThrow(BadRequestException);
       expect(fcFormModel.db.startSession).not.toHaveBeenCalled();
     });
 
     it('reopens PMU-decided rows and bumps the audit revision on the form and both history entries', async () => {
-      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.RETURNED_BY_PMU), row(FORM_STATUS.UNDER_REVIEW_BY_MOHUA)]);
+      rowHelper.getActiveRows.mockResolvedValue([row(FORM_STATUS.RETURNED_BY_PMU), row(FORM_STATUS.UNDER_REVIEW_BY_SO)]);
       rowHelper.undoRows.mockResolvedValue(2);
 
       await service.undoFcUnspent(stateOid, REAL_YEAR, ctx);
 
       const transition = formHelper.transitionForm.mock.calls[0][0] as { setFields: Record<string, unknown>; expectedStatus: number };
       expect(transition.expectedStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
-      expect(transition.setFields).toMatchObject({ currentFormStatus: 13, auditRevision: 5, pmuRemarks: null });
+      expect(transition.setFields).toMatchObject({ currentFormStatus: 13, auditRevision: 5, rejectionRemarks: null });
 
       const history = formHelper.writeUndoHistory.mock.calls[0][0] as { buildDocument: (s: unknown) => Record<string, unknown> };
       const doc = history.buildDocument({ fromStatus: 14, toStatus: FORM_STATUS.UNDO, changedAt: new Date() });
@@ -185,7 +204,7 @@ describe('PmuUndoRowFormsService', () => {
     });
 
     it('has no rows to reopen on the No branch, but still returns the form to 13', async () => {
-      fcFormModel.findOne = fcForm(FORM_STATUS.UNDER_REVIEW_BY_MOHUA, { isFcUnspent: false });
+      fcFormModel.findOne = fcForm(FORM_STATUS.UNDER_REVIEW_BY_SO, { isFcUnspent: false });
 
       await service.undoFcUnspent(stateOid, REAL_YEAR, ctx);
 

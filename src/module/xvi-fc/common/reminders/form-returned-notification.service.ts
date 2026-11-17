@@ -15,6 +15,137 @@ import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/po
 
 const TEMPLATE_SLUG = 'form-returned-notification';
 const STATE_TEMPLATE_SLUG = 'state-form-returned-notification';
+const CLAIM_LETTER_STATE_TEMPLATE_SLUG = 'claim-letter-returned-state';
+const CLAIM_LETTER_ULB_TEMPLATE_SLUG = 'claim-letter-returned-ulb';
+
+/** Shared look of the two claim-letter return emails (the same palette as the form-returned ones). */
+const RETURN_EMAIL_STYLE = `
+    body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
+    .wrapper { max-width: 600px; margin: 40px auto; background: #ffffff; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+    .header { background-color: #b3261e; padding: 28px 32px; text-align: center; }
+    .header-title { color: #ffffff; font-size: 18px; font-weight: bold; }
+    .body { padding: 32px; color: #333333; font-size: 15px; line-height: 1.6; }
+    .body h2 { font-size: 20px; color: #b3261e; margin-bottom: 8px; }
+    .info-box { background: #fdecea; border-left: 4px solid #b3261e; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .info-box p { margin: 4px 0; }
+    .info-box strong { color: #b3261e; }
+    .reason-box { background: #fff8e1; border-left: 4px solid #e0a800; border-radius: 4px; padding: 14px 18px; margin: 20px 0; font-size: 14px; }
+    .items { margin: 8px 0 20px; padding-left: 20px; font-size: 14px; }
+    .items li { margin: 6px 0; }
+    .cta { text-align: center; margin: 28px 0; }
+    .cta a { background-color: #0f4c81; color: #ffffff; text-decoration: none; padding: 13px 32px; border-radius: 6px; font-size: 15px; font-weight: bold; display: inline-block; }
+    .note { font-size: 13px; color: #777777; margin-top: 24px; background: #f4f6f9; border-radius: 4px; padding: 12px 16px; }
+    .footer { background: #f4f6f9; text-align: center; padding: 18px 32px; font-size: 12px; color: #999999; }
+`;
+
+const CLAIM_LETTER_STATE_SUBJECT = 'Action Required: XVI-FC Claim Letter {{refNo}} Was Returned for Correction';
+
+// Like the other State emails, never names the reviewer: the State sees "Returned for Correction".
+const CLAIM_LETTER_STATE_BODY = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your XVI-FC Claim Letter Was Returned</title>
+  <style>${RETURN_EMAIL_STYLE}</style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+    <div class="body">
+      <h2>Your Claim Letter Was Returned for Correction</h2>
+      <p>Dear Sir / Madam,</p>
+      <p>
+        The XVI-FC claim letter <strong>{{refNo}}</strong> for <strong>{{stateName}}</strong> has been
+        <strong>returned for correction</strong>.
+      </p>
+      <div class="info-box">
+        <p><strong>State:</strong> {{stateName}}</p>
+        <p><strong>Claim letter:</strong> {{refNo}}</p>
+        <p><strong>Status:</strong> Returned for correction</p>
+      </div>
+      {{returnReasonBlock}}
+      <p><strong>Returned for correction:</strong></p>
+      {{returnedItemsBlock}}
+      <p>
+        Please log in to City Finance and correct these items. The returned ULBs' forms go back through review; once
+        they are approved again, prepare and submit a new claim letter for them.
+      </p>
+      <div class="cta">
+        <a href="{{loginLink}}" target="_blank">Login to City Finance</a>
+      </div>
+      <div class="note">
+        <strong>Note:</strong> This email is sent automatically when a claim letter is returned.
+      </div>
+    </div>
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India
+    </div>
+  </div>
+</body>
+</html>
+`.trim();
+
+const CLAIM_LETTER_ULB_SUBJECT = 'Action Required: Your XVI-FC {{formName}} Was Returned for Correction';
+
+const CLAIM_LETTER_ULB_BODY = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your XVI-FC Submission Was Returned</title>
+  <style>${RETURN_EMAIL_STYLE}</style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="header">
+      <div class="header-title">XVI Finance Commission — CityFinance Portal</div>
+    </div>
+    <div class="body">
+      <h2>Your Submission Was Returned for Correction</h2>
+      <p>Dear Sir / Madam,</p>
+      <p>
+        Your XVI-FC <strong>{{formName}}</strong> for <strong>{{ulbName}}</strong> was reviewed with your State's
+        grant claim and has been <strong>returned for correction</strong>.
+      </p>
+      <div class="info-box">
+        <p><strong>ULB:</strong> {{ulbName}}</p>
+        <p><strong>Form:</strong> {{formName}}</p>
+        <p><strong>Status:</strong> Returned for correction</p>
+      </div>
+      {{returnReasonBlock}}
+      <p>
+        Please log in to City Finance, make the required changes and re-submit, so your State can include
+        your ULB in its next claim.
+      </p>
+      <div class="cta">
+        <a href="{{loginLink}}" target="_blank">Login &amp; Resubmit</a>
+      </div>
+      <div class="note">
+        <strong>Note:</strong> If you have already corrected and resubmitted this form, please disregard this email.
+      </div>
+    </div>
+    <div class="footer">
+      &copy; CityFinance &mdash; Ministry of Housing and Urban Affairs, Government of India
+    </div>
+  </div>
+</body>
+</html>
+`.trim();
+
+/** One ULB the claim letter return sent back: everything returned for it, and which of that is its own forms. */
+export interface ClaimLetterReturnedUlbNotice {
+  ulbId: Types.ObjectId;
+  /** Every item returned for this ULB (its rows in State forms, its own forms, its exemptions), for the State email. */
+  items: string[];
+  /** The ULB's own forms among them: only these get the ULB an email. */
+  ownForms: string[];
+  remark: string | null;
+}
 
 const STATE_DEFAULT_SUBJECT = 'Action Required: Your XVI-FC {{formName}} Was Returned for Correction';
 
@@ -187,6 +318,9 @@ const DEFAULT_BODY = `
  * Also hosts `notifyStateFormReturned`: the State-facing counterpart, fired when PMU (or MoHUA, for
  * FC Unspent) returns one of the five State forms — every verified State user gets one email.
  *
+ * And `notifyClaimLetterReturned`: when the MoHUA Section Officer returns a claim letter, one email to the State
+ * users and one to each ULB whose own forms were reopened.
+ *
  * Deliberately never throws — a notification failure (missing template, no Nodal Officer, queue
  * error) must never fail the underlying approve/return decision it's reporting on.
  */
@@ -207,11 +341,23 @@ export class FormReturnedNotificationService {
   // ─── Seed default templates (idempotent — mirrors the other reminder services) ─────────────
 
   async seedTemplate(): Promise<{ created: boolean; message: string }> {
-    const [ulbCreated, stateCreated] = await Promise.all([
+    const createdEach = await Promise.all([
       this.seedOne(TEMPLATE_SLUG, 'Form Returned Notification', DEFAULT_SUBJECT, DEFAULT_BODY),
       this.seedOne(STATE_TEMPLATE_SLUG, 'State Form Returned Notification', STATE_DEFAULT_SUBJECT, STATE_DEFAULT_BODY),
+      this.seedOne(
+        CLAIM_LETTER_STATE_TEMPLATE_SLUG,
+        'Claim Letter Returned (State)',
+        CLAIM_LETTER_STATE_SUBJECT,
+        CLAIM_LETTER_STATE_BODY,
+      ),
+      this.seedOne(
+        CLAIM_LETTER_ULB_TEMPLATE_SLUG,
+        'Claim Letter Returned (ULB)',
+        CLAIM_LETTER_ULB_SUBJECT,
+        CLAIM_LETTER_ULB_BODY,
+      ),
     ]);
-    const created = ulbCreated || stateCreated;
+    const created = createdEach.some(Boolean);
     return {
       created,
       message: created
@@ -243,21 +389,7 @@ export class FormReturnedNotificationService {
     const { stateId, formName, remarks } = params;
     try {
       const template = await this.emailTemplates.findBySlug(STATE_TEMPLATE_SLUG);
-
-      // Same recipient rule as the weekly state summary: every verified State user, any subrole.
-      const recipients = await this.userModel
-        .find({
-          state: stateId,
-          role: Role.STATE,
-          xviFcSubrole: { $in: ['admin', 'reviewer', 'viewer'] },
-          isActive: true,
-          isDeleted: false,
-          isXVIFCProfileVerified: true,
-          email: { $exists: true, $nin: ['', null] },
-        })
-        .select('email')
-        .lean()
-        .exec();
+      const recipients = await this.findStateRecipients(stateId);
 
       if (!recipients.length) {
         this.logger.warn(
@@ -278,14 +410,14 @@ export class FormReturnedNotificationService {
         loginLink: loginUrl,
       };
 
-      const subject = interpolate(template.subject, variables);
-      const html = interpolate(template.body, variables);
-      for (const recipient of recipients) {
-        await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
-      }
-
+      const queued = await this.queueToEach(
+        recipients,
+        interpolate(template.subject, variables),
+        interpolate(template.body, variables),
+        `state ${stateId.toString()}, ${formName}`,
+      );
       this.logger.log(
-        `State return notification queued for state ${stateId.toString()} (${formName}) → ${recipients.length} recipient(s)`,
+        `State return notification queued for state ${stateId.toString()} (${formName}) → ${queued}/${recipients.length} recipient(s)`,
       );
     } catch (err) {
       this.logger.warn(
@@ -305,39 +437,7 @@ export class FormReturnedNotificationService {
     const { ulbId, formName, note } = params;
     try {
       const template = await this.emailTemplates.findBySlug(TEMPLATE_SLUG);
-
-      const nodalOfficer = await this.userModel
-        .findOne({
-          ulb: ulbId,
-          role: { $in: [Role.ULB, Role.ULB_EDITOR, Role.ULB_VIEWER] },
-          isNodalOfficer: true,
-          isActive: true,
-          isDeleted: false,
-          isXVIFCProfileVerified: true,
-          email: { $exists: true, $nin: ['', null] },
-        })
-        .select('email')
-        .lean()
-        .exec();
-
-      let recipientEmail = nodalOfficer?.email as string | undefined;
-
-      // No verified Nodal Officer on file — fall back to the ULB's plain-text accountant contact
-      // (accountantEmail, embedded on the ULB's primary User doc) rather than sending nothing.
-      if (!recipientEmail) {
-        const primaryUser = await this.userModel
-          .findOne({ ulb: ulbId, role: Role.ULB, isDeleted: false })
-          .select('accountantEmail')
-          .lean()
-          .exec();
-        recipientEmail = primaryUser?.accountantEmail || undefined;
-
-        if (recipientEmail) {
-          this.logger.warn(
-            `No active Nodal Officer found for ULB ${ulbId.toString()} — falling back to accountant email ${recipientEmail}`,
-          );
-        }
-      }
+      const recipientEmail = await this.findUlbRecipient(ulbId);
 
       if (!recipientEmail) {
         this.logger.warn(
@@ -368,5 +468,174 @@ export class FormReturnedNotificationService {
         `Failed to send return notification for ULB ${ulbId.toString()} (${formName}): ${err instanceof Error ? err.message : String(err)}`,
       );
     }
+  }
+  /**
+   * The Section Officer returned claim letter `refNo`: every verified State user gets one email listing what was
+   * returned (the State-wide items, each returned ULB with its items and remark), and each ULB whose own forms were
+   * reopened gets one email (Nodal Officer, else the accountant contact). A ULB returned only through State-form rows
+   * or exemptions gets none: the State fixes those. Called after the return committed; never throws.
+   */
+  async notifyClaimLetterReturned(params: {
+    stateId: Types.ObjectId;
+    refNo: string;
+    stateRemark: string | null;
+    stateItems: string[];
+    ulbs: ClaimLetterReturnedUlbNotice[];
+  }): Promise<void> {
+    const { stateId, refNo, stateRemark, stateItems, ulbs } = params;
+    let ulbNames = new Map<string, string>();
+    try {
+      const docs = ulbs.length
+        ? await this.ulbModel
+            .find({ _id: { $in: ulbs.map((u) => u.ulbId) } })
+            .select('name')
+            .lean()
+            .exec()
+        : [];
+      ulbNames = new Map(docs.map((d) => [String(d._id), d.name]));
+    } catch (err) {
+      this.logger.warn(`Failed to load ULB names for claim letter ${refNo}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    const nameOf = (ulbId: Types.ObjectId) => ulbNames.get(String(ulbId)) ?? 'your ULB';
+    const { loginUrl } = buildPortalAuthUrls(this.config, PORTAL_INVITE_LOGIN_TYPE);
+
+    try {
+      const template = await this.emailTemplates.findBySlug(CLAIM_LETTER_STATE_TEMPLATE_SLUG);
+      const recipients = await this.findStateRecipients(stateId);
+      if (!recipients.length) {
+        this.logger.warn(`No verified State users for state ${stateId.toString()} — skipping claim letter ${refNo} return notification`);
+      } else {
+        const state = await this.stateModel.findById(stateId).select('name').lean().exec();
+        const lines = [
+          ...stateItems.map((item) => `<li>${escapeHtml(item)}</li>`),
+          ...ulbs.map(
+            (u) =>
+              `<li><strong>${escapeHtml(nameOf(u.ulbId))}</strong>: ${escapeHtml(u.items.join(', '))}` +
+              (u.remark ? ` &mdash; ${escapeHtml(u.remark)}` : '') +
+              '</li>',
+          ),
+        ];
+        const variables: Record<string, string> = {
+          stateName: escapeHtml(state?.name ?? 'your State'),
+          refNo: escapeHtml(refNo),
+          returnReasonBlock: stateRemark
+            ? `<div class="reason-box"><p><strong>Reviewer's remarks:</strong> ${escapeHtml(stateRemark)}</p></div>`
+            : '',
+          returnedItemsBlock: `<ul class="items">${lines.join('')}</ul>`,
+          loginLink: loginUrl,
+        };
+        const queued = await this.queueToEach(
+          recipients,
+          interpolate(template.subject, variables),
+          interpolate(template.body, variables),
+          `state ${stateId.toString()}, claim letter ${refNo}`,
+        );
+        this.logger.log(`Claim letter ${refNo} return notification queued → ${queued}/${recipients.length} State user(s)`);
+      }
+    } catch (err) {
+      this.logger.warn(
+        `Failed to send claim letter ${refNo} return notification to state ${stateId.toString()}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    for (const ulb of ulbs.filter((u) => u.ownForms.length)) {
+      try {
+        const template = await this.emailTemplates.findBySlug(CLAIM_LETTER_ULB_TEMPLATE_SLUG);
+        const to = await this.findUlbRecipient(ulb.ulbId);
+        if (!to) {
+          this.logger.warn(`No Nodal Officer or accountant email for ULB ${ulb.ulbId.toString()} — skipping claim letter ${refNo} return notification`);
+          continue;
+        }
+        const variables: Record<string, string> = {
+          ulbName: escapeHtml(nameOf(ulb.ulbId)),
+          formName: escapeHtml(ulb.ownForms.join(', ')),
+          returnReasonBlock: ulb.remark
+            ? `<div class="reason-box"><p><strong>Reviewer's remarks:</strong> ${escapeHtml(ulb.remark)}</p></div>`
+            : '',
+          loginLink: loginUrl,
+        };
+        await this.emailQueue.addEmailJob({
+          to,
+          subject: interpolate(template.subject, variables),
+          html: interpolate(template.body, variables),
+        });
+      } catch (err) {
+        this.logger.warn(
+          `Failed to send claim letter ${refNo} return notification to ULB ${ulb.ulbId.toString()}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+  }
+
+  /** Every verified State user of the state, any subrole (the weekly state summary's rule). */
+  private async findStateRecipients(stateId: Types.ObjectId): Promise<{ email?: string | null }[]> {
+    return this.userModel
+      .find({
+        state: stateId,
+        role: Role.STATE,
+        xviFcSubrole: { $in: ['admin', 'reviewer', 'viewer'] },
+        isActive: true,
+        isDeleted: false,
+        isXVIFCProfileVerified: true,
+        email: { $exists: true, $nin: ['', null] },
+      })
+      .select('email')
+      .lean()
+      .exec();
+  }
+
+  /**
+   * The ULB's verified Nodal Officer; without one, the plain-text `accountantEmail` on its primary User doc rather
+   * than sending nothing. Undefined when neither exists.
+   */
+  private async findUlbRecipient(ulbId: Types.ObjectId): Promise<string | undefined> {
+    const nodalOfficer = await this.userModel
+      .findOne({
+        ulb: ulbId,
+        role: { $in: [Role.ULB, Role.ULB_EDITOR, Role.ULB_VIEWER] },
+        isNodalOfficer: true,
+        isActive: true,
+        isDeleted: false,
+        isXVIFCProfileVerified: true,
+        email: { $exists: true, $nin: ['', null] },
+      })
+      .select('email')
+      .lean()
+      .exec();
+    if (nodalOfficer?.email) return nodalOfficer.email as string;
+
+    const primaryUser = await this.userModel
+      .findOne({ ulb: ulbId, role: Role.ULB, isDeleted: false })
+      .select('accountantEmail')
+      .lean()
+      .exec();
+    const fallback = primaryUser?.accountantEmail || undefined;
+    if (fallback) {
+      this.logger.warn(
+        `No active Nodal Officer found for ULB ${ulbId.toString()} — falling back to accountant email ${fallback}`,
+      );
+    }
+    return fallback;
+  }
+
+  /** Queues one email per recipient; one enqueue failing must not cost the rest theirs. Returns how many queued. */
+  private async queueToEach(
+    recipients: { email?: string | null }[],
+    subject: string,
+    html: string,
+    context: string,
+  ): Promise<number> {
+    let queued = 0;
+    for (const recipient of recipients) {
+      try {
+        await this.emailQueue.addEmailJob({ to: recipient.email as string, subject, html });
+        queued += 1;
+      } catch (err) {
+        this.logger.warn(
+          `Failed to queue return notification for ${String(recipient.email)} (${context}): ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+    return queued;
   }
 }

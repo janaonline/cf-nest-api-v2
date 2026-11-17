@@ -236,11 +236,41 @@ describe('AnnualAccountOcrProcessor', () => {
     );
   });
 
+  /** A completed OCR run whose verdict is a real FAIL — the only failure that counts as a strike. */
+  const mockRealFail = () => {
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'completed' });
+    ocrApi.getJobResult.mockResolvedValue({
+      job_id: 'ocr-job-1',
+      status: 'completed',
+      result: { basic_validation: { validation_status: 'FAIL' } },
+    });
+  };
+
+  it('does not count a crashed OCR job as a strike, even inside a rejection cycle', async () => {
+    annualAccountModel.findOne.mockReturnValue(
+      findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),
+    );
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+
+    const processPromise = processor.process(makeJob());
+    await jest.advanceTimersByTimeAsync(5000);
+    await processPromise;
+
+    const call = annualAccountModel.updateOne.mock.calls.find(
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+        update?.$set?.['documents.$.processingStatus'] !== undefined,
+    );
+    const set = call?.[1]?.$set as Record<string, unknown>;
+    expect(set['documents.$.processingStatus']).toBe('FAILED');
+    expect(set).not.toHaveProperty(['documents.$.postRejectionAttemptsUsed']);
+    expect(set).not.toHaveProperty(['documents.$.uploadBlockedUntil']);
+  });
+
   it('increments the post-rejection attempt counter when a new failure follows a manual-review RETURN', async () => {
     annualAccountModel.findOne.mockReturnValue(
       findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 1 }] }),
     );
-    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+    mockRealFail();
 
     const processPromise = processor.process(makeJob());
     await jest.advanceTimersByTimeAsync(5000);
@@ -258,7 +288,7 @@ describe('AnnualAccountOcrProcessor', () => {
     annualAccountModel.findOne.mockReturnValue(
       findByIdChain({ documents: [{ manualReviewDecision: { status: 'RETURNED' }, postRejectionAttemptsUsed: 2 }] }),
     );
-    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+    mockRealFail();
 
     const processPromise = processor.process(makeJob());
     await jest.advanceTimersByTimeAsync(5000);
@@ -289,7 +319,7 @@ describe('AnnualAccountOcrProcessor', () => {
         ],
       }),
     );
-    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+    mockRealFail();
 
     const processPromise = processor.process(makeJob());
     await jest.advanceTimersByTimeAsync(5000);
@@ -319,7 +349,7 @@ describe('AnnualAccountOcrProcessor', () => {
     };
     const runFailure = async () => {
       annualAccountModel.findOne.mockReturnValue(findByIdChain({ documents: [docSlot] }));
-      ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+      mockRealFail();
       const processPromise = processor.process(makeJob());
       await jest.advanceTimersByTimeAsync(5000);
       await processPromise;

@@ -7,6 +7,7 @@ import type {
   ClaimLetterFinancialSummaryDisplay,
 } from '../types/claim-letter.types';
 import { buildClaimLetterPermissions } from './claim-letter-permissions.helpers';
+import { isReturnedClaimLetter } from './claim-letter-returned.helpers';
 
 /** The one batch-to-summary mapper, so every endpoint returns the same shape. Callers have already
  *  asserted state access. */
@@ -17,14 +18,13 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     claimLetterId: String(doc['_id']),
     installment: doc['installment'] as 1 | 2,
     batchNumber: doc['batchNumber'] as 1 | 2 | 3,
+    resubmissionNumber: (doc['resubmissionNumber'] as number | undefined) ?? 0,
     version: doc['version'] as number,
     currentFormStatus,
-    // Abandon (shown as "Discarded") is a flag that leaves the status as it was, so the label is overridden. An SO
-    // return also sets the flag (it frees the batch slot) but keeps its own label, Returned for Correction.
+    // Abandon is a flag that leaves the status as it was, so the label is overridden. A return also sets the flag
+    // (it frees the batch slot) but keeps its own label, e.g. Returned for Correction.
     currentFormStatusLabel:
-      isAbandoned && currentFormStatus !== FORM_STATUS.RETURNED_BY_SO
-        ? 'Discarded'
-        : getFormStatusLabel(currentFormStatus),
+      isAbandoned && !isReturnedClaimLetter(currentFormStatus) ? 'Discarded' : getFormStatusLabel(currentFormStatus),
     assemblyStatus: doc['assemblyStatus'] as 'BUILDING' | 'READY',
     ulbCount: doc['ulbCount'] as number,
     isAbandoned,

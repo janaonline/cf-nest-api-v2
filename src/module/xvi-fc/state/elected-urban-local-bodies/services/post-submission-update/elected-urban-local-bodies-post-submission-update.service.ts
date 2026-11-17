@@ -15,6 +15,8 @@ import {
 import { keyByFieldKey, requireField } from 'src/module/xvi-fc/common/utils/xvi-fc-field-lookup.util';
 import { deriveFileValidationOptions } from 'src/module/xvi-fc/common/utils/xvi-fc-file-constraint.util';
 import type { FileInfo } from 'src/schemas/common/file.schema';
+import { ClaimLetterBatch, type ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { ClaimLetterUlbLock, type ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import {
   POST_SUBMISSION_UPDATE_ALLOWED_STATUSES,
   assertCanViewPostSubmissionUpdate,
@@ -98,6 +100,13 @@ export function buildPostSubmissionEligibleRowsFilter(
   };
 }
 
+/** Claim letter statuses that freeze their ULBs: under SO review, under MoHUA review, acknowledged. */
+const EULB_CLAIMED_LETTER_STATUSES: readonly number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
 @Injectable()
 export class EulbPostSubmissionUpdateService {
   constructor(
@@ -105,6 +114,10 @@ export class EulbPostSubmissionUpdateService {
     private readonly formModel: Model<EulbFormDocument>,
     @InjectModel(ElectedUrbanLocalBodiesRow.name)
     private readonly rowModel: Model<EulbRowDocument>,
+    @InjectModel(ClaimLetterUlbLock.name)
+    private readonly lockModel: Model<ClaimLetterUlbLockDocument>,
+    @InjectModel(ClaimLetterBatch.name)
+    private readonly batchModel: Model<ClaimLetterBatchDocument>,
     private readonly validator: ElectedUrbanLocalBodiesValidator,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
@@ -336,6 +349,7 @@ export class EulbPostSubmissionUpdateService {
         rows: [{ message: 'One or more submitted rows are not eligible for post-submission update.' }],
       });
     }
+    await this.assertNoClaimedUlbs(dbRows);
 
     // ─── Business validation of proposed values ────────────────────────────────
 
@@ -595,6 +609,7 @@ export class EulbPostSubmissionUpdateService {
         rows: [{ message: 'One or more submitted rows are not eligible for post-submission update.' }],
       });
     }
+    await this.assertNoClaimedUlbs(dbRows);
 
     const dbRowMap = new Map(dbRows.map((r) => [String(r._id), r]));
 
@@ -642,6 +657,42 @@ export class EulbPostSubmissionUpdateService {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /**
+   * A ULB in a submitted claim letter (under SO review, under MoHUA review or acknowledged) keeps the Elected Body
+   * status the letter was built on, so its row can't be updated here. A ULB in a draft letter, or in none, can.
+   * Locks of a returned letter are already deleted, so its ULBs are free again.
+   */
+  private async assertNoClaimedUlbs(rows: { ulbId?: Types.ObjectId; ulbName: string }[]): Promise<void> {
+    const ulbIds = rows.map((r) => r.ulbId).filter((id): id is Types.ObjectId => !!id);
+    if (!ulbIds.length) return;
+    const locks = await this.lockModel
+      .find({ ulbId: { $in: ulbIds } })
+      .select('ulbId claimLetter')
+      .lean()
+      .exec();
+    if (!locks.length) return;
+    const submitted = await this.batchModel
+      .find({
+        _id: { $in: [...new Set(locks.map((l) => String(l.claimLetter)))].map((id) => new Types.ObjectId(id)) },
+        currentFormStatus: { $in: EULB_CLAIMED_LETTER_STATUSES },
+      })
+      .select('_id')
+      .lean()
+      .exec();
+    const submittedIds = new Set(submitted.map((b) => String(b._id)));
+    const claimedUlbIds = new Set(locks.filter((l) => submittedIds.has(String(l.claimLetter))).map((l) => String(l.ulbId)));
+    const names = rows.filter((r) => r.ulbId && claimedUlbIds.has(String(r.ulbId))).map((r) => r.ulbName);
+    if (names.length) {
+      throwXviFcValidationError({
+        rows: [
+          {
+            message: `These ULBs are part of a submitted claim letter and can't be updated: ${names.join(', ')}.`,
+          },
+        ],
+      });
+    }
+  }
 
   /**
    * Fetches the active EULB form for a (state, year) pair; returns null if not found.
