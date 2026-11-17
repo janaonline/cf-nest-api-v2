@@ -6,6 +6,9 @@ import { randomBytes } from 'crypto';
 import { MongoServerError } from 'mongodb';
 import mongoose, { FilterQuery, Model, Types } from 'mongoose';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
+import { toObjectIdString } from 'src/common/utils/objectid.util';
+import { AdcAuditLogService } from 'src/master/adc/audit/adc-audit-log.service';
+import { AdcAuditAction } from 'src/schemas/adc-audit-log.schema';
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
@@ -82,6 +85,7 @@ export class UlbService {
     private readonly configService: ConfigService,
     private readonly fileTokenService: FileTokenService,
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
+    private readonly adcAuditLog: AdcAuditLogService,
   ) {}
 
   /** Loads the admin-configurable ULB field definition, falling back to the built-in defaults. */
@@ -1031,29 +1035,59 @@ export class UlbService {
    * at the controller). Allowed at any approval status. Review access follows the ULB's *current* `adc`,
    * so pending forms (and undo rights) move to the new owner immediately.
    */
-  async assignAdc(id: string, adcId: string | null | undefined): Promise<Ulb> {
+  async assignAdc(id: string, adcId: string | null | undefined, user: IAuthUser): Promise<Ulb> {
     if (!Types.ObjectId.isValid(id)) throw new BadRequestException('Invalid ULB id');
     if (adcId === undefined) throw new BadRequestException('adcId is required (use null to remove the ADC).');
 
-    const ulb = await this.ulbModel.findById(id).select('state').lean<{ state: Types.ObjectId }>();
+    const ulb = await this.ulbModel
+      .findById(id)
+      .select('state adc')
+      .lean<{ state: Types.ObjectId; adc?: Types.ObjectId | null }>();
     if (!ulb) throw new NotFoundException('ULB not found');
 
+    const fromAdcId = toObjectIdString(ulb.adc);
+    // Same ADC (or still none): nothing to write or log.
+    if (fromAdcId === adcId) {
+      const current = await this.ulbModel.findById(id).lean<Ulb>();
+      if (!current) throw new NotFoundException('ULB not found');
+      const [unchanged] = await this.attachLookupNames([this.withApprovalDefaults(current)]);
+      return unchanged as unknown as Ulb;
+    }
+
+    let toAdcName: string | null = null;
     if (adcId !== null) {
       const adc = await this.adcModel
         .findById(adcId)
-        .select('state isActive')
-        .lean<{ state: Types.ObjectId; isActive: boolean }>();
+        .select('name state isActive')
+        .lean<{ name: string; state: Types.ObjectId; isActive: boolean }>();
       if (!adc) throw new BadRequestException('ADC not found.');
       if (!adc.isActive) throw new BadRequestException('This ADC is not active.');
       if (String(adc.state) !== String(ulb.state)) {
         throw new BadRequestException('An ADC can only own ULBs of its own state.');
       }
+      toAdcName = adc.name;
     }
 
     const updated = await this.ulbModel
       .findByIdAndUpdate(id, { $set: { adc: adcId === null ? null : new Types.ObjectId(adcId) } }, { new: true })
       .lean<Ulb>();
     if (!updated) throw new NotFoundException('ULB not found');
+
+    // The entry belongs to the gaining ADC, or to the losing one when the ULB goes back to the State.
+    const logAdcId = (adcId ?? fromAdcId) as string;
+    const logAdcName =
+      toAdcName ?? (await this.adcModel.findById(logAdcId).select('name').lean<{ name: string }>())?.name ?? '';
+    await this.adcAuditLog.record({
+      action: AdcAuditAction.ULB_ADC_CHANGED,
+      adc: logAdcId,
+      adcName: logAdcName,
+      state: ulb.state,
+      performedBy: user._id,
+      actorRole: 'PORTAL_ADMIN',
+      ulb: id,
+      changes: { adc: { from: ulb.adc ?? null, to: adcId === null ? null : new Types.ObjectId(adcId) } },
+    });
+
     const [withNames] = await this.attachLookupNames([this.withApprovalDefaults(updated)]);
     return withNames as unknown as Ulb;
   }

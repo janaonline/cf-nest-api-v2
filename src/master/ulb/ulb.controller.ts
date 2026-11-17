@@ -88,8 +88,8 @@ export class UlbController {
       'Assign a ULB to an Autonomous District Council, or move it back to the State DMA with adcId null ' +
       '(ADMIN only). Review access follows the ULB\'s current ADC.',
   })
-  assignAdc(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: AssignUlbAdcDto) {
-    return this.ulbService.assignAdc(id, dto.adcId);
+  assignAdc(@Param('id', ParseObjectIdPipe) id: string, @Body() dto: AssignUlbAdcDto, @CurrentUser() user: IAuthUser) {
+    return this.ulbService.assignAdc(id, dto.adcId, user);
   }
 
   @Patch(':id/approve')
