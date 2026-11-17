@@ -14,6 +14,10 @@ import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.servic
 import { EmailDomainValidationService } from 'src/core/email-domain-validation/email-domain-validation.service';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { Role } from 'src/module/auth/enum/role.enum';
+import { AdcAuditLogService } from 'src/master/adc/audit/adc-audit-log.service';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { CreateUserDto } from './dto/create-user.dto';
 
 import {
   createChainMock,
@@ -46,12 +50,14 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
   let mockAdcModel: ReturnType<typeof createChainMock>;
   let mockStateModel: ReturnType<typeof createChainMock>;
   let mockEmailQueueService: { addEmailJob: jest.Mock };
+  let mockAdcAuditLog: { record: jest.Mock };
 
   beforeEach(async () => {
     mockUserModel = createChainMock();
     mockAdcModel = createChainMock();
     mockStateModel = createChainMock();
     mockEmailQueueService = { addEmailJob: jest.fn().mockResolvedValue(undefined) };
+    mockAdcAuditLog = { record: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -67,6 +73,7 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
           provide: EmailDomainValidationService,
           useValue: { domainHasMxRecord: jest.fn().mockResolvedValue(true) },
         },
+        { provide: AdcAuditLogService, useValue: mockAdcAuditLog },
       ],
     }).compile();
 
@@ -180,72 +187,98 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
     });
   });
 
-  // ─── ADC team ───────────────────────────────────────────────────────────
+  // ─── ADC team (managed by the ADC admin) ───────────────────────────────
 
-  describe('inviteAdcMember()', () => {
-    beforeEach(() => {
-      // activeUser lookup, removedUser lookup — both clean
-      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID) });
-      mockStateModel.exec.mockResolvedValue({ name: 'Assam' });
+  describe('the State DMA no longer reaches ADC teams', () => {
+    it('refuses every State DMA user on every users/adc-* call, before looking up any ADC', async () => {
+      for (const requester of [makeStateAdmin(), makeStateAdmin({ xviFcSubrole: 'reviewer' })]) {
+        await expect(service.getAdcMembers(requester)).rejects.toThrow('ADC teams are managed by the ADC Admin.');
+        await expect(service.inviteAdcMember(inviteDto, requester)).rejects.toThrow(ForbiddenException);
+        await expect(service.updateAdcMemberSubrole(TARGET_USER_ID, { subRole: 'VIEWER' }, requester)).rejects.toThrow(
+          ForbiddenException,
+        );
+        await expect(service.removeAdcMember(TARGET_USER_ID, requester)).rejects.toThrow(ForbiddenException);
+        await expect(service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, requester)).rejects.toThrow(
+          ForbiddenException,
+        );
+      }
+      expect(mockAdcModel.findById).not.toHaveBeenCalled();
+      expect(mockAdcAuditLog.record).not.toHaveBeenCalled();
     });
 
-    it('makes the first user invited to an ADC with no admin its admin, whatever level was asked for', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue(null); // no admin yet
-
-      await service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID);
-
-      expect(mockUserModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          role: Role.STATE,
-          xviFcSubrole: 'admin',
-          adc: new Types.ObjectId(ADC_ID),
-          state: new Types.ObjectId(STATE_ID),
-        }),
+    it('refuses anyone who is not a State or ADC user', async () => {
+      await expect(service.getAdcMembers(makeStateAdmin({ scope: Scope.ULB, role: Role.ULB }))).rejects.toThrow(
+        ForbiddenException,
       );
-      expect(mockEmailQueueService.addEmailJob).toHaveBeenCalledWith(
-        expect.objectContaining({
-          mailData: expect.objectContaining({ adcName: 'Test ADC', role: 'Admin', invitedBy: 'ADC Administrator' }),
-        }),
+      await expect(service.getAdcMembers(makeStateAdmin({ scope: Scope.ADMIN, state: undefined }))).rejects.toThrow(
+        ForbiddenException,
       );
-    });
-
-    it('stores later invites as reviewer / viewer', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
-
-      await service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID);
-      expect(mockUserModel.create).toHaveBeenLastCalledWith(expect.objectContaining({ xviFcSubrole: 'reviewer' }));
-
-      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      await service.inviteAdcMember({ ...inviteDto, subRole: 'VIEWER' }, makeStateAdmin(), ADC_ID);
-      expect(mockUserModel.create).toHaveBeenLastCalledWith(expect.objectContaining({ xviFcSubrole: 'viewer' }));
-    });
-
-    it("lets the ADC's own admin invite into their ADC, ignoring any adcId sent", async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
-
-      await service.inviteAdcMember(inviteDto, makeAdcUser('admin'), ADC_ID_2);
-
-      expect(mockAdcModel.findById).toHaveBeenCalledWith(ADC_ID);
-      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ adc: new Types.ObjectId(ADC_ID) }));
     });
   });
 
-  describe('invite / restore never cross an ADC boundary, and the admin race is caught', () => {
+  describe('inviteAdcMember()', () => {
+    beforeEach(() => {
+      // activeUser lookup, removedUser lookup - both clean
+      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID) });
+      mockStateModel.exec.mockResolvedValue({ name: 'Assam' });
+      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
+    });
+
+    it("invites into the caller's own ADC at the level asked for, never as Admin, and logs it", async () => {
+      await service.inviteAdcMember(inviteDto, makeAdcUser('admin'));
+
+      expect(mockAdcModel.findById).toHaveBeenCalledWith(ADC_ID);
+      expect(mockUserModel.exists).not.toHaveBeenCalled(); // no "first invite becomes Admin" check any more
+      expect(mockUserModel.create).toHaveBeenCalledWith(
+        expect.objectContaining({ role: Role.STATE, xviFcSubrole: 'reviewer', adc: new Types.ObjectId(ADC_ID) }),
+      );
+      expect(mockEmailQueueService.addEmailJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mailData: expect.objectContaining({ adcName: 'Test ADC', role: 'Reviewer', portalInvite: false }),
+        }),
+      );
+      expect(mockAdcAuditLog.record).toHaveBeenCalledWith({
+        action: 'MEMBER_INVITED',
+        adc: new Types.ObjectId(ADC_ID),
+        adcName: 'Test ADC',
+        state: new Types.ObjectId(STATE_ID),
+        performedBy: expect.any(String),
+        actorRole: 'ADC_ADMIN',
+        user: TARGET_USER_ID,
+      });
+    });
+
+    it('stores a VIEWER invite as viewer', async () => {
+      await service.inviteAdcMember({ ...inviteDto, subRole: 'VIEWER' }, makeAdcUser('admin'));
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ xviFcSubrole: 'viewer' }));
+    });
+  });
+
+  it('logs MEMBER_RESTORED when a removed member of the same ADC is restored', async () => {
+    mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
+    mockStateModel.exec.mockResolvedValue({ name: 'Assam' });
+    mockUserModel.exists.mockResolvedValue(null); // no race conflict
+    mockUserModel.exec
+      .mockResolvedValueOnce(null) // no active user
+      .mockResolvedValueOnce({ _id: new Types.ObjectId(TARGET_USER_ID), adc: new Types.ObjectId(ADC_ID) }) // removed
+      .mockResolvedValueOnce({ _id: new Types.ObjectId(TARGET_USER_ID) }); // restored
+
+    await service.inviteAdcMember({ ...inviteDto, action: 'restore' }, makeAdcUser('admin'));
+
+    expect(mockAdcAuditLog.record).toHaveBeenCalledWith(expect.objectContaining({ action: 'MEMBER_RESTORED' }));
+  });
+
+  describe('invite / restore never cross an ADC boundary', () => {
     beforeEach(() => mockStateModel.exec.mockResolvedValue({ name: 'Assam' }));
 
     it('refuses inviting a removed member of another team into an ADC, without revealing who they were', async () => {
       mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
       mockUserModel.exec
         .mockResolvedValueOnce(null) // no active user with this email
         .mockResolvedValueOnce({ name: 'Old State Member', designation: 'DMA', adc: null }); // removed State member
 
-      const error = await service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID).catch((e: HttpException) => e);
+      const error = await service.inviteAdcMember(inviteDto, makeAdcUser('admin')).catch((e: HttpException) => e);
 
       expect(error).toBeInstanceOf(HttpException);
       expect((error as HttpException).getResponse()).toEqual({
@@ -253,16 +286,16 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
         message: expect.not.stringContaining('Old State Member'),
       });
       expect(mockUserModel.create).not.toHaveBeenCalled();
+      expect(mockAdcAuditLog.record).not.toHaveBeenCalled();
     });
 
     it('still offers the restore prompt for a member removed from this same ADC', async () => {
       mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
       mockUserModel.exec
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce({ name: 'Old ADC Member', designation: 'Officer', adc: new Types.ObjectId(ADC_ID) });
 
-      await expect(service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID)).rejects.toMatchObject({
+      await expect(service.inviteAdcMember(inviteDto, makeAdcUser('admin'))).rejects.toMatchObject({
         response: { code: 'EMAIL_XVIFC_REMOVED' },
       });
     });
@@ -280,28 +313,13 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
       expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
 
-    it('turns a concurrent first-admin invite (unique-index hit) into ADC_ADMIN_EXISTS', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue(null); // both requests saw "no admin yet"
-      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
-      mockUserModel.create.mockRejectedValueOnce(
-        Object.assign(new Error('E11000'), { code: 11000, keyPattern: { adc: 1, xviFcSubrole: 1 } }),
-      );
-
-      await expect(service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID)).rejects.toMatchObject({
-        response: { code: 'ADC_ADMIN_EXISTS' },
-      });
-      expect(mockEmailQueueService.addEmailJob).not.toHaveBeenCalled();
-    });
-
     it('leaves any other duplicate-key error (e.g. mobile) untouched', async () => {
       mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
       mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
       const mobileDuplicate = Object.assign(new Error('E11000 mobile'), { code: 11000, keyPattern: { mobile: 1 } });
       mockUserModel.create.mockRejectedValueOnce(mobileDuplicate);
 
-      await expect(service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID)).rejects.toBe(mobileDuplicate);
+      await expect(service.inviteAdcMember(inviteDto, makeAdcUser('admin'))).rejects.toBe(mobileDuplicate);
     });
   });
 
@@ -309,11 +327,9 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
     beforeEach(() => mockAdcModel.exec.mockResolvedValue(adcDoc({ isActive: false })));
 
     it('refuses invites and level changes', async () => {
-      await expect(service.inviteAdcMember(inviteDto, makeStateAdmin(), ADC_ID)).rejects.toThrow(
-        'This ADC is not active',
-      );
+      await expect(service.inviteAdcMember(inviteDto, makeAdcUser('admin'))).rejects.toThrow('This ADC is not active');
       await expect(
-        service.updateAdcMemberSubrole(TARGET_USER_ID, { subRole: 'VIEWER' }, makeStateAdmin(), ADC_ID),
+        service.updateAdcMemberSubrole(TARGET_USER_ID, { subRole: 'VIEWER' }, makeAdcUser('admin')),
       ).rejects.toThrow('This ADC is not active');
       expect(mockUserModel.create).not.toHaveBeenCalled();
       expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
@@ -321,10 +337,10 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
 
     it('still lists and removes members, so its team can be cleaned up', async () => {
       mockUserModel.exec.mockResolvedValueOnce([]);
-      await expect(service.getAdcMembers(makeStateAdmin(), ADC_ID)).resolves.toEqual([]);
+      await expect(service.getAdcMembers(makeAdcUser('admin'))).resolves.toEqual([]);
 
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'reviewer' }).mockResolvedValueOnce(undefined);
-      await expect(service.removeAdcMember(TARGET_USER_ID, makeStateAdmin(), ADC_ID)).resolves.toEqual({
+      await expect(service.removeAdcMember(TARGET_USER_ID, makeAdcUser('admin'))).resolves.toEqual({
         message: 'Member removed from the XVI-FC portal',
       });
     });
@@ -343,66 +359,86 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
       await expect(service.getAdcMembers(makeAdcUser('reviewer'))).resolves.toEqual([]);
     });
 
-    it("refuses a State admin acting on another state's ADC, and one who sends no adcId", async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc({ state: new Types.ObjectId(STATE_ID_2) }));
-      await expect(service.getAdcMembers(makeStateAdmin(), ADC_ID)).rejects.toThrow(ForbiddenException);
-      await expect(service.getAdcMembers(makeStateAdmin())).rejects.toThrow(BadRequestException);
+    it('404s for an unknown ADC', async () => {
+      mockAdcModel.exec.mockResolvedValueOnce(null);
+      await expect(service.getAdcMembers(makeAdcUser('admin'))).rejects.toThrow(NotFoundException);
     });
+  });
 
-    it('refuses anyone who is not a State or ADC user', async () => {
-      await expect(service.getAdcMembers(makeStateAdmin({ scope: Scope.ULB, role: Role.ULB }), ADC_ID)).rejects.toThrow(
-        ForbiddenException,
+  describe('updateAdcMemberSubrole()', () => {
+    beforeEach(() => mockAdcModel.exec.mockResolvedValue(adcDoc()));
+
+    it('changes the level and logs from/to', async () => {
+      mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'reviewer' }).mockResolvedValueOnce(undefined);
+
+      await service.updateAdcMemberSubrole(TARGET_USER_ID, { subRole: 'VIEWER' }, makeAdcUser('admin'));
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
+        $set: { xviFcSubrole: 'viewer' },
+      });
+      expect(mockAdcAuditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'MEMBER_LEVEL_CHANGED',
+          user: TARGET_USER_ID,
+          changes: { subRole: { from: 'reviewer', to: 'viewer' } },
+        }),
       );
     });
 
-    it('404s for an unknown ADC', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(null);
-      await expect(service.getAdcMembers(makeStateAdmin(), ADC_ID)).rejects.toThrow(NotFoundException);
+    it('writes and logs nothing when the level is unchanged', async () => {
+      mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'viewer' });
+
+      await expect(
+        service.updateAdcMemberSubrole(TARGET_USER_ID, { subRole: 'VIEWER' }, makeAdcUser('admin')),
+      ).resolves.toEqual({ message: 'Sub-role updated successfully' });
+      expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(mockAdcAuditLog.record).not.toHaveBeenCalled();
     });
   });
 
   describe('removeAdcMember()', () => {
     beforeEach(() => mockAdcModel.exec.mockResolvedValue(adcDoc()));
 
-    it('soft-deletes a reviewer of the same ADC', async () => {
+    it('soft-deletes a reviewer of the same ADC and logs it', async () => {
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'reviewer' }).mockResolvedValueOnce(undefined);
-      await service.removeAdcMember(TARGET_USER_ID, makeStateAdmin(), ADC_ID);
+      await service.removeAdcMember(TARGET_USER_ID, makeAdcUser('admin'));
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, {
         $set: { isXviFcdeleted: true, isDeleted: true },
       });
+      expect(mockAdcAuditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({ action: 'MEMBER_REMOVED', user: TARGET_USER_ID }),
+      );
     });
 
-    it('cannot remove the ADC admin before a transfer, nor yourself', async () => {
+    it('cannot remove the ADC admin, nor yourself', async () => {
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'admin' });
-      await expect(service.removeAdcMember(TARGET_USER_ID, makeStateAdmin(), ADC_ID)).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.removeAdcMember(TARGET_USER_ID, makeAdcUser('admin'))).rejects.toThrow(BadRequestException);
 
       const self = makeAdcUser('admin', { _id: TARGET_USER_ID });
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'reviewer' });
       await expect(service.removeAdcMember(TARGET_USER_ID, self)).rejects.toThrow(BadRequestException);
       expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(mockAdcAuditLog.record).not.toHaveBeenCalled();
     });
 
     it('404s for a user who is not in that ADC', async () => {
       mockUserModel.exec.mockResolvedValueOnce(null);
-      await expect(service.removeAdcMember(TARGET_USER_ID, makeStateAdmin(), ADC_ID)).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.removeAdcMember(TARGET_USER_ID, makeAdcUser('admin'))).rejects.toThrow(NotFoundException);
     });
   });
 
   describe('transferAdcSubmitter()', () => {
     beforeEach(() => mockAdcModel.exec.mockResolvedValue(adcDoc()));
 
-    it('demotes the ADC admin to reviewer, then promotes the target (State admin acting for the ADC)', async () => {
-      const currentAdminId = new Types.ObjectId();
+    it('demotes the ADC admin to reviewer, then promotes the target, and logs a TRANSFERRED admin change', async () => {
+      const requester = makeAdcUser('admin');
+      const currentAdminId = new Types.ObjectId(requester._id);
       mockUserModel.exec
         .mockResolvedValueOnce({ xviFcSubrole: 'reviewer', isXVIFCProfileVerified: true }) // target
         .mockResolvedValueOnce({ _id: currentAdminId }) // current admin
         .mockResolvedValue(undefined);
 
-      await service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeStateAdmin(), ADC_ID);
+      await service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, requester);
 
       // Demote first: the unique index would refuse two admins at once.
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenNthCalledWith(1, currentAdminId, {
@@ -411,6 +447,15 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenNthCalledWith(2, TARGET_USER_ID, {
         $set: { xviFcSubrole: 'admin' },
       });
+      expect(mockAdcAuditLog.record).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'ADC_ADMIN_CHANGED',
+          actorRole: 'ADC_ADMIN',
+          mode: 'TRANSFERRED',
+          user: TARGET_USER_ID,
+          changes: { admin: { from: currentAdminId, to: new Types.ObjectId(TARGET_USER_ID) } },
+        }),
+      );
     });
 
     it('re-promotes the old admin if the promotion fails, so the ADC is never left without one', async () => {
@@ -429,6 +474,7 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenLastCalledWith(currentAdminId, {
         $set: { xviFcSubrole: 'admin' },
       });
+      expect(mockAdcAuditLog.record).not.toHaveBeenCalled();
     });
 
     it('turns a concurrent second admin (unique-index hit) into ADC_ADMIN_EXISTS and restores the old admin', async () => {
@@ -443,7 +489,7 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
         .mockReturnValueOnce({ exec: jest.fn().mockResolvedValue(undefined) });
 
       await expect(
-        service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeStateAdmin(), ADC_ID),
+        service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeAdcUser('admin')),
       ).rejects.toMatchObject({ response: { code: 'ADC_ADMIN_EXISTS' } });
       expect(mockUserModel.findByIdAndUpdate).toHaveBeenLastCalledWith(currentAdminId, {
         $set: { xviFcSubrole: 'admin' },
@@ -453,22 +499,22 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
     it('refuses a transfer for an inactive ADC', async () => {
       mockAdcModel.exec.mockResolvedValue({ ...adcDoc(), isActive: false });
 
-      await expect(
-        service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeStateAdmin(), ADC_ID),
-      ).rejects.toThrow('This ADC is not active');
+      await expect(service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeAdcUser('admin'))).rejects.toThrow(
+        'This ADC is not active',
+      );
       expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses an unverified target, the current admin, and a non-admin caller', async () => {
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'reviewer', isXVIFCProfileVerified: false });
-      await expect(
-        service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeStateAdmin(), ADC_ID),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeAdcUser('admin'))).rejects.toThrow(
+        BadRequestException,
+      );
 
       mockUserModel.exec.mockResolvedValueOnce({ xviFcSubrole: 'admin', isXVIFCProfileVerified: true });
-      await expect(
-        service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeStateAdmin(), ADC_ID),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeAdcUser('admin'))).rejects.toThrow(
+        BadRequestException,
+      );
 
       await expect(service.transferAdcSubmitter({ toUserId: TARGET_USER_ID }, makeAdcUser('reviewer'))).rejects.toThrow(
         ForbiddenException,
@@ -476,72 +522,256 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
     });
   });
 
-  // ─── platform Admin API ─────────────────────────────────────────────────
+  // ─── Portal Admin: the ADC Admin (master/adc) ───────────────────────────
 
-  describe('adminCreateUser() with adcId', () => {
-    const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
-    const dto = {
-      name: 'ADC User',
-      email: 'adc.user@example.com',
-      mobile: '8987654321',
-      designation: 'ADC Officer',
-      role: Role.STATE,
-      subRole: 'EDITOR' as const,
-      stateId: STATE_ID,
-      adcId: ADC_ID,
-    };
+  const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, role: Role.ADMIN, state: undefined });
+  const adcRef = () => ({ _id: new Types.ObjectId(ADC_ID), name: 'Test ADC', state: new Types.ObjectId(STATE_ID) });
+  const adminInput = { name: 'New Admin', email: 'admin@adc.gov.in', mobile: '9876543210', designation: 'Secretary' };
 
-    beforeEach(() => {
-      // duplicate-email lookup finds nothing; the state exists
-      mockUserModel.exec.mockResolvedValueOnce(null);
-      mockStateModel.exec.mockResolvedValueOnce({ _id: new Types.ObjectId(STATE_ID) });
-      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID), ...dto });
-    });
+  describe('createAdcAdmin()', () => {
+    beforeEach(() => mockStateModel.exec.mockResolvedValue({ name: 'Assam' }));
 
-    it('stamps the ADC and makes the first user of an ADC without an admin its admin', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue(null);
+    it('creates the ADC Admin and sends the Portal Admin invite wording', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID) });
 
-      await service.adminCreateUser(dto as never, platformAdmin);
+      const member = await service.createAdcAdmin(adcRef(), adminInput, platformAdmin);
 
+      expect(member).toEqual(expect.objectContaining({ _id: TARGET_USER_ID, subRole: 'SUBMITTER' }));
       expect(mockUserModel.create).toHaveBeenCalledWith(
-        expect.objectContaining({ adc: new Types.ObjectId(ADC_ID), xviFcSubrole: 'admin' }),
+        expect.objectContaining({ xviFcSubrole: 'admin', adc: new Types.ObjectId(ADC_ID), role: Role.STATE }),
+      );
+      expect(mockEmailQueueService.addEmailJob).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mailData: expect.objectContaining({
+            portalInvite: true,
+            adcName: 'Test ADC',
+            stateName: 'Assam',
+            role: 'Admin',
+          }),
+        }),
       );
     });
 
-    it('refuses a second admin for an ADC with 409', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
-      mockUserModel.exists.mockResolvedValue({ _id: 'existing-admin' });
-
-      await expect(service.adminCreateUser({ ...dto, subRole: 'ADMIN' } as never, platformAdmin)).rejects.toThrow(
-        HttpException,
+    it('turns a second admin (unique-index hit) into ADC_ADMIN_EXISTS', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+      mockUserModel.create.mockRejectedValueOnce(
+        Object.assign(new Error('E11000'), { code: 11000, keyPattern: { adc: 1, xviFcSubrole: 1 } }),
       );
-      expect(mockUserModel.create).not.toHaveBeenCalled();
+
+      await expect(service.createAdcAdmin(adcRef(), adminInput, platformAdmin)).rejects.toMatchObject({
+        response: { code: 'ADC_ADMIN_EXISTS' },
+      });
+      expect(mockEmailQueueService.addEmailJob).not.toHaveBeenCalled();
     });
 
-    it('requires a subRole for an ADC user', async () => {
-      await expect(service.adminCreateUser({ ...dto, subRole: undefined } as never, platformAdmin)).rejects.toThrow(
-        BadRequestException,
-      );
-      expect(mockUserModel.create).not.toHaveBeenCalled();
-    });
-
-    it('refuses an inactive ADC', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc({ isActive: false }));
-      await expect(service.adminCreateUser(dto as never, platformAdmin)).rejects.toThrow(BadRequestException);
-      expect(mockUserModel.create).not.toHaveBeenCalled();
-    });
-
-    it('refuses an ADC that belongs to another state', async () => {
-      mockAdcModel.exec.mockResolvedValueOnce(adcDoc({ state: new Types.ObjectId(STATE_ID_2) }));
-      await expect(service.adminCreateUser(dto as never, platformAdmin)).rejects.toThrow(BadRequestException);
+    it('refuses an email that is active elsewhere with 409', async () => {
+      mockUserModel.exec.mockResolvedValueOnce({ _id: 'someone' });
+      await expect(service.createAdcAdmin(adcRef(), adminInput, platformAdmin)).rejects.toMatchObject({
+        response: { code: 'EMAIL_ALREADY_ACTIVE' },
+      });
       expect(mockUserModel.create).not.toHaveBeenCalled();
     });
   });
 
-  describe('adminUpdateUser()', () => {
-    const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
+  describe('setAdcAdmin()', () => {
+    const currentAdminId = new Types.ObjectId();
 
+    beforeEach(() => {
+      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
+      mockStateModel.exec.mockResolvedValue({ name: 'Assam' });
+    });
+
+    it('promotes a verified member: demotes the current Admin first, then promotes', async () => {
+      mockUserModel.exec
+        .mockResolvedValueOnce({ _id: currentAdminId }) // current admin
+        .mockResolvedValueOnce({ xviFcSubrole: 'reviewer', isXVIFCProfileVerified: true }); // target
+
+      const change = await service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin);
+
+      expect(change).toEqual(
+        expect.objectContaining({ from: currentAdminId, to: new Types.ObjectId(TARGET_USER_ID), mode: 'PROMOTED' }),
+      );
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenNthCalledWith(1, currentAdminId, {
+        $set: { xviFcSubrole: 'reviewer' },
+      });
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenNthCalledWith(2, TARGET_USER_ID, {
+        $set: { xviFcSubrole: 'admin' },
+      });
+    });
+
+    it('promotes without a demote when the ADC has no Admin yet', async () => {
+      mockUserModel.exec
+        .mockResolvedValueOnce(null) // no admin
+        .mockResolvedValueOnce({ xviFcSubrole: 'viewer', isXVIFCProfileVerified: true });
+
+      const change = await service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin);
+
+      expect(change.from).toBeNull();
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledTimes(1);
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(TARGET_USER_ID, { $set: { xviFcSubrole: 'admin' } });
+    });
+
+    it('refuses an unverified member, the current Admin and a non-member, changing nothing', async () => {
+      mockUserModel.exec
+        .mockResolvedValueOnce({ _id: currentAdminId })
+        .mockResolvedValueOnce({ xviFcSubrole: 'reviewer', isXVIFCProfileVerified: false });
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+
+      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
+      mockUserModel.exec
+        .mockResolvedValueOnce({ _id: currentAdminId })
+        .mockResolvedValueOnce({ xviFcSubrole: 'admin', isXVIFCProfileVerified: true });
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin),
+      ).rejects.toThrow(BadRequestException);
+
+      mockAdcModel.exec.mockResolvedValueOnce(adcDoc());
+      mockUserModel.exec.mockResolvedValueOnce({ _id: currentAdminId }).mockResolvedValueOnce(null);
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+    });
+
+    it('invites a new person as Admin after demoting the current one', async () => {
+      const newAdminId = new Types.ObjectId();
+      mockUserModel.exec
+        .mockResolvedValueOnce({ _id: currentAdminId }) // current admin
+        .mockResolvedValueOnce(undefined) // the demote
+        .mockResolvedValueOnce(null) // no active user with the email
+        .mockResolvedValueOnce(null); // no removed user
+      mockUserModel.create.mockResolvedValue({ _id: newAdminId });
+
+      const change = await service.setAdcAdmin(ADC_ID, { mode: 'invite', ...adminInput }, platformAdmin);
+
+      expect(change).toEqual(expect.objectContaining({ from: currentAdminId, to: newAdminId, mode: 'INVITED' }));
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(currentAdminId, {
+        $set: { xviFcSubrole: 'reviewer' },
+      });
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.objectContaining({ xviFcSubrole: 'admin' }));
+    });
+
+    it('re-promotes the old Admin when the invite fails', async () => {
+      mockUserModel.exec
+        .mockResolvedValueOnce({ _id: currentAdminId })
+        .mockResolvedValueOnce(undefined) // the demote
+        .mockResolvedValueOnce({ _id: 'someone-active' }); // the email is active elsewhere
+
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'invite', ...adminInput }, platformAdmin),
+      ).rejects.toMatchObject({ response: { code: 'EMAIL_ALREADY_ACTIVE' } });
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenLastCalledWith(currentAdminId, {
+        $set: { xviFcSubrole: 'admin' },
+      });
+    });
+
+    it('refuses an inactive ADC and an unknown one', async () => {
+      mockAdcModel.exec.mockReset();
+      mockAdcModel.exec.mockResolvedValueOnce(adcDoc({ isActive: false })).mockResolvedValueOnce(null);
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin),
+      ).rejects.toThrow('This ADC is not active');
+      await expect(
+        service.setAdcAdmin(ADC_ID, { mode: 'promote', userId: TARGET_USER_ID }, platformAdmin),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('listAdcMembersForAdmin()', () => {
+    it("maps the ADC's active members to display levels", async () => {
+      mockAdcModel.exists.mockResolvedValue({ _id: ADC_ID });
+      const adminId = new Types.ObjectId();
+      mockUserModel.exec.mockResolvedValueOnce([
+        { _id: adminId, name: 'A', email: 'a@x.in', xviFcSubrole: 'admin', isXVIFCProfileVerified: true },
+        { _id: TARGET_USER_ID, name: 'B', email: 'b@x.in', xviFcSubrole: 'reviewer' },
+      ]);
+
+      await expect(service.listAdcMembersForAdmin(ADC_ID)).resolves.toEqual([
+        { _id: String(adminId), name: 'A', email: 'a@x.in', subRole: 'SUBMITTER', isXVIFCProfileVerified: true },
+        { _id: TARGET_USER_ID, name: 'B', email: 'b@x.in', subRole: 'EDITOR', isXVIFCProfileVerified: false },
+      ]);
+      expect(mockUserModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ adc: new Types.ObjectId(ADC_ID), isDeleted: false }),
+      );
+    });
+
+    it('404s for an unknown ADC', async () => {
+      mockAdcModel.exists.mockResolvedValue(null);
+      await expect(service.listAdcMembersForAdmin(ADC_ID)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('removeAdcAdminAndDetachRemoved()', () => {
+    const adcId = new Types.ObjectId(ADC_ID);
+
+    it('removes the Admin, then clears adc on every removed member so their emails are free', async () => {
+      const adminId = new Types.ObjectId();
+      mockUserModel.exec.mockResolvedValueOnce({ _id: adminId }).mockResolvedValue(undefined);
+
+      await expect(service.removeAdcAdminAndDetachRemoved(adcId)).resolves.toEqual(adminId);
+
+      expect(mockUserModel.findByIdAndUpdate).toHaveBeenCalledWith(adminId, {
+        $set: { isXviFcdeleted: true, isDeleted: true },
+      });
+      expect(mockUserModel.updateMany).toHaveBeenCalledWith(
+        { adc: adcId, isDeleted: true, isXviFcdeleted: true },
+        { $set: { adc: null } },
+      );
+    });
+
+    it('still detaches removed members when the ADC has no Admin', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null).mockResolvedValue(undefined);
+
+      await expect(service.removeAdcAdminAndDetachRemoved(adcId)).resolves.toBeNull();
+      expect(mockUserModel.findByIdAndUpdate).not.toHaveBeenCalled();
+      expect(mockUserModel.updateMany).toHaveBeenCalled();
+    });
+  });
+
+  // ─── platform Admin user API ────────────────────────────────────────────
+
+  describe('POST users no longer creates ADC users', () => {
+    it('CreateUserDto has no adcId, so the global ValidationPipe rejects it', async () => {
+      const dto = plainToInstance(CreateUserDto, {
+        name: 'ADC User',
+        email: 'adc.user@example.com',
+        mobile: '8987654321',
+        designation: 'ADC Officer',
+        role: Role.STATE,
+        stateId: STATE_ID,
+        adcId: ADC_ID,
+      });
+      const errors = await validate(dto, { whitelist: true, forbidNonWhitelisted: true });
+      expect(errors.map((e) => e.property)).toContain('adcId');
+    });
+
+    it('adminCreateUser never stamps an ADC on the user', async () => {
+      mockUserModel.exec.mockResolvedValueOnce(null); // duplicate-email lookup
+      mockStateModel.exec.mockResolvedValueOnce({ _id: new Types.ObjectId(STATE_ID) });
+      mockUserModel.create.mockResolvedValue({ _id: new Types.ObjectId(TARGET_USER_ID) });
+
+      await service.adminCreateUser(
+        {
+          name: 'State User',
+          email: 'state.user@example.com',
+          mobile: '8987654321',
+          designation: 'Officer',
+          role: Role.STATE,
+          subRole: 'EDITOR',
+          stateId: STATE_ID,
+        } as never,
+        platformAdmin,
+      );
+
+      expect(mockUserModel.create).toHaveBeenCalledWith(expect.not.objectContaining({ adc: expect.anything() }));
+    });
+  });
+
+  describe('adminUpdateUser()', () => {
     it('rejects an adcId that differs from the user’s current ADC', async () => {
       mockUserModel.exec.mockResolvedValueOnce(makeUserDoc({ role: Role.STATE, adc: new Types.ObjectId(ADC_ID) }));
       await expect(

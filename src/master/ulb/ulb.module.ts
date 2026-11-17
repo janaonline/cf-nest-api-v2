@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { EmailQueueModule } from 'src/core/queue/email-queue/email-queue.module';
+import { AdcAuditLogModule } from 'src/master/adc/audit/adc-audit-log.module';
 import { FormJsonModule } from 'src/master/form-json/form-json.module';
 import { FormJsonConfigModule } from 'src/master/form-json-config/form-json-config.module';
 import { XviFcCommonModule } from 'src/module/xvi-fc/common/xvi-fc-common.module';
@@ -31,6 +32,7 @@ import { UlbService } from './ulb.service';
     FormJsonConfigModule,
     XviFcCommonModule,
     EmailQueueModule,
+    AdcAuditLogModule,
   ],
   controllers: [UlbController],
   providers: [UlbService],
