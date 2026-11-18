@@ -1,16 +1,8 @@
-import { IsOptional, IsString, MaxLength, MinLength, Matches } from 'class-validator';
-import {
-  PASSWORD_MAX_LENGTH,
-  PASSWORD_MIN_LENGTH,
-  PASSWORD_PATTERN,
-  PASSWORD_RULE_MESSAGE,
-} from '../password-policy';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsPolicyPassword } from '../password-policy';
 
 export class SetNewPasswordDto {
-  @IsString()
-  @MinLength(PASSWORD_MIN_LENGTH, { message: PASSWORD_RULE_MESSAGE })
-  @MaxLength(PASSWORD_MAX_LENGTH, { message: PASSWORD_RULE_MESSAGE })
-  @Matches(PASSWORD_PATTERN, { message: PASSWORD_RULE_MESSAGE })
+  @IsPolicyPassword()
   newPassword!: string;
 
   @IsString()
