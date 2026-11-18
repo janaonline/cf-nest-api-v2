@@ -941,7 +941,13 @@ describe('ElectedUrbanLocalBodiesExcelService — validateExcel', () => {
         form: formOid,
         datasetVersion: 3,
         isActive: true,
-        rowStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
+        rowStatus: {
+          $in: [
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
       expect(formModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
@@ -1319,7 +1325,13 @@ describe('ElectedUrbanLocalBodiesExcelService — revalidateExcel', () => {
         form: formOid,
         datasetVersion: baseFormDoc.activeDatasetVersion,
         isActive: true,
-        rowStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
+        rowStatus: {
+          $in: [
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
       expect(rowModel.find).not.toHaveBeenCalled();
     });

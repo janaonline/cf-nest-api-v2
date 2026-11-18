@@ -129,7 +129,10 @@ export class ElectedUrbanLocalBodiesExcelService {
     ]);
     const dbUlbs = dbUlbsRaw as UlbLean[];
 
-    if (existing) await this.assertNoLockedRows(existing._id, existing.activeDatasetVersion ?? 0);
+    if (existing) {
+      assertCanStateEditForm(existing.currentFormStatus);
+      await this.assertNoLockedRows(existing._id, existing.activeDatasetVersion ?? 0);
+    }
 
     const excelFormJsonFields = await this.eulbFormJsonConfig.loadFields(dto.yearId);
     const excelMainFields = getFieldsByType(excelFormJsonFields, 'EULB_MAIN_FORM_FIELDS');
@@ -701,7 +704,7 @@ export class ElectedUrbanLocalBodiesExcelService {
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   /**
-   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_SO`, or `UNDER_REVIEW_BY_MOHUA` once a claim letter moves it on), this form's Excel can no
+   * Once PMU has approved at least one row (`UNDER_REVIEW_BY_SO`, then `UNDER_REVIEW_BY_MOHUA` / acknowledged as its claim letter moves on), this form's Excel can no
    * longer be wholesale re-uploaded or revalidated-in-place — both mechanisms replace/rewrite the
    * entire active dataset version with no per-row concept, which would silently clobber or delete an
    * already-approved row's data. Further editing of a mixed-outcome submission must go through the
@@ -715,7 +718,13 @@ export class ElectedUrbanLocalBodiesExcelService {
         form: formId,
         datasetVersion,
         isActive: true,
-        rowStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] },
+        rowStatus: {
+          $in: [
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       })
       .exec();
     if (hasLockedRows) {

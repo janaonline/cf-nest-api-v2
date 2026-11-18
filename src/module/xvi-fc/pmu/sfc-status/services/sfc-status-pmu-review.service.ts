@@ -80,7 +80,7 @@ export class SfcStatusPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcSfcStatusDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -231,7 +231,7 @@ export class SfcStatusPmuReviewService {
   private async findForm(stateId: string, yearId: string): Promise<SfcStatusPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), formType: SFC_STATUS_FORM_TYPE })
-      .select('state year currentFormStatus data pmuRemarks')
+      .select('state year currentFormStatus data rejectionRemarks')
       .lean<SfcStatusPmuFormLean>()
       .exec();
   }

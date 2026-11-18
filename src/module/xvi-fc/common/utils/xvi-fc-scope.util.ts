@@ -12,3 +12,13 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 export function isMohuaViewScope(user: Pick<AuthUser, 'scope'>): boolean {
   return user.scope === Scope.MOHUA || user.scope === Scope.DOE;
 }
+
+/**
+ * Who may read the national dashboard: MoHUA and DoE, plus PMU, whose Overview is the same dashboard. Used by
+ * the three `mohua/overview` controllers and by every ULB form read that dashboard's ULB page makes (Annual
+ * Accounts, Bank Account, SLB, DUR) — there it also keeps those viewers from writing exemption stubs. Other
+ * MoHUA reads keep `isMohuaViewScope`, as the dashboard doesn't need them.
+ */
+export function isNationalDashboardScope(user: Pick<AuthUser, 'scope'>): boolean {
+  return isMohuaViewScope(user) || user.scope === Scope.PMU;
+}

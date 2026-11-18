@@ -100,6 +100,8 @@ export interface ClaimLetterDocument {
   designYearLabel: string;
   installment: 1 | 2;
   batchNumber: number;
+  /** Above 0 for a letter built in a slot a returned letter held (`-R<n>` in its names). */
+  resubmissionNumber: number;
   /** When (IST, "07 Oct 2026, 14:30") the eligibility behind rows C-K and the lists was evaluated. */
   asOn: string;
   letter: ClaimLetterCoveringLetter;

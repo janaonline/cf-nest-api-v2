@@ -96,6 +96,8 @@ export interface ClaimLetterDocumentParent {
   year: Types.ObjectId;
   installment: 1 | 2;
   batchNumber: number;
+  /** Absent on letters created before the field (`.lean()` skips defaults): read as 0. */
+  resubmissionNumber?: number;
   revision: number;
   currentFormStatus: number;
   isAbandoned: boolean;
@@ -201,7 +203,9 @@ export class ClaimLetterDocumentService {
   async loadParent(claimLetterId: string, user: AuthUser): Promise<ClaimLetterDocumentParent> {
     const parent = await this.batchModel
       .findOne({ _id: claimLetterId, assemblyStatus: 'READY' })
-      .select('state year installment batchNumber revision currentFormStatus isAbandoned letterDetails')
+      .select(
+        'state year installment batchNumber resubmissionNumber revision currentFormStatus isAbandoned letterDetails',
+      )
       .lean<ClaimLetterDocumentParent>()
       .exec();
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
@@ -387,6 +391,7 @@ export class ClaimLetterDocumentService {
         designYearLabel: yearDoc.year,
         installment: parent.installment,
         batchNumber: parent.batchNumber,
+        resubmissionNumber: parent.resubmissionNumber ?? 0,
       }),
       asOn: formatIstDateTime(evaluatedAt),
       totalClaim: sumAmountsExactly(proposal.map((p) => p.claimedAmount)),
@@ -536,6 +541,7 @@ export class ClaimLetterDocumentService {
       designYearLabel: annexure.designYearLabel,
       installment: parent.installment,
       batchNumber: parent.batchNumber,
+      resubmissionNumber: parent.resubmissionNumber ?? 0,
       asOn: annexure.asOn,
       letter: this.buildCoveringLetter(parent, annexure, sfc, slot),
       annexure: annexureMeta,

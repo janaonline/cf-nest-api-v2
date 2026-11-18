@@ -13,7 +13,7 @@ export interface DevolutionFormulaPmuFormLean {
   installment: DfInstallment;
   currentFormStatus: number;
   activeDatasetVersion: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 export type DevolutionFormulaPmuReviewPermissions = PmuReviewPermissions;

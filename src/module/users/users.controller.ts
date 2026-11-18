@@ -6,7 +6,6 @@ import {
   Patch,
   Param,
   Delete,
-  Query,
   UseGuards,
   HttpCode,
   HttpStatus,
@@ -25,7 +24,6 @@ import { UpdateUserRoleDto } from './dto/update-user-role.dto';
 import { StateMemberResponseDto } from './dto/state-member-response.dto';
 import { UpdateXviFcSubroleDto } from './dto/update-xvi-fc-subrole.dto';
 import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
-import { AdcTeamQueryDto } from './dto/adc-team-query.dto';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
 import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { JwtAuthGuard } from 'src/module/auth/guards/jwt-auth.guard';
@@ -261,8 +259,8 @@ export class UsersController {
     return this.usersService.softDeleteDoeMember(id, user);
   }
 
-  // ── ADC teams (Autonomous District Councils). `adcId` is required for a State DMA caller (which ADC) and
-  //    ignored for an ADC user (their own). The service checks who may read and who may manage. ──
+  // ── ADC teams (Autonomous District Councils): an ADC user's own team only; only its ADC admin may change it.
+  //    The Portal Admin manages ADCs and their Admin through master/adc. ──
 
   @ApiBearerAuth()
   @Get('adc-permission-matrix')
@@ -275,8 +273,8 @@ export class UsersController {
   @Get('adc-members')
   @ApiOperation({ summary: "List an ADC's team members" })
   @ApiOkResponse({ type: [StateMemberResponseDto] })
-  getAdcMembers(@Query() query: AdcTeamQueryDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
-    return this.usersService.getAdcMembers(user, query.adcId);
+  getAdcMembers(@CurrentUser() user: AuthUser): Promise<StateMemberResponseDto[]> {
+    return this.usersService.getAdcMembers(user);
   }
 
   @ApiBearerAuth()
@@ -284,45 +282,32 @@ export class UsersController {
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
     summary:
-      'Invite a member to an ADC team. The first member of an ADC with no admin becomes its admin; later invites are reviewer/viewer.',
+      'Invite a Reviewer or Viewer to your ADC team (ADC admin only). The ADC Admin is set by the Portal Admin.',
   })
   @ApiOkResponse({ type: StateMemberResponseDto })
-  inviteAdcMember(
-    @Body() dto: InviteStateMemberDto,
-    @Query() query: AdcTeamQueryDto,
-    @CurrentUser() user: AuthUser,
-  ): Promise<StateMemberResponseDto> {
-    return this.usersService.inviteAdcMember(dto, user, query.adcId);
+  inviteAdcMember(@Body() dto: InviteStateMemberDto, @CurrentUser() user: AuthUser): Promise<StateMemberResponseDto> {
+    return this.usersService.inviteAdcMember(dto, user);
   }
 
   @ApiBearerAuth()
   @Post('adc-members/transfer-submitter')
   @ApiOperation({ summary: "Transfer an ADC's admin (Submitter) level to another member of that ADC" })
-  transferAdcSubmitter(
-    @Body() dto: TransferSubmitterDto,
-    @Query() query: AdcTeamQueryDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.usersService.transferAdcSubmitter(dto, user, query.adcId);
+  transferAdcSubmitter(@Body() dto: TransferSubmitterDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.transferAdcSubmitter(dto, user);
   }
 
   @ApiBearerAuth()
   @Patch('adc-members/:id/sub-role')
   @ApiOperation({ summary: 'Update xviFcSubrole for an ADC member (EDITOR → reviewer, VIEWER → viewer)' })
-  updateAdcMemberSubrole(
-    @Param('id') id: string,
-    @Body() dto: UpdateXviFcSubroleDto,
-    @Query() query: AdcTeamQueryDto,
-    @CurrentUser() user: AuthUser,
-  ) {
-    return this.usersService.updateAdcMemberSubrole(id, dto, user, query.adcId);
+  updateAdcMemberSubrole(@Param('id') id: string, @Body() dto: UpdateXviFcSubroleDto, @CurrentUser() user: AuthUser) {
+    return this.usersService.updateAdcMemberSubrole(id, dto, user);
   }
 
   @ApiBearerAuth()
   @Delete('adc-members/:id')
   @ApiOperation({ summary: 'Remove an ADC team member (admin only; cannot remove self or the ADC admin)' })
-  removeAdcMember(@Param('id') id: string, @Query() query: AdcTeamQueryDto, @CurrentUser() user: AuthUser) {
-    return this.usersService.removeAdcMember(id, user, query.adcId);
+  removeAdcMember(@Param('id') id: string, @CurrentUser() user: AuthUser) {
+    return this.usersService.removeAdcMember(id, user);
   }
 
   @ApiBearerAuth()

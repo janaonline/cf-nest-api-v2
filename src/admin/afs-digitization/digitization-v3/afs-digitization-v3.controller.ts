@@ -46,22 +46,6 @@ export class AfsDigitizationV3Controller {
     };
   }
 
-  /** Recounts the overall cards from the records. Only needed to fix drift; the cards are kept up to date by the jobs. */
-  @Post('metrics/rebuild')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildMetrics() {
-    return { success: true, data: await this.digitizationV3Service.rebuildMetrics() };
-  }
-
-  /** Recounts the unique files / pages to digitize (the `total` card) from the annual accounts. Reads every account, so it takes a while. */
-  @Post('metrics/rebuild-uniqueness')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildUniqueness() {
-    return { success: true, data: await this.digitizationV3Service.rebuildUniqueness() };
-  }
-
   /** FastAPI's log for one job: status, progress step, error and warnings, timestamps. */
   @Get('jobs/:afsDigitizationJobId/log')
   async jobLog(@Param('afsDigitizationJobId') afsDigitizationJobId: string) {

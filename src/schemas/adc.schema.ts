@@ -3,7 +3,8 @@ import { Document, Types } from 'mongoose';
 
 /**
  * Autonomous District Council (Assam). Owns a subset of one state's ULBs: `ulbs.adc` points here and an ADC
- * user is a STATE-role user with `users.adc` set. Rows are inserted directly in the DB, not via an API.
+ * user is a STATE-role user with `users.adc` set. Managed by the Portal Admin through master/adc (create with its
+ * Admin, rename, change Admin, delete); every change is logged in adc_audit_logs.
  */
 @Schema({ collection: 'adcs', timestamps: true })
 export class Adc {

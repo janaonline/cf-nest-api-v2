@@ -7,7 +7,7 @@ import { PermissionGuard } from 'src/module/auth/permission.guard';
 import { RequirePermissions } from 'src/module/auth/require-permissions.decorator';
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { MohuaStateDetailService } from './mohua-state-detail.service';
 import { MohuaStateUlbsService } from './mohua-state-ulbs.service';
 import { GetMohuaStateUlbsQueryDto } from './mohua-state-ulbs-query.dto';
@@ -68,9 +68,9 @@ export class MohuaStateDetailController {
     });
   }
 
-  /** STATE users also hold VIEW_STATUS_REPORTS, but these views read any state — MoHUA/DoE (read-only)/ADMIN only. */
+  /** STATE users also hold VIEW_STATUS_REPORTS, but these views read any state — MoHUA/DoE/PMU (read-only)/ADMIN only. */
   private assertMohuaScope(user: AuthUser): void {
-    if (!isMohuaViewScope(user) && user.scope !== Scope.ADMIN) {
+    if (!isNationalDashboardScope(user) && user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Access denied');
     }
   }

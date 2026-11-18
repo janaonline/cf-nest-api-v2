@@ -1,4 +1,11 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Model, PipelineStage, Types } from 'mongoose';
@@ -32,6 +39,7 @@ import {
 } from './dto/manual-review-history-stats-query.dto';
 import { AnnualAccountsService, AnnualAccountSectionKey, SECTION_LABELS } from './annual_accounts.service';
 import { getPortalUrl } from 'src/core/utils/portal-urls.util';
+import { FIRST_ATTEMPT_MESSAGE, isPastFirstAttempt } from 'src/common/utils/manual-review-cooldown.util';
 import {
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
@@ -95,13 +103,17 @@ export class AnnualAccountManualReviewService {
     const { anchor, sectionDoc } = await this.annualAccountsService.resolveSectionDocument(id, section);
     await this.annualAccountsService.validateViewAccess(anchor, user);
     if (!sectionDoc) throw new NotFoundException('Section not found');
-    await this.annualAccountsService.assertNotBlockedByPendingExemption(anchor.ulb, anchor.design_year, section);
 
     const docSlot = (sectionDoc.documents ?? []).find((d: any) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found in this section');
 
-    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+    // Case-insensitive, like the writer's PASS check. A technical failure (OCR job crashed) has no
+    // validationStatus and is fixed by Retry / Re-upload, not a manual review.
+    if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
+    }
+    if (!isPastFirstAttempt(docSlot.currentUpload)) {
+      throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('Manual review has already been requested for this document.');
@@ -122,6 +134,13 @@ export class AnnualAccountManualReviewService {
           `After that, uploads will be temporarily blocked. For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`,
       );
     }
+    // Same gate as an upload: section still ULB-editable, document not State-approved, no pending exemption.
+    await this.annualAccountsService.assertCanUlbUpload(
+      anchor.ulb.toString(),
+      anchor.design_year.toString(),
+      section,
+      docId,
+    );
 
     const requestedAt = new Date();
     await Promise.all([
@@ -220,30 +239,47 @@ export class AnnualAccountManualReviewService {
     if (!docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('No manual review has been requested for this document.');
     }
+    // isManualReviewRequested stays set after a decision, so without this a second call (double-click,
+    // or a second ADMIN) would overwrite the first decision.
+    if (docSlot.manualReviewDecision != null) {
+      throw new BadRequestException('This manual review request has already been decided.');
+    }
 
     const deciderName = await resolveDeciderName(this.userModel, user._id);
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
-    // A rejection just starts (or restarts) the 3-attempt self-service window — the 7-day
-    // cooldown itself is set once those attempts run out (AnnualAccountOcrProcessor.
+    // A rejection just starts (or restarts) the 3-attempt self-service window — the 24-hour
+    // cooldown itself is set once those attempts run out (AnnualAccountOcrResultWriter.
     // computePostRejectionUpdate), not here. manualReviewRejectionCount is kept purely as an
     // audit/stats counter (see getManualReviewHistoryStats) and no longer gates the cooldown.
-    const rejectionUpdate: Record<string, unknown> = {};
-    if (dto.decision === 'RETURNED') {
-      rejectionUpdate['documents.$.manualReviewRejectionCount'] = (docSlot.manualReviewRejectionCount ?? 0) + 1;
-      rejectionUpdate['documents.$.postRejectionAttemptsUsed'] = 0;
-    }
+    // An approval clears the strike counter and any old cooldown, the same as an OCR PASS does;
+    // validationStatus keeps the OCR's own FAIL verdict, the decision record is the override.
+    const decisionUpdate: Record<string, unknown> =
+      dto.decision === 'RETURNED'
+        ? {
+            'documents.$.manualReviewRejectionCount': (docSlot.manualReviewRejectionCount ?? 0) + 1,
+            'documents.$.postRejectionAttemptsUsed': 0,
+          }
+        : {
+            'documents.$.processingStatus': 'PASSED',
+            'documents.$.postRejectionAttemptsUsed': 0,
+            'documents.$.uploadBlockedUntil': null,
+          };
 
-    await this.annualAccountModel.updateOne(
-      { _id: sectionDoc._id, 'documents.docId': docId },
-      {
-        $set: {
-          'documents.$.manualReviewDecision': decision,
-          ...(dto.decision === 'APPROVED' && { 'documents.$.processingStatus': 'PASSED' }),
-          ...rejectionUpdate,
-        },
-      },
+    // $elemMatch binds both conditions to the same element, so of two concurrent calls only one matches.
+    const updateResult = await this.annualAccountModel.updateOne(
+      { _id: sectionDoc._id, documents: { $elemMatch: { docId, manualReviewDecision: null } } },
+      { $set: { 'documents.$.manualReviewDecision': decision, ...decisionUpdate } },
     );
+    if (updateResult.matchedCount === 0) {
+      throw new ConflictException('This manual review request has already been decided.');
+    }
+    if (dto.decision === 'APPROVED') {
+      await this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { processingStatus: 'PASSED' } },
+      );
+    }
 
     const decidedBy = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
     const updatedRequest = await this.manualReviewRequestModel.findOneAndUpdate(
@@ -633,8 +669,10 @@ export class AnnualAccountManualReviewService {
   }
 
   /**
-   * Filter + lookup stages shared by the paginated list and the unpaginated Excel dump — everything
-   * up to (not including) sort/pagination, so both read exactly the same rows for a given query.
+   * Filter stages shared by the paginated list and the unpaginated Excel dump, so both read exactly
+   * the same rows for a given query. Only the State filter and the ULB search join ULB/State here;
+   * every other lookup (`manualReviewHistoryLookupStages`) runs after sort/pagination, on the rows returned only, so a page
+   * never joins the whole history.
    */
   private buildManualReviewHistoryFilterStages(dto: ManualReviewHistoryQueryDto): PipelineStage[] {
     const match: Record<string, unknown> = {};
@@ -652,22 +690,23 @@ export class AnnualAccountManualReviewService {
       };
     }
 
+    const search = dto.search?.trim();
+    const searchRegex = search ? new RegExp(escapeRegex(search), 'i') : null;
     return [
       { $match: match },
-      ...this.manualReviewHistoryLookupStages(),
-      ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
-      ...(dto.breachedOnly ? [{ $match: { isBreached: true } } as PipelineStage] : []),
-      ...(dto.search?.trim()
-        ? [
-            {
-              $match: {
-                $or: [
-                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                ],
-              },
-            } as PipelineStage,
-          ]
+      ...(dto.stateId || searchRegex
+        ? ([
+            { $lookup: { from: 'ulbs', localField: 'ulb', foreignField: '_id', as: 'ulbDoc' } },
+            { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+          ] as PipelineStage[])
+        : []),
+      ...(dto.stateId ? [{ $match: { 'ulbDoc.state': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
+      ...(searchRegex
+        ? [{ $match: { $or: [{ 'ulbDoc.name': searchRegex }, { 'ulbDoc.code': searchRegex }] } } as PipelineStage]
+        : []),
+      // Same derivation as isBreached in the lookup stages — never stored.
+      ...(dto.breachedOnly
+        ? [{ $match: { $expr: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] } } } as PipelineStage]
         : []),
     ];
   }
@@ -685,7 +724,12 @@ export class AnnualAccountManualReviewService {
       { $sort: { requestedAt: -1 } },
       {
         $facet: {
-          data: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }, this.manualReviewHistoryProjectStage()],
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            ...this.manualReviewHistoryLookupStages(),
+            this.manualReviewHistoryProjectStage(),
+          ],
           totalCount: [{ $count: 'count' }],
         },
       },
@@ -797,6 +841,7 @@ export class AnnualAccountManualReviewService {
     const pipeline: PipelineStage[] = [
       ...this.buildManualReviewHistoryFilterStages(dto),
       { $sort: { requestedAt: -1 } },
+      ...this.manualReviewHistoryLookupStages(),
       this.manualReviewHistoryProjectStage(),
     ];
 

@@ -58,12 +58,12 @@ version), mirroring FC Unspent Declaration's row-review pattern — both draw fr
 `src/module/xvi-fc/common/constants/row-review-status.constants.ts`, a restricted subset of
 `FORM_STATUS`. **PMU Review feature**: a new PMU reviewer now sits ahead of MoHUA — see
 `src/module/xvi-fc/pmu/elected-urban-local-bodies/` for the row approve/reject endpoints
-(`rowStatus` advances `UNDER_REVIEW_BY_PMU` → `UNDER_REVIEW_BY_MOHUA`/`RETURNED_BY_PMU` — PMU has no
-status of its own once approved, so an approved row lands directly on the same status MoHUA's own
-review would use). No MoHUA-side per-row review exists for EULB (there's still no MoHUA review
-module for this form — PMU approval alone gates claim eligibility, same as the other 4 state
-forms); `rowStatus` never advances past `UNDER_REVIEW_BY_MOHUA`/`RETURNED_BY_PMU` today. The
-`post-submission-update` correction workflow does not read or write `rowStatus`.
+(`rowStatus` advances `UNDER_REVIEW_BY_PMU` → `UNDER_REVIEW_BY_SO` (15) / `RETURNED_BY_PMU`). A PMU-approved
+row waits at 15 for a claim letter; the MoHUA Section Officer's approve of that letter moves it to
+`UNDER_REVIEW_BY_MOHUA` (5), and the SO's return to `RETURNED_BY_SO` (16) (claim-letter ADR 0007). No
+MoHUA-side per-row review exists for EULB beyond that. The `post-submission-update` correction workflow does
+not read or write `rowStatus`, but it refuses a ULB that is in a submitted claim letter (15, 5 or 7), naming it;
+Excel re-upload / revalidate are refused while any active row is at 15, 5 or 7 (`assertNoLockedRows`).
 
 This decoupling (a row's domain value `electedBodyStatus` can be real and final well before
 `rowStatus`/the form's own `currentFormStatus` ever leaves draft) is exactly why

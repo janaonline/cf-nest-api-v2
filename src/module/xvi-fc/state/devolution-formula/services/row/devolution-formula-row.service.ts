@@ -30,6 +30,7 @@ import type { RowsQueryDevolutionFormulaDto } from '../../dto/rows-query-devolut
 import type { UpdateRowDevolutionFormulaDto } from '../../dto/update-row-devolution-formula.dto';
 import type { DfFormLeanDoc, DfRowError } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
+import { assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
 import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
@@ -313,6 +314,7 @@ export class DevolutionFormulaRowService {
     const formId = formDoc['_id'] as Types.ObjectId;
     const activeVersion = (formDoc['activeDatasetVersion'] as number) ?? 0;
     const userOid = new Types.ObjectId(user._id);
+    await assertNoFrozenDfRows(this.rowModel, formId, activeVersion);
 
     // Rows are already hidden via isActive:false, so the physical delete can run fire-and-forget.
     if (activeVersion > 0) {
@@ -498,7 +500,8 @@ export class DevolutionFormulaRowService {
         year: new Types.ObjectId(yearId),
         installment,
         ulbId,
-        lockState: 'ACTIVE',
+        // ACKNOWLEDGED: MoHUA's final approval keeps the ULB claimed, so its row stays frozen.
+        lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] },
       })
       .select('_id')
       .lean()

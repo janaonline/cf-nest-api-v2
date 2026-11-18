@@ -26,14 +26,14 @@ describe('MohuaClaimLettersController', () => {
     controller = new MohuaClaimLettersController(service as never);
   });
 
-  it.each([Scope.MOHUA, Scope.DOE, Scope.ADMIN])('lets %s read every screen', async (scope) => {
+  it.each([Scope.MOHUA, Scope.DOE, Scope.PMU, Scope.ADMIN])('lets %s read every screen', async (scope) => {
     await expect(controller.listStates('y1', 1, user(scope))).resolves.toMatchObject({ success: true });
     await expect(controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).resolves.toMatchObject({ success: true });
     await expect(controller.getClaimLetter('c1', user(scope))).resolves.toMatchObject({ success: true });
     await expect(controller.getClaimLetterUlbs('c1', {}, user(scope))).resolves.toMatchObject({ success: true });
   });
 
-  it.each([Scope.STATE, Scope.ULB, Scope.PMU])('refuses %s on every screen before reading anything', async (scope) => {
+  it.each([Scope.STATE, Scope.ULB])('refuses %s on every screen before reading anything', async (scope) => {
     await expect(() => controller.listStates('y1', 1, user(scope))).rejects.toThrow(ForbiddenException);
     await expect(() => controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).rejects.toThrow(ForbiddenException);
     await expect(() => controller.getClaimLetter('c1', user(scope))).rejects.toThrow(ForbiddenException);

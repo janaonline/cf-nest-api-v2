@@ -1,6 +1,8 @@
-import { ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, MaxLength } from 'class-validator';
+import { Transform } from 'class-transformer';
+import { ArrayUnique, IsArray, IsIn, IsInt, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from 'class-validator';
 import {
   MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH,
+  MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH,
   MOHUA_CLAIM_LETTER_RETURNABLE_ROW_FORM_IDS,
   MOHUA_CLAIM_LETTER_RETURNABLE_ULB_FORM_IDS,
 } from './mohua-claim-letters.constants';
@@ -31,8 +33,13 @@ export class DecideMohuaClaimLetterUlbDto {
   @IsInt({ each: true })
   rejectExemptionFormIds?: number[];
 
-  @IsOptional()
+  /** RETURNED: why this ULB is returned — required, shared with the ULB and the State. Ignored for PENDING. */
+  @ValidateIf((dto: DecideMohuaClaimLetterUlbDto) => dto.status === 'RETURNED')
+  @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @MinLength(MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH, {
+    message: `Remarks must be at least ${MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH} characters.`,
+  })
   @MaxLength(MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH)
   remark?: string;
 }

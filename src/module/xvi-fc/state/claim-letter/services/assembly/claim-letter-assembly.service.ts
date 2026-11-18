@@ -50,6 +50,7 @@ import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
+import { RETURNED_CLAIM_LETTER_STATUSES } from '../../helpers/claim-letter-returned.helpers';
 import {
   buildRejectedUlbsBody,
   type ClaimLetterRejectedUlb,
@@ -352,6 +353,7 @@ export class ClaimLetterAssemblyService {
       session.startTransaction();
 
       const batchNumber = await this.allocateBatchNumber(stateOid, yearOid, installment, session);
+      const resubmissionNumber = await this.countReturnedInSlot(stateOid, yearOid, installment, batchNumber, session);
 
       const stateDoc = await this.stateModel.findById(stateOid).select('code').session(session).lean().exec();
       if (!stateDoc) throw new NotFoundException(`State ${String(stateOid)} not found`);
@@ -368,6 +370,7 @@ export class ClaimLetterAssemblyService {
         yearDoc.year,
         installment as 1 | 2,
         batchNumber,
+        resubmissionNumber,
       );
 
       let parent: ClaimLetterBatchDocument;
@@ -379,6 +382,7 @@ export class ClaimLetterAssemblyService {
               year: yearOid,
               installment,
               batchNumber,
+              resubmissionNumber,
               version: 1,
               buildRequestId,
               fileBaseName,
@@ -450,6 +454,28 @@ export class ClaimLetterAssemblyService {
     throw new ReclaimableConflictException(
       `All ${CLAIM_LETTER_MAX_BATCH_NUMBER} claim slots are already in use for this installment.`,
     );
+  }
+
+  /** The new letter's `resubmissionNumber`: returned letters that held this slot before. A discarded draft never
+   *  reached MoHUA, so it doesn't count. */
+  private countReturnedInSlot(
+    stateOid: Types.ObjectId,
+    yearOid: Types.ObjectId,
+    installment: number,
+    batchNumber: number,
+    session: ClientSession,
+  ): Promise<number> {
+    return this.batchModel
+      .countDocuments({
+        state: stateOid,
+        year: yearOid,
+        installment,
+        batchNumber,
+        isAbandoned: true,
+        currentFormStatus: { $in: [...RETURNED_CLAIM_LETTER_STATUSES] },
+      })
+      .session(session)
+      .exec();
   }
 
   /** Checks slot holders and ULB lock owners in one pass, since only one retry follows. Same staleness
@@ -1571,6 +1597,8 @@ export class ClaimLetterAssemblyService {
     const yearOid = previous['year'] as Types.ObjectId;
     const installment = previous['installment'] as number;
     const batchNumber = previous['batchNumber'] as 1 | 2 | 3;
+    // A new version is the same letter, so it keeps its Ref No.
+    const resubmissionNumber = (previous['resubmissionNumber'] as number | undefined) ?? 0;
     const previousVersion = previous['version'] as number;
     const previousId = previous['_id'] as Types.ObjectId;
     const userOid = new Types.ObjectId(user._id);
@@ -1601,6 +1629,7 @@ export class ClaimLetterAssemblyService {
       yearOid,
       installment,
       batchNumber,
+      resubmissionNumber,
       nextVersion,
       previousId,
       selections.map((s) => s.ulbId),
@@ -1634,6 +1663,7 @@ export class ClaimLetterAssemblyService {
     yearOid: Types.ObjectId,
     installment: number,
     batchNumber: 1 | 2 | 3,
+    resubmissionNumber: number,
     version: number,
     previousId: Types.ObjectId,
     ulbIds: string[],
@@ -1659,6 +1689,7 @@ export class ClaimLetterAssemblyService {
         yearDoc.year,
         installment as 1 | 2,
         batchNumber,
+        resubmissionNumber,
       );
 
       let parent: ClaimLetterBatchDocument;
@@ -1670,6 +1701,7 @@ export class ClaimLetterAssemblyService {
               year: yearOid,
               installment,
               batchNumber,
+              resubmissionNumber,
               version,
               buildRequestId,
               fileBaseName,

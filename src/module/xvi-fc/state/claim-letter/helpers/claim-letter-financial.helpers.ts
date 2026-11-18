@@ -64,27 +64,39 @@ export function amountsAreEqual(a: number, b: number): boolean {
   return a === b;
 }
 
-/** `CF_<statecode>_<designyear>_<installment>-<batchnumber>`, the same `1-1` as the Ref No and the
- *  download names, so each batch has its own name. */
+/** `<installment>-<batchnumber>`, plus `-R<n>` once a returned letter held the slot: the part shared by the Ref No,
+ *  the file base name and the download names. */
+export function buildClaimLetterBatchLabel(
+  installment: number,
+  batchNumber: number,
+  resubmissionNumber: number,
+): string {
+  const label = `${installment}-${batchNumber}`;
+  return resubmissionNumber > 0 ? `${label}-R${resubmissionNumber}` : label;
+}
+
+/** `CF_<statecode>_<designyear>_<batch label>`, e.g. `CF_TR_2026-27_1-2-R1`. */
 export function buildClaimLetterFileBaseName(
   stateCode: string,
   designYearLabel: string,
   installment: 1 | 2,
   batchNumber: number,
+  resubmissionNumber: number,
 ): string {
-  return `CF_${stateCode}_${designYearLabel}_${installment}-${batchNumber}`;
+  return `CF_${stateCode}_${designYearLabel}_${buildClaimLetterBatchLabel(installment, batchNumber, resubmissionNumber)}`;
 }
 
-/** `CL/<statecode>/<designyear>/<installment>-<batchnumber>`: built from the batch's unique key, so
- *  it is stable across calls and needs no stored counter. */
+/** `CL/<statecode>/<designyear>/<batch label>`, e.g. `CL/TR/2026-27/1-2-R1`: built from the slot and the stored
+ *  `resubmissionNumber`, so it is stable across calls. */
 export function buildClaimLetterRefNo(params: {
   stateCode: string;
   designYearLabel: string;
   installment: 1 | 2;
   batchNumber: number;
+  resubmissionNumber: number;
 }): string {
-  const { stateCode, designYearLabel, installment, batchNumber } = params;
-  return `CL/${stateCode}/${designYearLabel}/${installment}-${batchNumber}`;
+  const { stateCode, designYearLabel, installment, batchNumber, resubmissionNumber } = params;
+  return `CL/${stateCode}/${designYearLabel}/${buildClaimLetterBatchLabel(installment, batchNumber, resubmissionNumber)}`;
 }
 
 export type { ClaimLetterFinancialSummaryDisplay as ClaimLetterFinancialSummaryAmounts };

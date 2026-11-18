@@ -32,6 +32,7 @@ import type {
   ClaimLetterRun,
 } from '../../types/claim-letter-document.types';
 import { CLAIM_LETTER_COLUMN_ALIGN, claimLetterColumnShares } from '../../helpers/claim-letter-annexure-columns.helpers';
+import { buildClaimLetterBatchLabel } from '../../helpers/claim-letter-financial.helpers';
 import { printedText } from '../../helpers/claim-letter-letter.helpers';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 import { ClaimLetterDocumentService, type ClaimLetterDocumentParent } from './claim-letter-document.service';
@@ -89,7 +90,7 @@ export class ClaimLetterDocxService {
     const buffer = await Packer.toBuffer(this.render(doc));
     const fileName = buildXviFcDownloadFileName({
       entityName: doc.stateName,
-      formName: `claim-letter-${doc.installment}-${doc.batchNumber}`,
+      formName: `claim-letter-${buildClaimLetterBatchLabel(doc.installment, doc.batchNumber, doc.resubmissionNumber)}`,
       yearLabel: doc.designYearLabel,
       extension: 'docx',
     });

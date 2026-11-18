@@ -83,8 +83,8 @@ export class DurValidationResultWriter {
     const completedAt = new Date();
     this.logger.warn(`writeFailed — durId=${durId} docId=${docId} uploadId=${uploadId} reason=${reason}`);
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, 'FAILED');
-
+    // A technical failure (the job crashed) never judged the file, so it is not a strike against the
+    // post-rejection attempts; only a real FAIL from writeResult counts.
     const [result] = await Promise.all([
       this.durModel.updateOne(
         { _id: new Types.ObjectId(durId), documents: { $elemMatch: { docId, 'currentUpload.uploadId': uploadId } } },
@@ -94,7 +94,6 @@ export class DurValidationResultWriter {
             'documents.$.currentUpload.ocrInfo.status': 'failed',
             'documents.$.currentUpload.ocrInfo.completedAt': completedAt,
             'documents.$.currentUpload.ocrInfo.validationDetails': reason ?? 'DUR validation job failed',
-            ...postRejectionUpdate,
           },
         },
       ),

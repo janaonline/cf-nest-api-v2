@@ -92,6 +92,10 @@ interface FastApiJobResult {
     excel_s3_key?: string | null;
     excel_s3_bucket?: string | null;
     processing_time_seconds?: number | null;
+    confidence_score?: number | null;
+    accuracy_score?: number | null;
+    arithmetic_assessment?: string | null;
+    overall_assessment?: string | null;
     error_messages?: string[];
   } | null;
 }
@@ -341,6 +345,10 @@ export class AfsDigitizationV3QueueService {
       excelKey: result.result?.excel_s3_key ?? undefined,
       noOfPages: cls.page_count || undefined,
       processingMs: seconds != null ? Math.round(seconds * 1000) : undefined,
+      ocrConfidenceScore: result.result?.confidence_score ?? undefined,
+      accuracyScore: result.result?.accuracy_score ?? undefined,
+      arithmeticAssessment: result.result?.arithmetic_assessment ?? undefined,
+      overallAssessment: result.result?.overall_assessment ?? undefined,
       detectedDocTypes,
       segments,
       isConsolidated: detectedDocTypes.length > 1,
