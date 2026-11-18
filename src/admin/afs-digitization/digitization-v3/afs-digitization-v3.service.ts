@@ -220,6 +220,8 @@ export interface DigitizationV3ScoreMetrics {
   confidenceLow: number;
   arithmeticPass: number;
   arithmeticFail: number;
+  /** Arithmetic did not run because the uploaded doc type isn't in the file (mismatch) */
+  arithmeticSkipped: number;
   overallPass: number;
   overallPartial: number;
   overallFail: number;
@@ -1260,6 +1262,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               },
               arithmeticPass: is('$ulbFile.scores.arithmeticAssessment', 'PASS'),
               arithmeticFail: is('$ulbFile.scores.arithmeticAssessment', 'FAIL'),
+              arithmeticSkipped: is('$ulbFile.scores.arithmeticAssessment', ARITHMETIC_SKIPPED),
               overallPass: is('$ulbFile.scores.overallAssessment', 'PASS'),
               overallPartial: is('$ulbFile.scores.overallAssessment', 'PARTIAL'),
               overallFail: is('$ulbFile.scores.overallAssessment', 'FAIL'),
@@ -1283,6 +1286,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         confidenceLow: 0,
         arithmeticPass: 0,
         arithmeticFail: 0,
+        arithmeticSkipped: 0,
         overallPass: 0,
         overallPartial: 0,
         overallFail: 0,
