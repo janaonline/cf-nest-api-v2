@@ -213,9 +213,13 @@ src/
 │                        # forum_db data is read in place. The 3 canonical categories are upserted on boot.
 ├── users/               # User CRUD with repository pattern
 ├── master/adc/          # GET master/adc (ADMIN: any/one state; State DMA: own state) - the ADC picker. Portal Admin (ADMIN) management:
-│                        # GET master/adc/manage (paged, max 20, counts + ADC Admin), POST (ADC + its Admin in one go; the ADC is
-│                        # deleted again if the Admin invite fails), PATCH :id (name only), PUT :id/admin (promote / invite a new
-│                        # Admin), GET :id/members, DELETE :id (hard delete, only with no ULBs and no member besides the Admin).
+│                        # GET master/adc/manage (one aggregation: counts + ADC Admin + adminStatus; search ADC name or Admin
+│                        # name/email, adminStatus ACTIVE/INVITED/NOT_SET, sort name/state/ulbCount/memberCount), GET :id (detail
+│                        # header), GET :id/members (search name/email/mobile, level, status, excludeAdmin - also Change Admin's
+│                        # search), GET :id/ulbs (via UlbService.findAll's `adc` option), POST (ADC + its Admin in one go; the
+│                        # ADC is deleted again if the Admin invite fails), PATCH :id (name only), PUT :id/admin (promote / invite
+│                        # a new Admin), DELETE :id (hard delete, only with no ULBs and no member besides the Admin). Every list is
+│                        # PaginatedResult, limit clamped to 20 (adc.constants.ts, AdcPageQueryDto).
 │                        # audit/ holds AdcAuditLogService (adc_audit_logs history, see Authorization)
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues
