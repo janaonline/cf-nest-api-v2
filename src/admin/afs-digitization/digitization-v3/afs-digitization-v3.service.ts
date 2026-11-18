@@ -745,12 +745,12 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
    * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI:
    *   document mismatch (scores.isMismatch)        -> FAIL
-   *   OCR confidence < 80                          -> FAIL
+   *   Textract confidence < 80                     -> FAIL
    *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
    *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
    *   crosscheck < 80 and arithmetic FAIL          -> FAIL
    *   otherwise                                    -> PARTIAL
-   * A file with no `ocrConfidenceScore` counts as OCR pass (as in FastAPI). FastAPI also fails OCR when nothing was
+   * A file with no `ocrConfidenceScore` counts as Textract pass (as in FastAPI). FastAPI also fails OCR when nothing was
    * extracted, which the file does not record, so such a file is judged on crosscheck + arithmetic only.
    * `dryRun` (the default at the endpoint) only counts.
    */
