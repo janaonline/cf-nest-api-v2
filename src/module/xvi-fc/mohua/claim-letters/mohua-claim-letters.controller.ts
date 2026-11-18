@@ -21,7 +21,7 @@ import { RequirePermissions } from 'src/module/auth/require-permissions.decorato
 import { ParseObjectIdPipe } from 'src/common/pipes/parse-object-id.pipe';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { assertReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { ApproveMohuaClaimLetterDto } from './mohua-claim-letters-approve.dto';
 import { ReturnMohuaClaimLetterDto } from './mohua-claim-letters-return.dto';
 import { DecideMohuaClaimLetterUlbDto } from './mohua-claim-letters-ulb-decision.dto';
@@ -140,8 +140,11 @@ export class MohuaClaimLettersController {
     return xviFcSuccess('Claim letters by state fetched.', await this.service.listStates(yearId, installment));
   }
 
-  /** STATE users also hold VIEW_STATUS_REPORTS, but these screens span every state — MoHUA/DoE (read-only)/ADMIN only. */
+  /**
+   * STATE users also hold VIEW_STATUS_REPORTS, but these screens span every state: MoHUA, DoE and PMU (both read-only,
+   * for the national dashboard's claim figures) and ADMIN only.
+   */
   private assertViewScope(user: AuthUser): void {
-    if (!isMohuaViewScope(user) && user.scope !== Scope.ADMIN) throw new ForbiddenException('Access denied');
+    if (!isNationalDashboardScope(user) && user.scope !== Scope.ADMIN) throw new ForbiddenException('Access denied');
   }
 }

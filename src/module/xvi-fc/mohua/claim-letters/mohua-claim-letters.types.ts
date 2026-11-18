@@ -15,14 +15,42 @@ export interface MohuaClaimLettersStateRow {
   amountClaimed: number | null;
   /** ULBs included across those letters; null when it has none. */
   ulbsIncluded: number | null;
+  /** The state's expected ULBs for the year (ExpectedUlbSetService), so the UI can show "ulbsIncluded of totalUlbs". */
+  totalUlbs: number;
   claimLetterCount: number;
   /** The highest claim letter number the state has submitted (1, 2, 3...), null when none. */
   latestClaimNumber: number | null;
 }
 
+/** Claim letters at one stage: how many, from how many States, and their amount (whole Rupees). */
+export interface MohuaClaimStage {
+  claims: number;
+  states: number;
+  amount: number;
+}
+
+/**
+ * The national figures above the States table. `submitted` counts every listed letter (returned ones too) but its
+ * amount leaves returned letters out, since their ULBs come back in the replacement letter. Released is not
+ * tracked yet (the DoE release step isn't built), so it is not here.
+ */
+export interface MohuaClaimLettersOverview {
+  /** The installment allocation summed over the listed States. */
+  totalAllocation: number;
+  stateCount: number;
+  submitted: MohuaClaimStage;
+  /** Letters under SO review (15). */
+  underReview: MohuaClaimStage;
+  /** Letters the SO verified (5) or MoHUA acknowledged (7). */
+  approved: MohuaClaimStage;
+  /** Letters returned for correction (16, 6); amount is what they had claimed. */
+  returned: MohuaClaimStage;
+}
+
 export interface MohuaClaimLettersStates {
   year: { id: string; label: string };
   installment: number;
+  overview: MohuaClaimLettersOverview;
   states: MohuaClaimLettersStateRow[];
 }
 
@@ -45,8 +73,11 @@ export interface MohuaStateClaimLettersSummary {
   claimedUlbs: number;
   /** Expected ULBs in no claim letter yet. */
   pendingUlbs: number;
+  /** ULBs in letters the SO verified (5) or MoHUA acknowledged (7). */
   approvedUlbs: number;
+  /** ULBs in letters still under SO review (15). */
   underReviewUlbs: number;
+  /** ULBs in returned letters (16, 6); they overlap the others once the State resubmits them. */
   returnedUlbs: number;
   /** Acknowledged plus under review; a returned letter's amount counts as balance until resubmitted. */
   amountClaimed: number;
@@ -81,10 +112,17 @@ export interface MohuaClaimLetterDetail {
   statusLabel: string;
   /** The signed letter the State uploaded; null when none was attached. */
   signedClaimFile: MohuaClaimLetterFile | null;
+  /** Money is whole Rupees. */
   summary: {
+    /** This letter: its claim and its ULBs. */
     claimAmountReceived: number;
     totalCities: number;
+    /** This letter: ULBs that came in through an exemption request, and their claim. */
     exemptionsApplied: number;
+    exemptionAmount: number;
+    /** Every letter the State submitted for this installment that is under review or acknowledged (returned left out). */
+    submittedClaimAmount: number;
+    submittedUlbs: number;
   };
   /** Set only on a returned letter: what the return actually reopened (read from its history). */
   returnDetails: MohuaClaimLetterReturnDetails | null;
