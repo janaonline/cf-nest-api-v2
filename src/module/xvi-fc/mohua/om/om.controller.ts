@@ -23,7 +23,7 @@ import { RequirePermissions } from 'src/module/auth/require-permissions.decorato
 import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
 import { assertReviewerAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-reviewer-access.util';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import { SaveOmDraftDto } from './om-draft.dto';
 import { OM_REVIEWER_FORBIDDEN_MESSAGE } from './om.constants';
 import { OmService } from './om.service';
@@ -115,9 +115,12 @@ export class OmController {
     return xviFcSuccess('Verified claim letters fetched.', await this.service.listStates(yearId, installment));
   }
 
-  /** STATE users also hold VIEW_STATUS_REPORTS, but OMs span every state: MoHUA/DoE (read-only)/ADMIN only. */
+  /**
+   * STATE users also hold VIEW_STATUS_REPORTS, but OMs span every state: MoHUA, DoE and PMU (both read-only; PMU
+   * monitors the OM history) and ADMIN only. Draft, generate and the signed upload stay MoHUA's.
+   */
   private assertViewScope(user: AuthUser): void {
-    if (!isMohuaViewScope(user) && user.scope !== Scope.ADMIN) throw new ForbiddenException('Access denied');
+    if (!isNationalDashboardScope(user) && user.scope !== Scope.ADMIN) throw new ForbiddenException('Access denied');
   }
 }
 
