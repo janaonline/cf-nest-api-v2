@@ -6,6 +6,7 @@ import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { EmailQueueModule } from 'src/core/queue/email-queue/email-queue.module';
+import { AdcAuditLogModule } from 'src/master/adc/audit/adc-audit-log.module';
 import { UsersController } from './users.controller';
 import { UsersRepository } from './users.repository';
 import { UsersService } from './users.service';
@@ -20,9 +21,10 @@ import { UsersService } from './users.service';
       { name: Adc.name, schema: AdcSchema },
     ]),
     EmailQueueModule,
+    AdcAuditLogModule,
   ],
   controllers: [UsersController],
   providers: [UsersService, UsersRepository],
-  exports: [UsersRepository],
+  exports: [UsersRepository, UsersService],
 })
 export class UsersModule {}

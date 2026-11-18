@@ -28,6 +28,7 @@ import {
   STATE_ID_2,
   TARGET_USER_ID,
 } from './test/users.fixtures';
+import { AdcAuditLogService } from 'src/master/adc/audit/adc-audit-log.service';
 
 // ─── Module setup ──────────────────────────────────────────────────────────
 //
@@ -78,6 +79,7 @@ describe('UsersService', () => {
         { provide: EmailQueueService, useValue: mockEmailQueueService },
         { provide: ConfigService, useValue: mockConfigService },
         { provide: EmailDomainValidationService, useValue: mockEmailDomainValidation },
+        { provide: AdcAuditLogService, useValue: { record: jest.fn().mockResolvedValue(undefined) } },
       ],
     }).compile();
 

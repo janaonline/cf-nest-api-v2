@@ -23,6 +23,7 @@ import { XviFcDur } from 'src/schemas/xvi-fc/dur.schema';
 import { AnnualAccountFormStatus, XviFcAnnualAccount } from 'src/schemas/xvi-fc/annual-account.schema';
 import { ULB_EDIT_SECTIONS_FORM_JSON_TYPE, ULB_REGISTER_SECTIONS_FORM_JSON_TYPE } from './constants/ulb-form.constants';
 import { UlbService } from './ulb.service';
+import { AdcAuditLogService } from 'src/master/adc/audit/adc-audit-log.service';
 
 /** Mocks `ulbModel.db.collection('ulbtypes').find().sort().toArray()`, used by `findTypes()`. */
 function mockUlbTypes(ulbModel: { db?: unknown }, types: { _id: string; name: string }[]): void {
@@ -70,6 +71,7 @@ describe('UlbService', () => {
   let configService: { get: jest.Mock };
   let fileTokenService: { signFileUrl: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
+  let adcAuditLog: { record: jest.Mock };
 
   const stateId = new Types.ObjectId().toString();
   const ulbTypeId = new Types.ObjectId().toString();
@@ -126,6 +128,7 @@ describe('UlbService', () => {
     configService = { get: jest.fn().mockReturnValue('https://cityfinance.in') };
     fileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
     fileInfoNormalizer = { normalizeInboundFileInfo: jest.fn().mockReturnValue({ file: undefined, errors: [] }) };
+    adcAuditLog = { record: jest.fn().mockResolvedValue(undefined) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -147,6 +150,7 @@ describe('UlbService', () => {
         { provide: ConfigService, useValue: configService },
         { provide: FileTokenService, useValue: fileTokenService },
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
+        { provide: AdcAuditLogService, useValue: adcAuditLog },
       ],
     }).compile();
 
@@ -726,6 +730,25 @@ describe('UlbService', () => {
       expect(result.data[0].ulbTypeName).toBe('Municipal Corporation');
     });
 
+    it("limits the list to one ADC's ULBs with the adc option, and searches name or code literally", async () => {
+      const find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      });
+      ulbModel.find = find;
+      ulbModel.countDocuments.mockResolvedValue(0);
+      const adc = new Types.ObjectId();
+
+      await service.findAll({ search: ' a.*(b+)+ ', page: 1, limit: 10 }, adminUser, { adc });
+
+      const [filter] = find.mock.calls[0] as [Record<string, unknown>];
+      const pattern = { $regex: 'a\\.\\*\\(b\\+\\)\\+', $options: 'i' };
+      expect(filter.adc).toBe(adc);
+      expect(filter.$or).toEqual([{ name: pattern }, { code: pattern }]);
+    });
+
     it("filters by presence of 'approval', not its status, when approvalStatus is 'EXISTING'", async () => {
       const find = jest.fn().mockReturnValue({
         sort: jest.fn().mockReturnThis(),
@@ -1292,7 +1315,11 @@ describe('UlbService', () => {
 
     describe('assignAdc', () => {
       const ulbId = new Types.ObjectId().toString();
-      const withUlb = () => ulbModel.findById.mockReturnValue(lean({ state: new Types.ObjectId(stateId) }));
+      const adminUser = { _id: new Types.ObjectId().toString(), role: 'ADMIN' } as never;
+      const withUlb = (adc: Types.ObjectId | null = null) =>
+        ulbModel.findById.mockReturnValue(
+          lean({ _id: ulbId, state: new Types.ObjectId(stateId), ulbType: new Types.ObjectId(ulbTypeId), adc }),
+        );
       const updated = {
         _id: ulbId,
         name: 'U',
@@ -1306,46 +1333,78 @@ describe('UlbService', () => {
         adcModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([{ _id: adcId, name: 'Test ADC' }]) });
       });
 
-      it("sets the ULB's ADC", async () => {
+      it("sets the ULB's ADC and logs the move to the gaining ADC", async () => {
         withUlb();
-        adcModel.findById.mockReturnValue(lean({ state: new Types.ObjectId(stateId), isActive: true }));
+        adcModel.findById.mockReturnValue(
+          lean({ name: 'Test ADC', state: new Types.ObjectId(stateId), isActive: true }),
+        );
 
-        await service.assignAdc(ulbId, adcId);
+        await service.assignAdc(ulbId, adcId, adminUser);
 
         const [, update] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: { adc: Types.ObjectId } }];
         expect(update.$set.adc.toString()).toBe(adcId);
+        expect(adcAuditLog.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            action: 'ULB_ADC_CHANGED',
+            adc: adcId,
+            adcName: 'Test ADC',
+            ulb: ulbId,
+            actorRole: 'PORTAL_ADMIN',
+            changes: { adc: { from: null, to: new Types.ObjectId(adcId) } },
+          }),
+        );
       });
 
-      it('moves the ULB back to the State DMA with null', async () => {
-        withUlb();
+      it('moves the ULB back to the State DMA with null, logging it against the losing ADC', async () => {
+        withUlb(new Types.ObjectId(adcId));
+        adcModel.findById.mockReturnValue(lean({ name: 'Test ADC' }));
         ulbModel.findByIdAndUpdate.mockReturnValue({ lean: jest.fn().mockResolvedValue({ ...updated, adc: null }) });
 
-        await service.assignAdc(ulbId, null);
+        await service.assignAdc(ulbId, null, adminUser);
 
         const [, update] = ulbModel.findByIdAndUpdate.mock.calls[0] as [string, { $set: { adc: null } }];
         expect(update.$set.adc).toBeNull();
+        expect(adcAuditLog.record).toHaveBeenCalledWith(
+          expect.objectContaining({
+            adc: adcId,
+            adcName: 'Test ADC',
+            changes: { adc: { from: new Types.ObjectId(adcId), to: null } },
+          }),
+        );
+      });
+
+      it('writes and logs nothing when the ULB already has that ADC, or already has none', async () => {
+        withUlb(new Types.ObjectId(adcId));
+        await service.assignAdc(ulbId, adcId, adminUser);
+
+        withUlb(null);
+        await service.assignAdc(ulbId, null, adminUser);
+
+        expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
         expect(adcModel.findById).not.toHaveBeenCalled();
+        expect(adcAuditLog.record).not.toHaveBeenCalled();
       });
 
       it('rejects an ADC of another state, an inactive ADC, an unknown ADC and a missing adcId', async () => {
         withUlb();
         adcModel.findById.mockReturnValueOnce(lean({ state: new Types.ObjectId(), isActive: true }));
-        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+        await expect(service.assignAdc(ulbId, adcId, adminUser)).rejects.toThrow(BadRequestException);
 
         adcModel.findById.mockReturnValueOnce(lean({ state: new Types.ObjectId(stateId), isActive: false }));
-        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+        await expect(service.assignAdc(ulbId, adcId, adminUser)).rejects.toThrow(BadRequestException);
 
         adcModel.findById.mockReturnValueOnce(lean(null));
-        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(BadRequestException);
+        await expect(service.assignAdc(ulbId, adcId, adminUser)).rejects.toThrow(BadRequestException);
 
-        await expect(service.assignAdc(ulbId, undefined)).rejects.toThrow(BadRequestException);
+        await expect(service.assignAdc(ulbId, undefined, adminUser)).rejects.toThrow(BadRequestException);
         expect(ulbModel.findByIdAndUpdate).not.toHaveBeenCalled();
+        expect(adcAuditLog.record).not.toHaveBeenCalled();
       });
 
       it('404s for an unknown ULB and 400s for an invalid id', async () => {
         ulbModel.findById.mockReturnValue(lean(null));
-        await expect(service.assignAdc(ulbId, adcId)).rejects.toThrow(NotFoundException);
-        await expect(service.assignAdc('not-an-id', adcId)).rejects.toThrow(BadRequestException);
+        await expect(service.assignAdc(ulbId, adcId, adminUser)).rejects.toThrow(NotFoundException);
+        await expect(service.assignAdc('not-an-id', adcId, adminUser)).rejects.toThrow(BadRequestException);
       });
     });
   });
