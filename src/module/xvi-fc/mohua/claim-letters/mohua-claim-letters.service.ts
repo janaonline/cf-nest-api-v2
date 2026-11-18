@@ -44,6 +44,7 @@ import {
   MOHUA_CLAIM_LETTERS_INSTALLMENT,
   MOHUA_CLAIM_LETTERS_INSTALLMENTS_PER_YEAR,
   MOHUA_CLAIM_LETTERS_LISTED_STATUSES,
+  MOHUA_CLAIM_LETTER_SUBMITTED_STATUSES,
   MOHUA_CLAIM_LETTERS_ULB_STATUS,
   MOHUA_CLAIM_LETTER_RETURNED_STATUSES,
   MOHUA_CLAIM_LETTER_ULB_EXEMPTION_KIND,
@@ -57,8 +58,10 @@ import type {
   MohuaClaimLetterReturnDetails,
   MohuaClaimLetterSoDecision,
   MohuaClaimLetterUlbs,
+  MohuaClaimLettersOverview,
   MohuaClaimLettersStateRow,
   MohuaClaimLettersStates,
+  MohuaClaimStage,
   MohuaStateClaimLetters,
   MohuaStateClaimLettersSummary,
 } from './mohua-claim-letters.types';
@@ -143,7 +146,7 @@ export class MohuaClaimLettersService {
     const year = await this.yearModel.findById(yearId).select('year').lean<{ year: string }>().exec();
     if (!year) throw new NotFoundException(`Year ${yearId} not found`);
 
-    const [states, batches, allocationByState] = await Promise.all([
+    const [states, batches, allocationByState, expectedUlbIdsByState] = await Promise.all([
       this.stateModel
         .find({
           isActive: true,
@@ -161,6 +164,8 @@ export class MohuaClaimLettersService {
         .lean<LeanBatch[]>()
         .exec(),
       this.loadInstallmentAllocations(yearId),
+      // Every state's expected ULBs in one grouped query, for the "ULBs included of total" column.
+      this.expectedUlbSetService.idsByState(yearId),
     ]);
 
     const claimedByState = new Map<string, { amount: number; ulbs: number; count: number; latest: number }>();
@@ -191,6 +196,7 @@ export class MohuaClaimLettersService {
         installmentAllocation: allocationByState.get(id) ?? null,
         amountClaimed: claimed ? claimed.amount : null,
         ulbsIncluded: claimed ? claimed.ulbs : null,
+        totalUlbs: expectedUlbIdsByState.get(id)?.length ?? 0,
         claimLetterCount: claimed?.count ?? 0,
         latestClaimNumber: claimed?.latest || null,
       };
@@ -200,10 +206,42 @@ export class MohuaClaimLettersService {
     const received = MOHUA_CLAIM_LETTERS_FIRST_CLAIM_STATUS.RECEIVED;
     rows.sort((a, b) => Number(b.firstClaimStatus === received) - Number(a.firstClaimStatus === received));
 
-    return { year: { id: yearId, label: year.year }, installment, states: rows };
+    return {
+      year: { id: yearId, label: year.year },
+      installment,
+      overview: this.buildOverview(rows, batches),
+      states: rows,
+    };
   }
 
-  /** One state's listed claim letters, oldest first. */
+  /** The national figures above the States table, from the letters and allocations already loaded (no query). */
+  private buildOverview(rows: MohuaClaimLettersStateRow[], batches: LeanBatch[]): MohuaClaimLettersOverview {
+    const listedStates = new Set(rows.map((row) => row.stateId));
+    const listed = batches.filter((batch) => listedStates.has(String(batch.state)));
+    const stage = (letters: LeanBatch[]): MohuaClaimStage => ({
+      claims: letters.length,
+      states: new Set(letters.map((batch) => String(batch.state))).size,
+      amount: letters.reduce((sum, batch) => sum + (batch.financialSummary?.currentSelectedClaim ?? 0), 0),
+    });
+    const at = (statuses: number[]) => listed.filter((batch) => statuses.includes(batch.currentFormStatus));
+    const submitted = stage(listed);
+
+    return {
+      totalAllocation: rows.reduce((sum, row) => sum + (row.installmentAllocation ?? 0), 0),
+      stateCount: rows.length,
+      // Every letter received counts as a claim; the amount leaves out returned ones (their ULBs are resubmitted).
+      submitted: {
+        ...submitted,
+        amount: stage(listed.filter((batch) => !isReturnedClaimLetter(batch.currentFormStatus))).amount,
+      },
+      underReview: stage(at([FORM_STATUS.UNDER_REVIEW_BY_SO])),
+      // The SO's approval is final for now (MoHUA's own 5 -> 7 step isn't built), as in the State summary.
+      approved: stage(at([FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])),
+      returned: stage(at([FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA])),
+    };
+  }
+
+  /** One state's listed claim letters, the latest submitted first (`_id` breaks a tie, also newest first). */
   async listStateClaimLetters(stateId: string, yearId: string, installment: number): Promise<MohuaStateClaimLetters> {
     this.assertSupportedInstallment(installment);
     const state = await this.stateModel.findById(stateId).select('name').lean<{ name: string }>().exec();
@@ -212,7 +250,7 @@ export class MohuaClaimLettersService {
     const batches = await this.batchModel
       .find(this.listedFilter({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment }))
       .select('fileBaseName batchNumber submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim')
-      .sort({ batchNumber: 1, submittedAt: 1 })
+      .sort({ submittedAt: -1, _id: -1 })
       .lean<LeanBatch[]>()
       .exec();
 
@@ -268,8 +306,10 @@ export class MohuaClaimLettersService {
     return {
       claimedUlbs: expectedUlbs.length - remainingUlbIds.length,
       pendingUlbs: remainingUlbIds.length,
-      approvedUlbs: CLAIM_LETTER_APPROVED_STATUSES.reduce((sum, status) => sum + ulbsAt(status), 0),
-      underReviewUlbs: ulbsAt(FORM_STATUS.UNDER_REVIEW_BY_SO) + ulbsAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
+      // The SO's approval is final for now (MoHUA's own 5 -> 7 step isn't built), so a letter the SO verified (5)
+      // counts as approved alongside an acknowledged one (7); only a letter still with the SO (15) is under review.
+      approvedUlbs: ulbsAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA) + ulbsAt(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA),
+      underReviewUlbs: ulbsAt(FORM_STATUS.UNDER_REVIEW_BY_SO),
       returnedUlbs: ulbsAt(FORM_STATUS.RETURNED_BY_SO) + ulbsAt(FORM_STATUS.RETURNED_BY_MOHUA),
       amountClaimed,
       balance: Math.max(0, allocation - amountClaimed),
@@ -442,7 +482,9 @@ export class MohuaClaimLettersService {
       .lean<(ChildWithSources & { soDecision: ClaimLetterSoDecision })[]>()
       .exec();
     if (returnedUlbs.length + dto.stateFormIds.length === 0) {
-      throw new BadRequestException('Mark at least one ULB for return, or pick a State item, to return the claim letter.');
+      throw new BadRequestException(
+        'Mark at least one ULB for return, or pick a State item, to return the claim letter.',
+      );
     }
     assertValidFormStatusTransition(FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_SO);
 
@@ -637,9 +679,34 @@ export class MohuaClaimLettersService {
   /** One claim letter: its State-signed file and the headline numbers. */
   async getClaimLetter(claimLetterId: string): Promise<MohuaClaimLetterDetail> {
     const batch = await this.findListedBatch(claimLetterId);
-    const [state, exemptionsApplied, rejection, returnedUlbs, pendingExemptions] = await Promise.all([
+    const [state, [exemptions], [submitted], rejection, returnedUlbs, pendingExemptions] = await Promise.all([
       this.stateModel.findById(batch.state).select('name').lean<{ name: string }>().exec(),
-      this.batchUlbModel.countDocuments({ claimLetter: batch._id, 'appliedExemptionIds.0': { $exists: true } }),
+      this.batchUlbModel
+        .aggregate<{
+          ulbs: number;
+          amount: number;
+        }>([
+          { $match: { claimLetter: batch._id, 'appliedExemptionIds.0': { $exists: true } } },
+          { $group: { _id: null, ulbs: { $sum: 1 }, amount: { $sum: '$claimedAmount' } } },
+        ])
+        .exec(),
+      this.batchModel
+        .aggregate<{ ulbs: number; amount: number }>([
+          {
+            $match: {
+              ...this.listedFilter({ state: batch.state, year: batch.year, installment: batch.installment }),
+              currentFormStatus: { $in: MOHUA_CLAIM_LETTER_SUBMITTED_STATUSES },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              ulbs: { $sum: '$ulbCount' },
+              amount: { $sum: '$financialSummary.currentSelectedClaim' },
+            },
+          },
+        ])
+        .exec(),
       this.findRejection(batch),
       this.batchUlbModel.countDocuments({ claimLetter: batch._id, 'soDecision.status': 'RETURNED' }),
       // Only the SO's decision acts on them, so only a letter under SO review needs the lookup.
@@ -670,7 +737,10 @@ export class MohuaClaimLettersService {
       summary: {
         claimAmountReceived: batch.financialSummary?.currentSelectedClaim ?? 0,
         totalCities: batch.ulbCount ?? 0,
-        exemptionsApplied,
+        exemptionsApplied: exemptions?.ulbs ?? 0,
+        exemptionAmount: exemptions?.amount ?? 0,
+        submittedClaimAmount: submitted?.amount ?? 0,
+        submittedUlbs: submitted?.ulbs ?? 0,
       },
       returnDetails: rejection && toReturnDetails(rejection),
       returnedUlbCount: returnedUlbs,
@@ -693,7 +763,10 @@ export class MohuaClaimLettersService {
       filter.$or = [{ 'ulbSnapshot.name': pattern }, { 'ulbSnapshot.censusCode': pattern }];
     }
 
-    const [total, rejection] = await Promise.all([this.batchUlbModel.countDocuments(filter), this.findRejection(batch)]);
+    const [total, rejection] = await Promise.all([
+      this.batchUlbModel.countDocuments(filter),
+      this.findRejection(batch),
+    ]);
     // On a returned letter each ULB shows only what the return reopened for it; untouched ULBs show no status.
     const returnedByUlb = new Map<string, number[]>();
     for (const ref of rejection?.rejectedSourceRefs ?? []) {

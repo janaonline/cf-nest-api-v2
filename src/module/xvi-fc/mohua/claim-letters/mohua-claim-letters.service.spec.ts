@@ -23,10 +23,16 @@ type WriteCall = [Record<string, unknown>, { $set: Record<string, unknown>; $inc
 describe('MohuaClaimLettersService', () => {
   let stateModel: { find: jest.Mock; findById: jest.Mock };
   let yearModel: { findById: jest.Mock };
-  let batchModel: { find: jest.Mock; findOne: jest.Mock; findOneAndUpdate: jest.Mock<unknown, WriteCall> };
+  let batchModel: {
+    find: jest.Mock;
+    findOne: jest.Mock;
+    findOneAndUpdate: jest.Mock<unknown, WriteCall>;
+    aggregate: jest.Mock;
+  };
   let batchUlbModel: {
     find: jest.Mock;
     findOne: jest.Mock;
+    aggregate: jest.Mock;
     countDocuments: jest.Mock<Promise<number>, [Record<string, unknown>]>;
     exists: jest.Mock;
     updateOne: jest.Mock<unknown, WriteCall>;
@@ -37,8 +43,12 @@ describe('MohuaClaimLettersService', () => {
   let grantAllocationModel: { find: jest.Mock };
   let lockModel: { deleteMany: jest.Mock };
   let fileTokens: { signFileUrlForSession: jest.Mock };
-  let eligibility: { getClaimStatusBreakdown: jest.Mock; resolveRemainingUlbIds: jest.Mock; recheckClaimLetter: jest.Mock };
-  let expectedUlbs: { resolve: jest.Mock };
+  let eligibility: {
+    getClaimStatusBreakdown: jest.Mock;
+    resolveRemainingUlbIds: jest.Mock;
+    recheckClaimLetter: jest.Mock;
+  };
+  let expectedUlbs: { resolve: jest.Mock; idsByState: jest.Mock };
   let formStatus: { moveFormsToMohuaReview: jest.Mock; returnFormsForCorrection: jest.Mock };
   let returnNotifications: { notifyClaimLetterReturned: jest.Mock };
   let history: { recordTransition: jest.Mock; findLatestRejection: jest.Mock };
@@ -78,9 +88,11 @@ describe('MohuaClaimLettersService', () => {
       find: jest.fn().mockReturnValue(q([])),
       findOne: jest.fn().mockReturnValue(q(batch())),
       findOneAndUpdate: jest.fn<unknown, WriteCall>().mockReturnValue(q({ _id: batchId })),
+      aggregate: jest.fn().mockReturnValue(q([])),
     };
     batchUlbModel = {
       find: jest.fn().mockReturnValue(q([])),
+      aggregate: jest.fn().mockReturnValue(q([])),
       countDocuments: jest.fn<Promise<number>, [Record<string, unknown>]>().mockResolvedValue(0),
       exists: jest.fn().mockResolvedValue(null),
       updateOne: jest.fn<unknown, WriteCall>().mockReturnValue(q({ matchedCount: 1 })),
@@ -101,7 +113,7 @@ describe('MohuaClaimLettersService', () => {
       }),
       resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
     };
-    expectedUlbs = { resolve: jest.fn().mockResolvedValue([]) };
+    expectedUlbs = { resolve: jest.fn().mockResolvedValue([]), idsByState: jest.fn().mockResolvedValue(new Map()) };
     formStatus = {
       moveFormsToMohuaReview: jest.fn().mockResolvedValue({ moved: {} }),
       returnFormsForCorrection: jest.fn().mockResolvedValue([]),
@@ -207,6 +219,17 @@ describe('MohuaClaimLettersService', () => {
       });
     });
 
+    it('gives each state its total expected ULBs from one grouped query, 0 when it has none', async () => {
+      expectedUlbs.idsByState.mockResolvedValue(new Map([[String(tripura._id), ['u1', 'u2', 'u3']]]));
+
+      const { states } = await service.listStates(yearId, 1);
+
+      expect(expectedUlbs.idsByState).toHaveBeenCalledWith(yearId);
+      expect(expectedUlbs.resolve).not.toHaveBeenCalled();
+      expect(states.find((s) => s.name === 'Tripura')?.totalUlbs).toBe(3);
+      expect(states.find((s) => s.name === 'Kerala')?.totalUlbs).toBe(0);
+    });
+
     it('puts states with a claim letter first, and keeps each group alphabetical', async () => {
       const assam = { _id: new Types.ObjectId(), name: 'Assam', code: 'AS' };
       stateModel.find.mockReturnValue(q([assam, kerala, tripura]));
@@ -227,6 +250,43 @@ describe('MohuaClaimLettersService', () => {
       expect(grantAllocationModel.find).toHaveBeenCalledWith({ yearId: new Types.ObjectId(yearId) });
       expect(states.find((s) => s.name === 'Tripura')?.installmentAllocation).toBe(650_500_001); // (1,000,000,000 + 301,000,001) / 2, rounded
       expect(states.find((s) => s.name === 'Kerala')?.installmentAllocation).toBeNull();
+    });
+
+    it('adds the national overview: total allocation, and claims submitted / under review / approved / returned', async () => {
+      grantAllocationModel.find.mockReturnValue(
+        q([
+          { stateId: tripura._id, basic: 1_000_000_000, performance: 200_000_000 }, // 600,000,000 per installment
+          { stateId: kerala._id, basic: 400_000_000, performance: 0 }, // 200,000,000
+        ]),
+      );
+      const claim = (state: Types.ObjectId, currentFormStatus: number, amount: number) =>
+        batch({
+          _id: new Types.ObjectId(),
+          state,
+          currentFormStatus,
+          financialSummary: { currentSelectedClaim: amount },
+        });
+      batchModel.find.mockReturnValue(
+        q([
+          claim(tripura._id, FORM_STATUS.UNDER_REVIEW_BY_SO, 100_000_000),
+          claim(tripura._id, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, 130_000_000),
+          claim(tripura._id, FORM_STATUS.RETURNED_BY_SO, 60_000_000),
+          claim(kerala._id, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA, 50_000_000),
+        ]),
+      );
+
+      const { overview } = await service.listStates(yearId, 1);
+
+      expect(overview).toEqual({
+        totalAllocation: 800_000_000,
+        stateCount: 2,
+        // All four letters count as claims; the returned one's amount is left out (its ULBs are resubmitted).
+        submitted: { claims: 4, states: 2, amount: 280_000_000 },
+        underReview: { claims: 1, states: 1, amount: 100_000_000 },
+        // Verified by the SO (5) counts as approved, with acknowledged (7).
+        approved: { claims: 2, states: 2, amount: 180_000_000 },
+        returned: { claims: 1, states: 1, amount: 60_000_000 },
+      });
     });
 
     it('404s for an unknown year and for an installment that is not supported yet', async () => {
@@ -286,8 +346,9 @@ describe('MohuaClaimLettersService', () => {
       expect(summary).toEqual({
         claimedUlbs: 72,
         pendingUlbs: 51,
-        approvedUlbs: 40,
-        underReviewUlbs: 22,
+        // Verified by the SO (5, 12 ULBs) counts as approved with acknowledged (7, 40); only SO review (15) is pending.
+        approvedUlbs: 52,
+        underReviewUlbs: 10,
         returnedUlbs: 10,
         amountClaimed: 600_000_000,
         balance: 400_000_000,
@@ -326,18 +387,70 @@ describe('MohuaClaimLettersService', () => {
       stateModel.findById.mockReturnValue(q(null));
       await expect(service.listStateClaimLetters(String(tripura._id), yearId, 1)).rejects.toThrow(NotFoundException);
     });
+
+    it('lists the latest submitted letter first', async () => {
+      await service.listStateClaimLetters(String(tripura._id), yearId, 1);
+
+      const query = batchModel.find.mock.results[0].value as { sort: jest.Mock };
+      expect(query.sort).toHaveBeenCalledWith({ submittedAt: -1, _id: -1 });
+    });
   });
 
   describe('getClaimLetter', () => {
     it('returns the headline numbers and a signed URL for the State-signed file', async () => {
-      batchUlbModel.countDocuments.mockResolvedValue(2);
+      batchUlbModel.aggregate.mockReturnValue(q([{ ulbs: 2, amount: 45_000_000 }]));
+      batchModel.aggregate.mockReturnValue(q([{ ulbs: 9, amount: 310_000_000 }]));
 
       const detail = await service.getClaimLetter(String(batchId));
 
       expect(detail.signedClaimFile).toEqual({ name: 'Doc1.pdf', url: 'https://signed/file', sizeKb: 67 });
       expect(fileTokens.signFileUrlForSession).toHaveBeenCalledWith('a/b/Doc1.pdf', 'inline');
-      expect(detail.summary).toEqual({ claimAmountReceived: 130_000_000, totalCities: 4, exemptionsApplied: 2 });
+      expect(detail.summary).toEqual({
+        claimAmountReceived: 130_000_000,
+        totalCities: 4,
+        exemptionsApplied: 2,
+        exemptionAmount: 45_000_000,
+        submittedClaimAmount: 310_000_000,
+        submittedUlbs: 9,
+      });
       expect(detail.state).toEqual({ id: String(tripura._id), name: 'Tripura' });
+    });
+
+    it('reports zeros when no ULB relied on an exemption and no letter counts as submitted', async () => {
+      // A returned letter is not "submitted" itself, so with no other letter the submitted totals are zero.
+      batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.RETURNED_BY_SO })));
+
+      const { summary } = await service.getClaimLetter(String(batchId));
+
+      expect(summary).toMatchObject({
+        exemptionsApplied: 0,
+        exemptionAmount: 0,
+        submittedClaimAmount: 0,
+        submittedUlbs: 0,
+      });
+    });
+
+    it("sums the exemption ULBs' claims in this letter, and the State's submitted letters minus returned ones", async () => {
+      await service.getClaimLetter(String(batchId));
+
+      const [exemptionPipeline] = batchUlbModel.aggregate.mock.calls[0] as [Record<string, unknown>[]];
+      expect(exemptionPipeline[0]).toEqual({
+        $match: { claimLetter: batchId, 'appliedExemptionIds.0': { $exists: true } },
+      });
+      expect(exemptionPipeline[1]).toEqual({
+        $group: { _id: null, ulbs: { $sum: 1 }, amount: { $sum: '$claimedAmount' } },
+      });
+
+      const [submittedPipeline] = batchModel.aggregate.mock.calls[0] as [{ $match: Record<string, unknown> }[]];
+      const match = submittedPipeline[0].$match;
+      expect(match).toMatchObject({ assemblyStatus: 'READY', supersededBy: null, installment: 1 });
+      expect(match['currentFormStatus']).toEqual({
+        $in: [
+          FORM_STATUS.UNDER_REVIEW_BY_SO,
+          FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+        ],
+      });
     });
 
     it('has no file when the State attached none, and never signs an empty path', async () => {
@@ -694,7 +807,9 @@ describe('MohuaClaimLettersService', () => {
         refNo: expect.stringMatching(/^CL\/TR\/2026-27\/1-/) as unknown,
         stateRemark: 'Fix the SFC status',
         stateItems: ['SFC Status'],
-        ulbs: [{ ulbId, items: ['Elected Body Status', 'Bank Account'], ownForms: ['Bank Account'], remark: 'Wrong IFSC' }],
+        ulbs: [
+          { ulbId, items: ['Elected Body Status', 'Bank Account'], ownForms: ['Bank Account'], remark: 'Wrong IFSC' },
+        ],
       });
       expect(returnNotifications.notifyClaimLetterReturned.mock.invocationCallOrder[0]).toBeGreaterThan(
         session.commitTransaction.mock.invocationCallOrder[0],
@@ -898,12 +1013,20 @@ describe('MohuaClaimLettersService', () => {
         );
       });
 
-      it("rolls the exemption rejection back when the return fails, so a retry rejects it once", async () => {
+      it('rolls the exemption rejection back when the return fails, so a retry rejects it once', async () => {
         exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
         formStatus.returnFormsForCorrection.mockRejectedValueOnce(new Error('write failed'));
 
         await expect(service.returnForCorrection(String(batchId), dto, so)).rejects.toThrow('write failed');
-        expect(exemptionService.reject).toHaveBeenCalledWith(String(exemptionId), 23, 'No election', so, '', '', session);
+        expect(exemptionService.reject).toHaveBeenCalledWith(
+          String(exemptionId),
+          23,
+          'No election',
+          so,
+          '',
+          '',
+          session,
+        );
         expect(session.abortTransaction).toHaveBeenCalled();
         expect(session.commitTransaction).not.toHaveBeenCalled();
       });
