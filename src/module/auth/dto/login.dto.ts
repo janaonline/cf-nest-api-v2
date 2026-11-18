@@ -22,9 +22,10 @@ export class LoginDto {
   @IsString()
   type?: string;
 
-  // TS-1262: the unified sign-in page's role picker. Optional for backward compatibility with
-  // any client still on the old per-portal login flow that never sent this — see
-  // LoginService.login()'s PICKER_ROLE_BUCKETS check for how it's enforced.
+  // TS-1262: the unified sign-in page's role picker. Not enforced against the account's real
+  // role — LoginService.login() no longer checks it. It only tells the picker which ID-field
+  // format to render (census code vs email); optional for backward compatibility with any client
+  // still on the old per-portal login flow that never sent this.
   @ApiPropertyOptional({ enum: ['ULB', 'STATE', 'MOHUA', 'PARTNER', 'DOE'] })
   @IsOptional()
   @IsString()
