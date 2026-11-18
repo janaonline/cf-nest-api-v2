@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, PipelineStage, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
@@ -18,11 +18,13 @@ import type { StateNotificationsData } from './state-notifications.types';
  * Feeds the State bell and the sidebar dots: where each of the five State forms stands, how many
  * ULB forms are waiting on the State, and how many claim letters MoHUA returned that still need a
  * new letter. Stateless and read-only — nothing is stored, so an item clears itself once the
- * underlying form or letter moves on. Kept cheap (7 small queries) because the navbar calls it on
+ * underlying form or letter moves on. Kept to a few small queries because the navbar calls it on
  * every State page.
  */
 @Injectable()
 export class StateNotificationsService {
+  private readonly logger = new Logger(StateNotificationsService.name);
+
   constructor(
     private readonly stateConditions: MohuaStateConditionsService,
     @InjectModel(XviFcAnnualAccount.name) private readonly annualAccountModel: Model<XviFcAnnualAccountDocument>,
@@ -44,7 +46,11 @@ export class StateNotificationsService {
     const [conditions, ulbSubmissionsAwaitingReview, claimLettersReturned] = await Promise.all([
       this.stateConditions.resolve(yearId, [stateId]),
       this.countUlbFormsAwaitingReview(stateOid, yearOid),
-      this.countOpenClaimLetterReturns(stateOid, yearOid),
+      // Best effort: a failed claim-letter count shows as 0 instead of failing the form and ULB indicators too.
+      this.countOpenClaimLetterReturns(stateOid, yearOid).catch((err: unknown) => {
+        this.logger.warn(`Could not count returned claim letters for state ${stateId}: ${String(err)}`);
+        return 0;
+      }),
     ]);
 
     const forms = (conditions.get(stateId)?.forms ?? []).map(({ key, statusCode }) => ({ key, statusCode }));

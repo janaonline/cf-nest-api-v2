@@ -416,7 +416,10 @@ describe('MohuaClaimLettersService', () => {
       expect(detail.state).toEqual({ id: String(tripura._id), name: 'Tripura' });
     });
 
-    it('reports zeros when no ULB relied on an exemption and no other letter is submitted', async () => {
+    it('reports zeros when no ULB relied on an exemption and no letter counts as submitted', async () => {
+      // A returned letter is not "submitted" itself, so with no other letter the submitted totals are zero.
+      batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.RETURNED_BY_SO })));
+
       const { summary } = await service.getClaimLetter(String(batchId));
 
       expect(summary).toMatchObject({
