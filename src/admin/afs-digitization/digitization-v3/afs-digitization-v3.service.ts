@@ -111,6 +111,9 @@ const AFS_FILE_PROJECTION = Object.fromEntries(
     .map((path) => [path.replace('ulbFile.', 'afsFile.'), 1]),
 );
 
+/** Arithmetic status FastAPI stores when the uploaded doc type isn't in the PDF (no checks ran). */
+const ARITHMETIC_SKIPPED = 'SKIPPED';
+
 /** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
 const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
 
@@ -120,6 +123,8 @@ export interface OverallRecalcSummary {
   unchanged: number;
   /** No stored crosscheck score, so no overall can be derived */
   skipped: number;
+  /** Mismatched files whose `scores.arithmeticAssessment` was set (or would be, on a dry run) to SKIPPED */
+  arithmeticSkippedSet: number;
   dryRun: boolean;
   /** e.g. `PARTIAL->PASS`: how many files moved between each pair */
   transitions: Record<string, number>;
@@ -215,6 +220,8 @@ export interface DigitizationV3ScoreMetrics {
   confidenceLow: number;
   arithmeticPass: number;
   arithmeticFail: number;
+  /** Arithmetic did not run because the uploaded doc type isn't in the file (mismatch) */
+  arithmeticSkipped: number;
   overallPass: number;
   overallPartial: number;
   overallFail: number;
@@ -743,19 +750,28 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   /**
    * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
-   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI:
+   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI. A mismatched file also gets
+   * `scores.arithmeticAssessment = SKIPPED` (arithmetic doesn't run when the uploaded type isn't in the PDF):
    *   document mismatch (scores.isMismatch)        -> FAIL
-   *   OCR confidence < 80                          -> FAIL
+   *   Textract confidence < 80                     -> FAIL
    *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
    *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
    *   crosscheck < 80 and arithmetic FAIL          -> FAIL
    *   otherwise                                    -> PARTIAL
-   * A file with no `ocrConfidenceScore` counts as OCR pass (as in FastAPI). FastAPI also fails OCR when nothing was
+   * A file with no `ocrConfidenceScore` counts as Textract pass (as in FastAPI). FastAPI also fails OCR when nothing was
    * extracted, which the file does not record, so such a file is judged on crosscheck + arithmetic only.
    * `dryRun` (the default at the endpoint) only counts.
    */
   async recalculateOverallAssessment(dryRun: boolean): Promise<OverallRecalcSummary> {
-    const summary: OverallRecalcSummary = { scanned: 0, changed: 0, unchanged: 0, skipped: 0, dryRun, transitions: {} };
+    const summary: OverallRecalcSummary = {
+      scanned: 0,
+      changed: 0,
+      unchanged: 0,
+      skipped: 0,
+      arithmeticSkippedSet: 0,
+      dryRun,
+      transitions: {},
+    };
     const BATCH = 1000;
 
     for (const slot of ['ulbFile', 'afsFile'] as const) {
@@ -779,35 +795,45 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         const s = d[slot]?.scores ?? {};
         const { ocrConfidenceScore: ocr, accuracyScore: accuracy, arithmeticAssessment: arithmetic } = s;
         const old: string | undefined = s.overallAssessment;
+        const $set: Record<string, unknown> = {};
+
+        // A document mismatch skips arithmetic (FastAPI stores SKIPPED; older files kept FAIL or nothing)
+        if (s.isMismatch === true && arithmetic !== ARITHMETIC_SKIPPED) {
+          $set[`${slot}.scores.arithmeticAssessment`] = ARITHMETIC_SKIPPED;
+          summary.arithmeticSkippedSet++;
+        }
+
         // A document mismatch fails the file whatever the other scores say, even with no crosscheck score
         if (s.isMismatch !== true && typeof accuracy !== 'number') {
           summary.skipped++;
-          continue;
+        } else {
+          let next: string;
+          if (s.isMismatch === true) next = 'FAIL';
+          else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
+          else {
+            const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
+            const arithmeticOk = arithmetic !== 'FAIL';
+            next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
+          }
+          if (next === old) {
+            summary.unchanged++;
+          } else {
+            summary.changed++;
+            const key = `${old ?? 'none'}->${next}`;
+            summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
+            $set[`${slot}.scores.overallAssessment`] = next;
+          }
         }
-        let next: string;
-        if (s.isMismatch === true) next = 'FAIL';
-        else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
-        else {
-          const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
-          const arithmeticOk = arithmetic !== 'FAIL';
-          next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
-        }
-        if (next === old) {
-          summary.unchanged++;
-          continue;
-        }
-        summary.changed++;
-        const key = `${old ?? 'none'}->${next}`;
-        summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
-        if (!dryRun) {
-          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set: { [`${slot}.scores.overallAssessment`]: next } } } });
+
+        if (!dryRun && Object.keys($set).length) {
+          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set } } });
           if (ops.length >= BATCH) await flush();
         }
       }
       await flush();
     }
 
-    if (!dryRun && summary.changed) await this.refreshScoreMetrics();
+    if (!dryRun && (summary.changed || summary.arithmeticSkippedSet)) await this.refreshScoreMetrics();
     return summary;
   }
 
@@ -1236,6 +1262,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               },
               arithmeticPass: is('$ulbFile.scores.arithmeticAssessment', 'PASS'),
               arithmeticFail: is('$ulbFile.scores.arithmeticAssessment', 'FAIL'),
+              arithmeticSkipped: is('$ulbFile.scores.arithmeticAssessment', ARITHMETIC_SKIPPED),
               overallPass: is('$ulbFile.scores.overallAssessment', 'PASS'),
               overallPartial: is('$ulbFile.scores.overallAssessment', 'PARTIAL'),
               overallFail: is('$ulbFile.scores.overallAssessment', 'FAIL'),
@@ -1259,6 +1286,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         confidenceLow: 0,
         arithmeticPass: 0,
         arithmeticFail: 0,
+        arithmeticSkipped: 0,
         overallPass: 0,
         overallPartial: 0,
         overallFail: 0,
