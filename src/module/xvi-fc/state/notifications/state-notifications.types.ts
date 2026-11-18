@@ -9,4 +9,7 @@ export interface StateNotificationsData {
   forms: StateNotificationForm[];
   /** ULB forms (Audited/Provisional accounts, PFMS bank account, DUR) currently under State review. */
   ulbSubmissionsAwaitingReview: number;
+  /** Claim letters MoHUA returned for correction that the State has not yet followed with a newly
+   *  submitted letter in the same slot (same installment and batch number). */
+  claimLettersReturned: number;
 }

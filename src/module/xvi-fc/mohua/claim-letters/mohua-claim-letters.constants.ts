@@ -17,7 +17,15 @@ export const MOHUA_CLAIM_LETTERS_LISTED_STATUSES: number[] = [
 ];
 
 /** Returned letters (by the SO or MoHUA): their screens show what the return reopened, read from its history. */
-export const MOHUA_CLAIM_LETTER_RETURNED_STATUSES: number[] = [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA];
+export const MOHUA_CLAIM_LETTER_RETURNED_STATUSES: number[] = [
+  FORM_STATUS.RETURNED_BY_SO,
+  FORM_STATUS.RETURNED_BY_MOHUA,
+];
+
+/** Listed letters that still count as submitted claims: under review or acknowledged, never returned ones. */
+export const MOHUA_CLAIM_LETTER_SUBMITTED_STATUSES: number[] = MOHUA_CLAIM_LETTERS_LISTED_STATUSES.filter(
+  (status) => !MOHUA_CLAIM_LETTER_RETURNED_STATUSES.includes(status),
+);
 
 export const MOHUA_CLAIM_LETTER_REVIEWER_FORBIDDEN_MESSAGE = 'Only MoHUA or admin users may approve a claim letter.';
 
