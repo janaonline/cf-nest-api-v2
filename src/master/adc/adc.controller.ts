@@ -22,6 +22,8 @@ import { Role } from 'src/module/auth/enum/role.enum';
 import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import { AdcService } from './adc.service';
 import { AdcListQueryDto } from './dto/adc-list-query.dto';
+import { AdcMembersQueryDto } from './dto/adc-members-query.dto';
+import { AdcUlbsQueryDto } from './dto/adc-ulbs-query.dto';
 import { CreateAdcDto } from './dto/create-adc.dto';
 import { QueryAdcDto } from './dto/query-adc.dto';
 import { RenameAdcDto } from './dto/rename-adc.dto';
@@ -49,16 +51,37 @@ export class AdcController {
 
   @Get('manage')
   @Roles([Role.ADMIN])
-  @ApiOperation({ summary: 'Page of ADCs (max 20) with ULB and member counts and the ADC Admin (ADMIN only)' })
+  @ApiOperation({
+    summary:
+      'Page of ADCs (max 20) with ULB and member counts and the ADC Admin; search covers the ADC name and the ' +
+      "Admin's name and email (ADMIN only)",
+  })
   listForAdmin(@Query() query: AdcListQueryDto) {
     return this.adcService.listForAdmin(query);
   }
 
+  @Get(':id')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: "One ADC's header: state, counts, Admin and created date (ADMIN only)" })
+  @ApiResponse({ status: 404, description: 'ADC not found' })
+  detail(@Param('id', ParseObjectIdPipe) id: string) {
+    return this.adcService.detail(id);
+  }
+
   @Get(':id/members')
   @Roles([Role.ADMIN])
-  @ApiOperation({ summary: "An ADC's active members, for Change Admin (ADMIN only)" })
-  members(@Param('id', ParseObjectIdPipe) id: string) {
-    return this.adcService.members(id);
+  @ApiOperation({
+    summary: "Page of an ADC's active members (max 20), for the detail page and Change Admin (ADMIN only)",
+  })
+  members(@Param('id', ParseObjectIdPipe) id: string, @Query() query: AdcMembersQueryDto) {
+    return this.adcService.members(id, query);
+  }
+
+  @Get(':id/ulbs')
+  @Roles([Role.ADMIN])
+  @ApiOperation({ summary: "Page of an ADC's ULBs (max 20) (ADMIN only)" })
+  ulbs(@Param('id', ParseObjectIdPipe) id: string, @Query() query: AdcUlbsQueryDto, @CurrentUser() user: IAuthUser) {
+    return this.adcService.ulbs(id, query, user);
   }
 
   @Post()

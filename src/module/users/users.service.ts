@@ -12,7 +12,7 @@ import { ConfigService } from '@nestjs/config';
 import { randomBytes } from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { FilterQuery, Model, Types } from 'mongoose';
 import { RedisService } from 'src/core/services/redis/redis.service';
 import { EmailQueueService } from 'src/core/queue/email-queue/email-queue.service';
 import { PORTAL_INVITE_LOGIN_TYPE, buildPortalAuthUrls } from 'src/core/utils/portal-urls.util';
@@ -40,6 +40,8 @@ import { TransferSubmitterDto } from './dto/transfer-submitter.dto';
 import { CreateUserDto, type AdminSubRole } from './dto/create-user.dto';
 import { AdminUpdateUserDto } from './dto/admin-update-user.dto';
 import { objectIdToString, toObjectIdString } from 'src/common/utils/objectid.util';
+import { escapeRegex } from 'src/common/utils/regex.util';
+import type { PaginatedResult } from 'src/common/dto/pagination.dto';
 import { Adc, AdcDocument } from 'src/schemas/adc.schema';
 import { AdcAuditAction } from 'src/schemas/adc-audit-log.schema';
 import { AdcAuditLogService } from 'src/master/adc/audit/adc-audit-log.service';
@@ -303,10 +305,31 @@ export interface AdcAdminChange {
 export interface AdcMemberForAdmin {
   _id: string;
   name: string;
+  designation: string;
   email: string;
+  mobile: string;
   subRole: 'SUBMITTER' | 'EDITOR' | 'VIEWER';
   isXVIFCProfileVerified: boolean;
+  lastActive: string | null;
 }
+
+/** Filters for the Portal Admin's paged member list of one ADC (master/adc/:id/members). */
+export interface AdcMembersPageQuery {
+  page: number;
+  limit: number;
+  search?: string;
+  level?: 'ADMIN' | 'EDITOR' | 'VIEWER';
+  status?: 'ACTIVE' | 'INVITED';
+  excludeAdmin?: boolean;
+  sortBy?: 'name' | 'lastActive';
+  sortDir?: 1 | -1;
+}
+
+const ADC_LEVEL_TO_SUBROLE: Record<NonNullable<AdcMembersPageQuery['level']>, string> = {
+  ADMIN: 'admin',
+  EDITOR: 'reviewer',
+  VIEWER: 'viewer',
+};
 
 // ─── Service ─────────────────────────────────────────────────────────────────
 
@@ -1652,22 +1675,47 @@ export class UsersService {
     return { adc, from: currentAdminId, to: new Types.ObjectId(member._id), mode: 'INVITED' };
   }
 
-  /** Active members of an ADC for the Portal Admin's Change Admin dialog. */
-  async listAdcMembersForAdmin(adcId: string): Promise<AdcMemberForAdmin[]> {
+  /** One page of an ADC's active members for the Portal Admin (ADC detail page and Change Admin). */
+  async listAdcMembersForAdmin(adcId: string, query: AdcMembersPageQuery): Promise<PaginatedResult<AdcMemberForAdmin>> {
     if (!(await this.adcModel.exists({ _id: adcId }))) throw new NotFoundException('ADC not found');
-    const users = await this.userModel
-      .find(this.activeAdcMemberFilter(new Types.ObjectId(adcId)))
-      .select('_id name email xviFcSubrole isXVIFCProfileVerified')
-      .sort({ name: 1 })
-      .lean()
-      .exec();
-    return users.map((u) => ({
+    const { page, limit } = query;
+
+    const filter: FilterQuery<User> = this.activeAdcMemberFilter(new Types.ObjectId(adcId));
+    const subroles: Record<string, unknown> = {};
+    if (query.level) subroles.$eq = ADC_LEVEL_TO_SUBROLE[query.level];
+    if (query.excludeAdmin) subroles.$ne = 'admin';
+    if (Object.keys(subroles).length) filter.xviFcSubrole = subroles;
+    if (query.status) filter.isXVIFCProfileVerified = query.status === 'ACTIVE' ? true : { $ne: true };
+    if (query.search) {
+      const pattern = { $regex: escapeRegex(query.search), $options: 'i' };
+      filter.$or = [{ name: pattern }, { email: pattern }, { mobile: pattern }];
+    }
+    const dir = query.sortDir ?? 1;
+    const sort: Record<string, 1 | -1> =
+      query.sortBy === 'lastActive' ? { lastLoginAt: dir, name: 1 } : { name: dir, _id: 1 };
+
+    const [users, total] = await Promise.all([
+      this.userModel
+        .find(filter)
+        .select('_id name designation email mobile xviFcSubrole isXVIFCProfileVerified lastLoginAt')
+        .sort(sort)
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .lean()
+        .exec(),
+      this.userModel.countDocuments(filter).exec(),
+    ]);
+    const data = users.map((u) => ({
       _id: String(u._id),
       name: u.name,
+      designation: u.designation ?? '',
       email: u.email,
+      mobile: u.mobile ?? '',
       subRole: UsersService.XVIFC_TO_SUB_ROLE[u.xviFcSubrole ?? ''] ?? 'VIEWER',
-      isXVIFCProfileVerified: !!u.isXVIFCProfileVerified,
+      isXVIFCProfileVerified: u.isXVIFCProfileVerified === true,
+      lastActive: u.lastLoginAt ? u.lastLoginAt.toISOString() : null,
     }));
+    return { data, total, page, limit, totalPages: Math.ceil(total / limit) };
   }
 
   /**

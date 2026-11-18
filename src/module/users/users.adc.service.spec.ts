@@ -682,26 +682,106 @@ describe('UsersService — ADC (Autonomous District Council) users', () => {
   });
 
   describe('listAdcMembersForAdmin()', () => {
-    it("maps the ADC's active members to display levels", async () => {
+    const page = { page: 1, limit: 20 };
+    let countDocuments: jest.Mock;
+
+    beforeEach(() => {
       mockAdcModel.exists.mockResolvedValue({ _id: ADC_ID });
+      countDocuments = jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(0) });
+      (mockUserModel as Record<string, jest.Mock>).countDocuments = countDocuments;
+      mockUserModel.exec.mockResolvedValue([]);
+    });
+
+    const filterArg = () => (mockUserModel.find.mock.calls[0] as [Record<string, unknown>])[0];
+
+    it("returns one page of the ADC's active members with display levels, status and last active", async () => {
       const adminId = new Types.ObjectId();
+      const lastLoginAt = new Date('2026-11-12T10:00:00.000Z');
       mockUserModel.exec.mockResolvedValueOnce([
-        { _id: adminId, name: 'A', email: 'a@x.in', xviFcSubrole: 'admin', isXVIFCProfileVerified: true },
+        {
+          _id: adminId,
+          name: 'A',
+          designation: 'Nodal Officer',
+          email: 'a@x.in',
+          mobile: '9876543210',
+          xviFcSubrole: 'admin',
+          isXVIFCProfileVerified: true,
+          lastLoginAt,
+        },
         { _id: TARGET_USER_ID, name: 'B', email: 'b@x.in', xviFcSubrole: 'reviewer' },
       ]);
+      countDocuments.mockReturnValue({ exec: jest.fn().mockResolvedValue(21) });
 
-      await expect(service.listAdcMembersForAdmin(ADC_ID)).resolves.toEqual([
-        { _id: String(adminId), name: 'A', email: 'a@x.in', subRole: 'SUBMITTER', isXVIFCProfileVerified: true },
-        { _id: TARGET_USER_ID, name: 'B', email: 'b@x.in', subRole: 'EDITOR', isXVIFCProfileVerified: false },
-      ]);
-      expect(mockUserModel.find).toHaveBeenCalledWith(
-        expect.objectContaining({ adc: new Types.ObjectId(ADC_ID), isDeleted: false }),
+      await expect(service.listAdcMembersForAdmin(ADC_ID, { page: 2, limit: 20 })).resolves.toEqual({
+        total: 21,
+        page: 2,
+        limit: 20,
+        totalPages: 2,
+        data: [
+          {
+            _id: String(adminId),
+            name: 'A',
+            designation: 'Nodal Officer',
+            email: 'a@x.in',
+            mobile: '9876543210',
+            subRole: 'SUBMITTER',
+            isXVIFCProfileVerified: true,
+            lastActive: lastLoginAt.toISOString(),
+          },
+          {
+            _id: TARGET_USER_ID,
+            name: 'B',
+            designation: '',
+            email: 'b@x.in',
+            mobile: '',
+            subRole: 'EDITOR',
+            isXVIFCProfileVerified: false,
+            lastActive: null,
+          },
+        ],
+      });
+      expect(filterArg()).toEqual(expect.objectContaining({ adc: new Types.ObjectId(ADC_ID), isDeleted: false }));
+      expect(countDocuments).toHaveBeenCalledWith(filterArg());
+      expect(mockUserModel.skip).toHaveBeenCalledWith(20);
+      expect(mockUserModel.limit).toHaveBeenCalledWith(20);
+      expect(mockUserModel.sort).toHaveBeenCalledWith({ name: 1, _id: 1 });
+    });
+
+    it('filters by level, verification status and leaving out the Admin', async () => {
+      await service.listAdcMembersForAdmin(ADC_ID, { ...page, level: 'EDITOR', status: 'INVITED', excludeAdmin: true });
+
+      expect(filterArg()).toEqual(
+        expect.objectContaining({
+          xviFcSubrole: { $eq: 'reviewer', $ne: 'admin' },
+          isXVIFCProfileVerified: { $ne: true },
+        }),
       );
+    });
+
+    it('finds verified non-admins only for Change Admin', async () => {
+      await service.listAdcMembersForAdmin(ADC_ID, { ...page, status: 'ACTIVE', excludeAdmin: true });
+
+      expect(filterArg()).toEqual(
+        expect.objectContaining({ xviFcSubrole: { $ne: 'admin' }, isXVIFCProfileVerified: true }),
+      );
+    });
+
+    it('searches name, email and mobile literally, escaping regex characters', async () => {
+      await service.listAdcMembersForAdmin(ADC_ID, { ...page, search: 'a.*(b+)+' });
+
+      const pattern = { $regex: 'a\\.\\*\\(b\\+\\)\\+', $options: 'i' };
+      expect(filterArg().$or).toEqual([{ name: pattern }, { email: pattern }, { mobile: pattern }]);
+    });
+
+    it('sorts by last active, with the name as tiebreaker', async () => {
+      await service.listAdcMembersForAdmin(ADC_ID, { ...page, sortBy: 'lastActive', sortDir: -1 });
+      expect(mockUserModel.sort).toHaveBeenCalledWith({ lastLoginAt: -1, name: 1 });
     });
 
     it('404s for an unknown ADC', async () => {
       mockAdcModel.exists.mockResolvedValue(null);
-      await expect(service.listAdcMembersForAdmin(ADC_ID)).rejects.toThrow(NotFoundException);
+      await expect(service.listAdcMembersForAdmin(ADC_ID, page)).rejects.toThrow(NotFoundException);
+      expect(mockUserModel.find).not.toHaveBeenCalled();
     });
   });
 

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { UsersModule } from 'src/module/users/users.module';
+import { UlbModule } from 'src/master/ulb/ulb.module';
 import { Adc, AdcSchema } from 'src/schemas/adc.schema';
 import { State, StateSchema } from 'src/schemas/state.schema';
 import { Ulb, UlbSchema } from 'src/schemas/ulb.schema';
@@ -18,6 +19,7 @@ import { AdcAuditLogModule } from './audit/adc-audit-log.module';
       { name: State.name, schema: StateSchema },
     ]),
     UsersModule,
+    UlbModule,
     AdcAuditLogModule,
   ],
   controllers: [AdcController],

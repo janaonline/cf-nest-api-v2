@@ -1,4 +1,5 @@
 import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { escapeRegex } from 'src/common/utils/regex.util';
 import { ConfigService } from '@nestjs/config';
 import { InjectModel } from '@nestjs/mongoose';
 import * as bcrypt from 'bcrypt';
@@ -664,9 +665,11 @@ export class UlbService {
     return chars.join('');
   }
 
+  /** `options.adc` limits the list to one ADC's ULBs (the Portal Admin's ADC detail page). */
   async findAll(
     query: QueryUlbDto,
     user: IAuthUser,
+    options?: { adc?: Types.ObjectId },
   ): Promise<{
     data: (Omit<Ulb, 'adc'> & {
       adc: UlbAdcRef | null;
@@ -705,10 +708,11 @@ export class UlbService {
     } else if (query.state) {
       filter.state = new Types.ObjectId(query.state);
     }
+    if (options?.adc) filter.adc = options.adc;
 
     const search = query.search?.trim();
     if (search) {
-      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const escaped = escapeRegex(search);
       filter.$or = [{ name: { $regex: escaped, $options: 'i' } }, { code: { $regex: escaped, $options: 'i' } }];
     }
 

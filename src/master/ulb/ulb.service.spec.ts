@@ -730,6 +730,25 @@ describe('UlbService', () => {
       expect(result.data[0].ulbTypeName).toBe('Municipal Corporation');
     });
 
+    it("limits the list to one ADC's ULBs with the adc option, and searches name or code literally", async () => {
+      const find = jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        limit: jest.fn().mockReturnThis(),
+        lean: jest.fn().mockResolvedValue([]),
+      });
+      ulbModel.find = find;
+      ulbModel.countDocuments.mockResolvedValue(0);
+      const adc = new Types.ObjectId();
+
+      await service.findAll({ search: ' a.*(b+)+ ', page: 1, limit: 10 }, adminUser, { adc });
+
+      const [filter] = find.mock.calls[0] as [Record<string, unknown>];
+      const pattern = { $regex: 'a\\.\\*\\(b\\+\\)\\+', $options: 'i' };
+      expect(filter.adc).toBe(adc);
+      expect(filter.$or).toEqual([{ name: pattern }, { code: pattern }]);
+    });
+
     it("filters by presence of 'approval', not its status, when approvalStatus is 'EXISTING'", async () => {
       const find = jest.fn().mockReturnValue({
         sort: jest.fn().mockReturnThis(),

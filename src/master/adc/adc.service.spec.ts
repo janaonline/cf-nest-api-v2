@@ -2,7 +2,9 @@ import { HttpException, NotFoundException } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Types } from 'mongoose';
+import type { IAuthUser } from 'src/common/interfaces/auth-user.interface';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { UlbService } from 'src/master/ulb/ulb.service';
 import { UsersService } from 'src/module/users/users.service';
 import { Adc } from 'src/schemas/adc.schema';
 import { State } from 'src/schemas/state.schema';
@@ -21,6 +23,16 @@ function q<T>(value: T) {
   return chain;
 }
 
+/** The pipeline stages the tests read back from the aggregate() mock. */
+interface Stage {
+  $match?: Record<string, unknown>;
+  $lookup?: { from: string; localField?: string; foreignField?: string; pipeline?: { $match?: unknown }[] };
+  $addFields?: Record<string, unknown>;
+  $sort?: Record<string, number>;
+  $facet?: { data: unknown[]; total: unknown[] };
+  $project?: Record<string, unknown>;
+}
+
 const responseOf = (err: unknown) => (err as HttpException).getResponse();
 
 describe('AdcService (Portal Admin)', () => {
@@ -30,6 +42,7 @@ describe('AdcService (Portal Admin)', () => {
   let userModel: Record<string, jest.Mock>;
   let stateModel: Record<string, jest.Mock>;
   let usersService: Record<string, jest.Mock>;
+  let ulbService: { findAll: jest.Mock };
   let auditLog: { record: jest.Mock };
 
   const admin = { _id: new Types.ObjectId().toString(), role: 'ADMIN' } as AuthUser;
@@ -52,14 +65,12 @@ describe('AdcService (Portal Admin)', () => {
       findById: jest.fn().mockReturnValue(q(adcDoc())),
       findByIdAndUpdate: jest.fn(),
       deleteOne: jest.fn().mockReturnValue(q({ deletedCount: 1 })),
-    };
-    ulbModel = { aggregate: jest.fn().mockReturnValue(q([])), countDocuments: jest.fn().mockReturnValue(q(0)) };
-    userModel = {
       aggregate: jest.fn().mockReturnValue(q([])),
-      find: jest.fn().mockReturnValue(q([])),
-      countDocuments: jest.fn().mockReturnValue(q(0)),
     };
-    stateModel = { find: jest.fn().mockReturnValue(q([])), exists: jest.fn().mockResolvedValue({ _id: stateId }) };
+    ulbModel = { countDocuments: jest.fn().mockReturnValue(q(0)), collection: { name: 'ulbs' } as never };
+    userModel = { countDocuments: jest.fn().mockReturnValue(q(0)), collection: { name: 'users' } as never };
+    stateModel = { exists: jest.fn().mockResolvedValue({ _id: stateId }), collection: { name: 'states' } as never };
+    ulbService = { findAll: jest.fn() };
     usersService = {
       createAdcAdmin: jest.fn(),
       setAdcAdmin: jest.fn(),
@@ -76,6 +87,7 @@ describe('AdcService (Portal Admin)', () => {
         { provide: getModelToken(User.name), useValue: userModel },
         { provide: getModelToken(State.name), useValue: stateModel },
         { provide: UsersService, useValue: usersService },
+        { provide: UlbService, useValue: ulbService },
         { provide: AdcAuditLogService, useValue: auditLog },
       ],
     }).compile();
@@ -86,68 +98,24 @@ describe('AdcService (Portal Admin)', () => {
   // ─── list ──────────────────────────────────────────────────────────────
 
   describe('listForAdmin()', () => {
-    it('pages, then maps counts, the Admin and the state name from batched queries', async () => {
-      const other = new Types.ObjectId();
-      const adminId = new Types.ObjectId();
-      const page = q([adcDoc(), { _id: other, name: 'Dima Hasao', state: stateId }]);
-      adcModel.find.mockReturnValue(page);
-      adcModel.countDocuments.mockReturnValue(q(5));
-      ulbModel.aggregate.mockReturnValue(q([{ _id: adcId, count: 12 }]));
-      userModel.aggregate.mockReturnValue(
-        q([
-          { _id: adcId, count: 4 },
-          { _id: other, count: 1 },
-        ]),
-      );
-      userModel.find.mockReturnValue(
-        q([{ _id: adminId, name: 'A. Das', email: 'a@x.gov.in', adc: adcId, isXVIFCProfileVerified: true }]),
-      );
-      stateModel.find.mockReturnValue(q([{ _id: stateId, name: 'Assam' }]));
+    const pipelineOf = (): Stage[] => (adcModel.aggregate.mock.calls[0] as [Stage[]])[0];
+    const stageOf = (key: keyof Stage) => pipelineOf().filter((st) => key in st);
+
+    it('returns the page from one aggregation, with the paging maths', async () => {
+      const row = { _id: adcId, name: 'BTC', state: { _id: stateId, name: 'Assam' }, ulbCount: 3, memberCount: 2 };
+      adcModel.aggregate.mockReturnValue(q([{ data: [row], total: [{ count: 5 }] }]));
 
       const result = await service.listForAdmin({ page: 2, limit: 2 });
 
-      expect(page.skip).toHaveBeenCalledWith(2);
-      expect(page.limit).toHaveBeenCalledWith(2);
-      expect(page.sort).toHaveBeenCalledWith({ name: 1 });
-      expect(result).toEqual({
-        total: 5,
-        page: 2,
-        limit: 2,
-        totalPages: 3,
-        data: [
-          {
-            _id: adcId,
-            name: 'Bodoland Territorial Council',
-            state: { _id: stateId, name: 'Assam' },
-            ulbCount: 12,
-            memberCount: 4,
-            admin: { _id: adminId, name: 'A. Das', email: 'a@x.gov.in', isXVIFCProfileVerified: true },
-          },
-          {
-            _id: other,
-            name: 'Dima Hasao',
-            state: { _id: stateId, name: 'Assam' },
-            ulbCount: 0,
-            memberCount: 1,
-            admin: null,
-          },
-        ],
-      });
-      // The counts and Admins are batched over the page's ids, never queried per row.
-      expect(ulbModel.aggregate).toHaveBeenCalledTimes(1);
-      expect(userModel.find).toHaveBeenCalledWith(expect.objectContaining({ adc: { $in: [adcId, other] } }));
+      expect(adcModel.aggregate).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ data: [row], total: 5, page: 2, limit: 2, totalPages: 3 });
+      const facet = stageOf('$facet')[0].$facet!;
+      expect(facet.data.slice(0, 2)).toEqual([{ $skip: 2 }, { $limit: 2 }]);
+      expect(facet.total).toEqual([{ $count: 'count' }]);
     });
 
-    it('filters by state and matches the search literally, escaping regex characters', async () => {
-      await service.listForAdmin({ page: 1, limit: 20, stateId: String(stateId), search: 'a.*(b+)+' });
-
-      expect(adcModel.find).toHaveBeenCalledWith({
-        state: stateId,
-        name: { $regex: 'a\\.\\*\\(b\\+\\)\\+', $options: 'i' },
-      });
-    });
-
-    it('runs no batched queries for an empty page', async () => {
+    it('returns an empty page when nothing matches', async () => {
+      adcModel.aggregate.mockReturnValue(q([{ data: [], total: [] }]));
       await expect(service.listForAdmin({ page: 1, limit: 20 })).resolves.toEqual({
         data: [],
         total: 0,
@@ -155,8 +123,160 @@ describe('AdcService (Portal Admin)', () => {
         limit: 20,
         totalPages: 0,
       });
-      expect(ulbModel.aggregate).not.toHaveBeenCalled();
-      expect(userModel.find).not.toHaveBeenCalled();
+    });
+
+    it('filters by state first, and joins ULBs on state and adc so the {state, adc} index is used', async () => {
+      await service.listForAdmin({ page: 1, limit: 20, stateId: String(stateId) });
+
+      expect(pipelineOf()[0]).toEqual({ $match: { state: stateId } });
+      const [ulbs, users, states] = stageOf('$lookup').map((st) => st.$lookup!);
+      expect(ulbs.from).toBe('ulbs');
+      expect(ulbs.pipeline![0].$match).toEqual({
+        $expr: { $and: [{ $eq: ['$state', '$$stateId'] }, { $eq: ['$adc', '$$adcId'] }] },
+      });
+      // Active members only; the uncorrelated filter comes before the per-ADC join.
+      expect(users.from).toBe('users');
+      expect(users.pipeline![0].$match).toEqual(
+        expect.objectContaining({ role: 'STATE', isDeleted: false, adc: { $type: 'objectId' } }),
+      );
+      expect(users.pipeline!.at(-1)).toEqual({ $match: { $expr: { $eq: ['$adc', '$$adcId'] } } });
+      expect(states).toEqual(expect.objectContaining({ from: 'states', localField: 'state', foreignField: '_id' }));
+    });
+
+    it('searches the ADC name and the Admin name and email, escaping regex characters', async () => {
+      await service.listForAdmin({ page: 1, limit: 20, search: 'a.*(b+)+' });
+
+      const pattern = { $regex: 'a\\.\\*\\(b\\+\\)\\+', $options: 'i' };
+      expect(pipelineOf()).toContainEqual({
+        $match: { $or: [{ name: pattern }, { 'admin.name': pattern }, { 'admin.email': pattern }] },
+      });
+    });
+
+    it('filters by Admin status after the Admin is derived', async () => {
+      await service.listForAdmin({ page: 1, limit: 20, adminStatus: 'INVITED' });
+
+      const stages = pipelineOf();
+      const filterAt = stages.findIndex((st) => st.$match?.adminStatus === 'INVITED');
+      const derivedAt = stages.findIndex((st) => st.$addFields?.adminStatus);
+      expect(derivedAt).toBeGreaterThan(-1);
+      expect(filterAt).toBeGreaterThan(derivedAt);
+    });
+
+    it('sorts by name by default, and by a count or the state name with the name as tiebreaker', async () => {
+      await service.listForAdmin({ page: 1, limit: 20 });
+      expect(stageOf('$sort')[0]).toEqual({ $sort: { name: 1, _id: 1 } });
+
+      adcModel.aggregate.mockClear();
+      await service.listForAdmin({ page: 1, limit: 20, sortBy: 'ulbCount', sortDir: -1 });
+      expect(stageOf('$sort')[0]).toEqual({ $sort: { ulbCount: -1, name: 1, _id: 1 } });
+
+      adcModel.aggregate.mockClear();
+      await service.listForAdmin({ page: 1, limit: 20, sortBy: 'state' });
+      expect(stageOf('$sort')[0]).toEqual({ $sort: { stateName: 1, name: 1, _id: 1 } });
+    });
+
+    it('sorts before paging', async () => {
+      await service.listForAdmin({ page: 1, limit: 20 });
+      const stages = pipelineOf();
+      expect(stages.findIndex((st) => '$sort' in st)).toBeLessThan(stages.findIndex((st) => '$facet' in st));
+    });
+  });
+
+  // ─── detail ────────────────────────────────────────────────────────────
+
+  describe('detail()', () => {
+    it('returns the ADC with its counts, Admin and created date', async () => {
+      const row = { _id: adcId, name: 'BTC', createdAt: new Date('2026-10-30') };
+      adcModel.aggregate.mockReturnValue(q([row]));
+
+      await expect(service.detail(String(adcId))).resolves.toBe(row);
+      const stages = (adcModel.aggregate.mock.calls[0] as [Stage[]])[0];
+      expect(stages[0]).toEqual({ $match: { _id: adcId } });
+      expect(stages.at(-1)!.$project).toEqual(
+        expect.objectContaining({ createdAt: { $ifNull: ['$createdAt', null] } }),
+      );
+    });
+
+    it('404s for an unknown ADC', async () => {
+      await expect(service.detail(String(adcId))).rejects.toBeInstanceOf(NotFoundException);
+    });
+  });
+
+  // ─── members and ULBs ──────────────────────────────────────────────────
+
+  it('members() passes the query to the paged member list', async () => {
+    const pageResult = { data: [], total: 0, page: 1, limit: 20, totalPages: 0 };
+    usersService.listAdcMembersForAdmin.mockResolvedValue(pageResult);
+    const query = { page: 1, limit: 20, level: 'EDITOR' as const };
+
+    await expect(service.members(String(adcId), query)).resolves.toBe(pageResult);
+    expect(usersService.listAdcMembersForAdmin).toHaveBeenCalledWith(String(adcId), query);
+  });
+
+  describe('ulbs()', () => {
+    it("lists the ADC's ULBs through the ULB list and maps them to slim rows with totalPages", async () => {
+      const ulbId = new Types.ObjectId();
+      ulbService.findAll.mockResolvedValue({
+        data: [
+          {
+            _id: ulbId,
+            name: 'Kokrajhar MB',
+            code: 'AS012',
+            ulbTypeName: 'Municipality',
+            district: 'Kokrajhar',
+            isActive: true,
+            approval: { status: 'PENDING' },
+            isExistingUser: false,
+            gazetteNotificationFile: { path: 'x' },
+          },
+          { _id: ulbId, name: 'Old', code: 'AS001', ulbTypeName: 'MB', isActive: false, isExistingUser: true },
+        ],
+        page: 2,
+        limit: 10,
+        total: 12,
+        pages: 2,
+      });
+      const query = { page: 2, limit: 10, approvalStatus: 'PENDING' as const, search: 'kok' };
+
+      const result = await service.ulbs(String(adcId), query, admin as unknown as IAuthUser);
+
+      expect(ulbService.findAll).toHaveBeenCalledWith({ ...query, sortBy: 'name', sortDir: 1 }, admin, {
+        adc: adcId,
+      });
+      expect(result).toEqual({
+        page: 2,
+        limit: 10,
+        total: 12,
+        totalPages: 2,
+        data: [
+          {
+            _id: ulbId,
+            name: 'Kokrajhar MB',
+            code: 'AS012',
+            ulbTypeName: 'Municipality',
+            district: 'Kokrajhar',
+            isActive: true,
+            approvalStatus: 'PENDING',
+          },
+          {
+            _id: ulbId,
+            name: 'Old',
+            code: 'AS001',
+            ulbTypeName: 'MB',
+            district: '',
+            isActive: false,
+            approvalStatus: 'EXISTING',
+          },
+        ],
+      });
+    });
+
+    it('404s for an unknown ADC without listing ULBs', async () => {
+      adcModel.findById.mockReturnValue(q(null));
+      await expect(
+        service.ulbs(String(adcId), { page: 1, limit: 20 }, admin as unknown as IAuthUser),
+      ).rejects.toBeInstanceOf(NotFoundException);
+      expect(ulbService.findAll).not.toHaveBeenCalled();
     });
   });
 
