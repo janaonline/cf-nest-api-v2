@@ -88,6 +88,7 @@ type LeanBatch = {
   installment: number;
   fileBaseName: string;
   batchNumber: number;
+  resubmissionNumber?: number;
   version: number;
   revision?: number;
   submittedAt?: Date | null;
@@ -423,7 +424,7 @@ export class MohuaClaimLettersService {
     const claimLetterOid = new Types.ObjectId(claimLetterId);
     const batch = await this.batchModel
       .findOne(this.listedFilter({ _id: claimLetterOid }))
-      .select('state year installment batchNumber version currentFormStatus')
+      .select('state year installment batchNumber resubmissionNumber version currentFormStatus')
       .lean<LeanBatch>()
       .exec();
     if (!batch) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
@@ -564,6 +565,7 @@ export class MohuaClaimLettersService {
           designYearLabel: year?.year ?? '',
           installment: batch.installment as 1 | 2,
           batchNumber: batch.batchNumber,
+          resubmissionNumber: batch.resubmissionNumber ?? 0,
         }),
         stateRemark,
         stateItems: stateFormIds.map(name),

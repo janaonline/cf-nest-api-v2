@@ -1705,6 +1705,7 @@ export class AnnualAccountsService implements OnModuleInit {
     designYearId: string | undefined,
     section: AnnualAccountSectionKey,
   ): Promise<string[] | null> {
+    if (!designYearId) return null;
     try {
       const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(
         designYearId,

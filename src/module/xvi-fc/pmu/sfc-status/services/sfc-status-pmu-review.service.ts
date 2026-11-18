@@ -80,7 +80,7 @@ export class SfcStatusPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcSfcStatusDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,

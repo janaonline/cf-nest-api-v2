@@ -437,9 +437,23 @@ export class ClaimLetterFormStatusService {
 
     await this.addSelectedUlbForms(letter, exemptUlbForms, byCollection, session);
 
-    const moved: Record<number, number> = {};
-    for (const { target, formIds, guard, write } of byCollection.values()) {
+    const rowMoves = [...rowIdsByFormId].flatMap(([formId, ids]) => {
+      const { rowCollection, rowHistory, rowFromStatuses } = FORM_TARGETS[formId];
+      if (!rowCollection) return [];
+      const from = rowFromStatuses ?? [FORM_STATUS.UNDER_REVIEW_BY_SO];
+      return [{ formId, rowCollection, rowHistory, from, ids: [...ids] }];
+    });
+
+    // Every guard runs before any write, so a refusal writes nothing.
+    for (const { target, guard } of byCollection.values()) {
       await this.assertNotChanged(target.collection, target.statusField, [target.fromStatus], [...guard], session);
+    }
+    for (const { rowCollection, from, ids } of rowMoves) {
+      await this.assertNotChanged(rowCollection, 'rowStatus', from, ids, session);
+    }
+
+    const moved: Record<number, number> = {};
+    for (const { target, formIds, write } of byCollection.values()) {
       const count = await this.updateStatus(
         target.collection,
         target.statusField,
@@ -453,20 +467,16 @@ export class ClaimLetterFormStatusService {
       moved[formIds[0]] = (moved[formIds[0]] ?? 0) + count;
     }
 
-    for (const [formId, ids] of rowIdsByFormId) {
-      const { rowCollection, rowHistory: rowWriter } = FORM_TARGETS[formId];
-      if (!rowCollection) continue;
-      const rowFrom = FORM_TARGETS[formId].rowFromStatuses ?? [FORM_STATUS.UNDER_REVIEW_BY_SO];
-      await this.assertNotChanged(rowCollection, 'rowStatus', rowFrom, [...ids], session);
+    for (const { formId, rowCollection, rowHistory, from, ids } of rowMoves) {
       const count = await this.updateStatus(
         rowCollection,
         'rowStatus',
-        rowFrom,
-        [...ids],
+        from,
+        ids,
         { rowStatus: toStatus, updatedBy: userOid, updatedAt: now },
         session,
         undefined,
-        rowWriter && { writer: rowWriter, ctx },
+        rowHistory && { writer: rowHistory, ctx },
       );
       moved[formId] = (moved[formId] ?? 0) + count;
     }

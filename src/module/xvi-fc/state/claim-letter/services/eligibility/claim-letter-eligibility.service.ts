@@ -476,7 +476,7 @@ export class ClaimLetterEligibilityService {
       scope.installment,
       active.map((c) => String(c.ulbId)),
     );
-    const ineligibleUlbs: ClaimLetterRecheck['ineligibleUlbs'] = children.flatMap((c) => {
+    const ineligibleUlbs = children.flatMap((c): ClaimLetterRecheck['ineligibleUlbs'] => {
       const ulbId = String(c.ulbId);
       if (!expectedIds.has(ulbId)) return [{ ulbId, name: c.ulbSnapshot.name, reason: 'NOT_ACTIVE' as const }];
       return ulbLevel.perUlbEligible.get(ulbId) === false

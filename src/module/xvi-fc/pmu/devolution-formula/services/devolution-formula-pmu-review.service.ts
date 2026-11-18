@@ -101,7 +101,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<DevolutionFormulaFormDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,

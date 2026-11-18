@@ -175,6 +175,7 @@ describe('ClaimLetterLetterDetailsService', () => {
                 year: new Types.ObjectId('606aaf854dff55e6c075d219'),
                 installment: 1,
                 batchNumber: 1,
+                resubmissionNumber: 1,
                 letterDetails: {
                   letterNo: 'OLD/9',
                   departmentEmail: 'a@b.in',
@@ -188,7 +189,7 @@ describe('ClaimLetterLetterDetailsService', () => {
       const { data } = await service.get(claimLetterId, editor);
 
       expect(data!.previous!.values).toEqual({ departmentEmail: 'a@b.in', sfcAtrDate: '2026-03-14T00:00:00.000Z' });
-      expect(data!.previous!.source).toMatchObject({ installment: 1, batchNumber: 1 });
+      expect(data!.previous!.source).toMatchObject({ installment: 1, batchNumber: 1, resubmissionNumber: 1 });
       const [prevFilter] = batchModel.findOne.mock.calls[1] as [Record<string, unknown>];
       expect(prevFilter).toMatchObject({ state: stateOid, isAbandoned: false, letterDetailsUpdatedAt: { $ne: null } });
     });

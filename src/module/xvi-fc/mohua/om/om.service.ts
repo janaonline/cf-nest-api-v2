@@ -103,7 +103,7 @@ export class OmService {
     const year = await this.loadYear(new Types.ObjectId(yearId));
     const letters = await this.batchModel
       .find({ ...verifiedFilter(), year: new Types.ObjectId(yearId), installment })
-      .select('state installment batchNumber ulbCount financialSummary.currentSelectedClaim')
+      .select('state installment batchNumber resubmissionNumber ulbCount financialSummary.currentSelectedClaim')
       .sort({ batchNumber: 1 })
       .lean<
         {
@@ -111,6 +111,7 @@ export class OmService {
           state: Types.ObjectId;
           installment: 1 | 2;
           batchNumber: number;
+          resubmissionNumber?: number;
           ulbCount: number;
           financialSummary?: { currentSelectedClaim?: number };
         }[]
@@ -140,6 +141,7 @@ export class OmService {
           designYearLabel: year.year,
           installment: letter.installment,
           batchNumber: letter.batchNumber,
+          resubmissionNumber: letter.resubmissionNumber ?? 0,
         }),
         batchNumber: letter.batchNumber,
         ulbCount: letter.ulbCount ?? 0,
@@ -484,7 +486,9 @@ export class OmService {
   private async loadVerifiedLetter(claimLetterId: string): Promise<VerifiedLetter> {
     const letter = await this.batchModel
       .findOne({ ...verifiedFilter(), _id: new Types.ObjectId(claimLetterId) })
-      .select('state year installment batchNumber revision currentFormStatus isAbandoned letterDetails ulbCount financialSummary.currentSelectedClaim')
+      .select(
+        'state year installment batchNumber resubmissionNumber revision currentFormStatus isAbandoned letterDetails ulbCount financialSummary.currentSelectedClaim',
+      )
       .lean<VerifiedLetter>()
       .exec();
     if (!letter) throw new NotFoundException('No verified claim letter found for this OM.');

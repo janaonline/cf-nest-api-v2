@@ -193,6 +193,14 @@ describe('ClaimLetterFinalPdfService', () => {
     expect((savedFinalPdf()['file'] as { originalName: string }).originalName).toBe(data!.fileName);
   });
 
+  it('adds -R<n> to the name of a letter built after a return', async () => {
+    parent['resubmissionNumber'] = 1;
+
+    const { data } = await service.getFinalPdf(claimLetterId, user);
+
+    expect(data!.fileName).toMatch(/^CF_Sample-State_Claim-letter-1-2-R1(_[\d-]+)?\.pdf$/);
+  });
+
   it("finds each document through its form's claimEligibility source, GTC by installment, falling back across file keys", async () => {
     await service.getFinalPdf(claimLetterId, user);
 

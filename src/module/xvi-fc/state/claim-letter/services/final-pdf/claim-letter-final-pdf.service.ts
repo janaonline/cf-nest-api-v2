@@ -28,6 +28,7 @@ import {
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
+import { buildClaimLetterBatchLabel } from '../../helpers/claim-letter-financial.helpers';
 import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterFormJsonService, type ClaimLetterMergeDocument } from '../form-json/claim-letter-form-json.service';
 
@@ -74,6 +75,7 @@ interface FinalPdfParent {
   year: Types.ObjectId;
   installment: number;
   batchNumber: number;
+  resubmissionNumber?: number;
   currentFormStatus: number;
   isAbandoned: boolean;
   submittedAt?: Date | null;
@@ -98,7 +100,7 @@ export interface ClaimLetterFinalPdfView {
 }
 
 const PARENT_FIELDS =
-  'state year installment batchNumber currentFormStatus isAbandoned submittedAt signedClaimFile finalClaimPdf';
+  'state year installment batchNumber resubmissionNumber currentFormStatus isAbandoned submittedAt signedClaimFile finalClaimPdf';
 
 /**
  * The final claim letter: signed letter + `meta.mergeDocuments`, merged only when an upload changes.
@@ -188,7 +190,7 @@ export class ClaimLetterFinalPdfService {
     const stateDoc = await this.stateModel.findById(parent.state).select('name').lean<{ name: string } | null>().exec();
     return buildXviFcDownloadFileName({
       entityName: stateDoc?.name ?? '',
-      formName: `claim-letter-${parent.installment}-${parent.batchNumber}`,
+      formName: `claim-letter-${buildClaimLetterBatchLabel(parent.installment, parent.batchNumber, parent.resubmissionNumber ?? 0)}`,
       yearLabel: YearIdToLabel[String(parent.year)] ?? '',
       extension: 'pdf',
     });

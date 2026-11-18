@@ -701,8 +701,22 @@ describe('MohuaClaimLettersService', () => {
       );
     });
 
+    it('names a resubmitted letter by its -R ref no in the email', async () => {
+      stateModel.findById.mockReturnValue(q({ code: 'TR' }));
+      batchModel.findOne.mockReturnValue(
+        q(batch({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, resubmissionNumber: 1 })),
+      );
+
+      await service.returnForCorrection(String(batchId), dto(), so);
+
+      expect(returnNotifications.notifyClaimLetterReturned).toHaveBeenCalledWith(
+        expect.objectContaining({ refNo: expect.stringMatching(/^CL\/TR\/2026-27\/1-\d-R1$/) as unknown }),
+      );
+    });
+
     it('still returns the letter when the ref-no lookup for the email fails', async () => {
-      stateModel.findById.mockImplementation(() => {
+      // Only the email's lookup fails; the letter read after the return still works.
+      stateModel.findById.mockImplementationOnce(() => {
         throw new Error('db down');
       });
 

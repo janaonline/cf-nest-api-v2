@@ -76,7 +76,7 @@ export class GtcPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcGtcDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
