@@ -309,7 +309,7 @@ rationale.
     flags therefore always come back false, and it sees the same statuses as PMU (`canPmuViewForm`).
 - **`PMU_REVIEWABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) — wider than the mutate gate:
   PMU keeps read-only visibility into a form even after it moves on to MoHUA (PMU approval has no
-  status of its own; it lands directly on `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
+  status of its own; it lands on `UNDER_REVIEW_BY_SO` (15), where the form waits for a claim letter; the SO's approval of the letter then moves it to `UNDER_REVIEW_BY_MOHUA`). Includes `RETURNED_BY_PMU`
   (fixed in passing — it was missing, which would have 403'd PMU viewing a form immediately after
   rejecting it) and `NOT_STARTED`/`IN_PROGRESS` (this same constant doubles as the cross-state
   worklist's own `$in` visibility filter in every module's `getWorklist()`, so PMU can see states
@@ -317,7 +317,7 @@ rationale.
   them). Safe to widen this way because `canPmuMutateForm`/`assertCanPmuMutateForm` is a separate,
   still `UNDER_REVIEW_BY_PMU`-only gate — broader view access never implies broader mutate access.
 - **`STATE_EDITABLE_STATUSES`** (`xvi-fc-form-status-access.util.ts`) includes `RETURNED_BY_PMU`
-  alongside the legacy `RETURNED_BY_MOHUA`: all 5 state forms now route through a PMU reviewer
+  alongside the legacy `RETURNED_BY_MOHUA` (and `RETURNED_BY_SO`, 16: a claim letter the SO returned reopens its State forms for correction, resubmitted back to PMU): all 5 state forms now route through a PMU reviewer
   before MoHUA, and a PMU rejection must send the state back into edit/resubmit mode the same way a
   MoHUA rejection always has, or the form would be permanently stuck. Mirrors `ULB_EDITABLE_STATUSES`
   already coexisting on two "returned" stages for the same reason.
@@ -370,19 +370,19 @@ write pattern itself doesn't need one either.
 
 ## Undoing a PMU decision (`undoDecision`, all 5 `pmu/<feature>/` modules)
 
-PMU can reverse its own approve (`UNDER_REVIEW_BY_MOHUA`, 5) or return (`RETURNED_BY_PMU`, 14) back to
+PMU can reverse its own approve (`UNDER_REVIEW_BY_SO`, 15) or return (`RETURNED_BY_PMU`, 14) back to
 `UNDER_REVIEW_BY_PMU` (13) via the single `POST xvi-fc/pmu/undo` (body `{ type, stateId, yearId, installment? }`; all of the logic lives in `pmu/undo/`: `PmuUndoService` for the three whole-form reviewers, `PmuUndoRowFormsService` for Elected Body / FC Unspent — the five `pmu/<feature>/` review services only report `permissions.canUndo`). Same permission as
 approve/reject (`APPROVE_STATE_SUBMISSIONS_PMU`); review metadata exposes the result as `permissions.canUndo`.
 
-- **When it's allowed** (`PmuUndoEligibilityService`): status is exactly 5 or 14; the caller is PMU (scope, as the
+- **When it's allowed** (`PmuUndoEligibilityService`): status is exactly 15 or 14 (5 now means the SO has verified it on a claim letter); the caller is PMU (scope, as the
   endpoint's `assertPmuReviewerAccess`) and can approve as PMU; the form's latest history entry is PMU's own decision
-  (`13 -> 5|14`, `isPmuDecision`), so a form the State submitted straight to 5 before the PMU stage existed has
+  (`13 -> 15|14`, `isPmuDecision`), so a status set any other way (e.g. a pre-PMU State submit straight to 5) has
   nothing to undo; and **no document exists in `xvifc_claim_letter_ulb_locks` for that state + year** (any
   installment, ACTIVE or ACKNOWLEDGED) — a lock means a claim letter was built on these statuses. Abandoning a draft
   releases its locks, so "no lock" is "no claim letter in use". 14 stops being undoable on its own once the State edits (a draft save
   sets status 2). FC Unspent additionally refuses once MoHUA has decided any row (acknowledged/returned).
-- **Writes**: status back to 13 and `pmuRemarks` cleared; row forms (Elected Body, FC Unspent) reopen *every* active
-  row at 5/14 to 13 with `rejectionRemark` cleared — PMU re-reviews all of them. The form write is conditional on the
+- **Writes**: status back to 13 and `rejectionRemarks` cleared; row forms (Elected Body, FC Unspent) reopen *every* active
+  row at 15/14 to 13 with `rejectionRemark` cleared — PMU re-reviews all of them. The form write is conditional on the
   expected status (`StateFormPmuReviewHelper.transitionForm`'s `expectedStatus`) so a concurrent decision gets a 409
   instead of being overwritten. Every undo runs in one transaction (status, both history entries, and for row forms
   every row), so a form is never reopened without its undo record; row forms abort if any row moved, and Elected
@@ -391,7 +391,7 @@ approve/reject (`APPROVE_STATE_SUBMISSIONS_PMU`); review metadata exposes the re
   and both the undo and every claim-letter lock insert (create, edit, new version) write one guard document per
   State + year (`xvifc_claim_undo_guards`) in their transactions. Overlapping ones get a write conflict (409, retry);
   an undo that commits first is caught by the claim's own status re-check (`assertNoDrift`).
-- **Logging** (`writeUndoHistory` / `PmuRowReviewHelper.undoRows`): two entries, `5|14 -> 10 (UNDO) -> 13`, action
+- **Logging** (`writeUndoHistory` / `PmuRowReviewHelper.undoRows`): two entries, `15|14 -> 10 (UNDO) -> 13`, action
   `PMU_UNDO`, on the form history and — per row — the row history. Status 10 is a log-only marker, as on the ULB
   forms; the row-history schemas therefore accept `ROW_HISTORY_STATUS_VALUES` (live row statuses + UNDO) while live
   rows still use `ROW_REVIEW_STATUS_VALUES`. The second entry is stamped 1 ms later so `changedAt` ordering holds;

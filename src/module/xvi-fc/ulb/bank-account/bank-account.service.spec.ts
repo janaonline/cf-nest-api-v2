@@ -225,6 +225,18 @@ describe('BankAccountService scope enforcement', () => {
     await expect(service.assertCanSubmitBankAccount(user, ulbId.toString())).resolves.toBeUndefined();
   });
 
+  it('lets PMU read any ULB bank account (its Overview is the MoHUA dashboard), but never submit', async () => {
+    const user = makeUser({
+      role: UserRole.PMU,
+      scope: Scope.PMU,
+      accessLevel: AccessLevel.VIEWER,
+    });
+
+    await expect(service.resolveEffectiveUlbId(user, ulbId.toString())).resolves.toBe(ulbId.toString());
+    await expect(service.assertCanReadBankAccount(user, ulbId.toString())).resolves.toBeUndefined();
+    await expect(service.assertCanSubmitBankAccount(user, ulbId.toString())).rejects.toThrow(ForbiddenException);
+  });
+
   it('requires ADMIN to provide ulbId', async () => {
     const user = makeUser({
       role: UserRole.ADMIN,

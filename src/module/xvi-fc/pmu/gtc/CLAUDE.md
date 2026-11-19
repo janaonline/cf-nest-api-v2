@@ -28,10 +28,10 @@ Flat, same shape as `state/gtc` itself:
   against the stored `data` the same way `state/gtc`'s own `getForm` does, via the shared
   `FormQuestionHydratorService`.
 - `approveCompleteForm`/`rejectCompleteForm` write only workflow-status fields on the *same*
-  `XviFcGtc` document State writes to (`currentFormStatus`, `updatedBy`, and `pmuRemarks` on reject)
+  `XviFcGtc` document State writes to (`currentFormStatus`, `updatedBy`, and `rejectionRemarks` on reject)
   - never the form's own `data` bag. Approve moves `UNDER_REVIEW_BY_PMU -> UNDER_REVIEW_BY_MOHUA`
   (PMU is an internal pre-screen, not a status-bearing stage of its own); reject moves to
-  `RETURNED_BY_PMU` and requires a non-empty `pmuRemarks`.
+  `RETURNED_BY_PMU` and requires a non-empty `rejectionRemarks`.
 - Both transitions are two separate, non-transactional writes (a form update, then a history insert
   that no-ops when `fromStatus === toStatus`) - identical to `state/gtc`'s own convention; see
   `../../state/gtc/CLAUDE.md`'s "The one tradeoff worth knowing before touching writes".

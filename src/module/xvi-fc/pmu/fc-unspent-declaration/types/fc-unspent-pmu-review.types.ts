@@ -18,7 +18,7 @@ export interface FcUnspentPmuFormLean {
   fcUnspentDeclaration: unknown;
   checkboxConfirmation: boolean;
   auditRevision: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 /** Lean row projection used throughout the PMU review domain (list, transitions, snapshots). */
@@ -66,7 +66,7 @@ export interface FcUnspentPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   threshold: number;
   questions: HydratedFieldConfig[];
   rowSummary: FcUnspentPmuRowSummary;

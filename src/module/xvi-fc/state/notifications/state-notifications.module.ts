@@ -3,6 +3,7 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { XviFcAnnualAccount, XviFcAnnualAccountSchema } from 'src/schemas/xvi-fc/annual-account.schema';
 import { XviFcDur, XviFcDurSchema } from 'src/schemas/xvi-fc/dur.schema';
 import { XviFcBankAccount, XviFcBankAccountSchema } from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account.schema';
+import { ClaimLetterBatch, ClaimLetterBatchSchema } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { MohuaOverviewModule } from 'src/module/xvi-fc/mohua/overview/mohua-overview.module';
 import { StateNotificationsController } from './state-notifications.controller';
 import { StateNotificationsService } from './state-notifications.service';
@@ -14,6 +15,7 @@ import { StateNotificationsService } from './state-notifications.service';
       { name: XviFcAnnualAccount.name, schema: XviFcAnnualAccountSchema },
       { name: XviFcBankAccount.name, schema: XviFcBankAccountSchema },
       { name: XviFcDur.name, schema: XviFcDurSchema },
+      { name: ClaimLetterBatch.name, schema: ClaimLetterBatchSchema },
     ]),
     MohuaOverviewModule,
   ],

@@ -134,6 +134,8 @@ export interface ClaimLetterBatchSummary {
   claimLetterId: string;
   installment: ClaimLetterInstallment;
   batchNumber: ClaimLetterBatchNumber;
+  /** Above 0 for a letter built in a slot a returned letter held: the UI shows "2-R1". */
+  resubmissionNumber: number;
   version: number;
   currentFormStatus: number;
   currentFormStatusLabel: string;
@@ -151,6 +153,8 @@ export interface ClaimLetterBatchSummary {
   supersedes: string | null;
   supersededBy: string | null;
   createdAt: Date;
+  /** The SO's (or MoHUA's) remark when the letter was returned; null otherwise. */
+  mohuaRemarks: string | null;
   /** getDetail only: formjson 26 fields except the letter details (GET .../letter-details has those). */
   questions?: FieldConfig[];
   /** getDetail only. */

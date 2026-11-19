@@ -2,9 +2,10 @@ import { FORM_STATUS, type FormStatusType } from 'src/common/constants/form-stat
 
 /**
  * A state-condition form counts as completed once it has been submitted onward: under review by
- * MoHUA (5, or 8 on the same footing), acknowledged (7), or under review by PMU (13).
+ * MoHUA (5, or 8 on the same footing), acknowledged (7), under review by PMU (13), or under SO review (15).
  */
 export const MOHUA_OVERVIEW_COMPLETED_FORM_STATUSES: ReadonlySet<number> = new Set<number>([
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
   FORM_STATUS.APPROVED_BY_STATE,
@@ -19,6 +20,7 @@ export const MOHUA_OVERVIEW_STATE_FORM_STATUS_LABEL: Readonly<Record<number, str
   [FORM_STATUS.NO_STATUS]: 'Not Started',
   [FORM_STATUS.NOT_STARTED]: 'Not Started',
   [FORM_STATUS.IN_PROGRESS]: 'In Progress',
+  [FORM_STATUS.UNDER_REVIEW_BY_SO]: 'Under Review by MoHUA',
   [FORM_STATUS.UNDER_REVIEW_BY_MOHUA]: 'Under Review by MoHUA',
   [FORM_STATUS.APPROVED_BY_STATE]: 'Under Review by MoHUA',
   [FORM_STATUS.UNDER_REVIEW_BY_PMU]: 'Under Review by PMU',
@@ -41,10 +43,13 @@ export const MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES: ReadonlySet<number> = new Se
 
 /**
  * SLB has no State review step: a ULB's final submit goes straight to APPROVED_BY_STATE (8), so 8 is
- * what "submitted" means for it. Exempt (12) still counts. Other statuses, e.g. a draft, do not.
+ * what "submitted" means for it, and so is anything after it once a claim letter moves it on (5, 7).
+ * Exempt (12) still counts. Other statuses, e.g. a draft, do not.
  */
 export const MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES: ReadonlySet<number> = new Set<FormStatusType>([
   FORM_STATUS.APPROVED_BY_STATE,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
   FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
 ]);
 
@@ -55,6 +60,7 @@ export const MOHUA_OVERVIEW_SLB_SUBMITTED_STATUSES: ReadonlySet<number> = new Se
  */
 export const MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES: ReadonlySet<number> = new Set<FormStatusType>([
   FORM_STATUS.UNDER_REVIEW_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
   FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
   FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
 ]);

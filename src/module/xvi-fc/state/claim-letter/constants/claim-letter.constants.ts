@@ -1,3 +1,8 @@
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
+
+/** Statuses of an approved claim letter: MoHUA's final approval lands on 7. */
+export const CLAIM_LETTER_APPROVED_STATUSES: number[] = [FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA];
+
 /** V1 supports Installment 1 only; Installment 2 stays schema-legal but is rejected. */
 export const CLAIM_LETTER_SUPPORTED_INSTALLMENT = 1;
 

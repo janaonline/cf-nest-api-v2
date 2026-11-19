@@ -15,7 +15,10 @@ import { StateNotificationsService } from './state-notifications.service';
 export class StateNotificationsController {
   constructor(private readonly service: StateNotificationsService) {}
 
-  @ApiOperation({ summary: 'Status of the five State forms plus the ULB forms awaiting State review (bell + sidebar dots)' })
+  @ApiOperation({
+    summary:
+      'Status of the five State forms, the ULB forms awaiting State review and the returned claim letters (bell + sidebar dots)',
+  })
   @Get(':stateId/:yearId/notifications')
   @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
   getNotifications(

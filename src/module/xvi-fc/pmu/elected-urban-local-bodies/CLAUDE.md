@@ -43,7 +43,7 @@ full lifecycle; the short version this module depends on: `finalSubmit` sets eve
 `rejectionRemark` set). There is no PMU-specific status value and no separate per-row "PMU decision"
 field layered on top — PMU has no status of its own once approved, so an approved row lands directly
 on the same `UNDER_REVIEW_BY_MOHUA` a (currently nonexistent) MoHUA reviewer would also use. The
-complete-form analog: `currentFormStatus`/`pmuRemarks` on the parent, and
+complete-form analog: `currentFormStatus`/`rejectionRemarks` on the parent, and
 `FormHistoryAction.PMU_APPROVE`/`PMU_REJECT` entries in `ElectedUrbanLocalBodiesFormHistory` (see
 that same state CLAUDE's "Form status history log" section — `CREATE_DRAFT`/`FINAL_SUBMIT` are
 logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
@@ -51,7 +51,7 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
 ## Reads vs. writes relative to `state/elected-urban-local-bodies`
 
 - **Writes**: `ElectedUrbanLocalBodiesRow.rowStatus`/`rejectionRemark` (row-level transitions, both
-  bulk and complete-form); `ElectedUrbanLocalBodiesForm.currentFormStatus`/`pmuRemarks` (complete-form
+  bulk and complete-form); `ElectedUrbanLocalBodiesForm.currentFormStatus`/`rejectionRemarks` (complete-form
   decisions); one `ElectedUrbanLocalBodiesRowHistory` entry per row transition and one
   `ElectedUrbanLocalBodiesFormHistory` entry per parent transition (skipped when the transition is a
   no-op). Never touches the row's own domain data (`electedBodyStatus`, `dateOfConstitution`,
@@ -67,7 +67,10 @@ logged by the State side, `PMU_APPROVE`/`PMU_REJECT` by this module).
   resurrecting stale rows); `EulbFormJsonConfigService`/`getFieldsByType` for the review page's field
   config; `UlbEligibilityService.getEligibleUlbFilter` + a live `Ulb` count for the same
   active-ULB-count display the State side computes (see that CLAUDE's "active-ULB-count" section —
-  this is a 7th read-only call site added to that convention, not a write).
+  this is a 7th read-only call site added to that convention, not a write). The review metadata
+  also returns `statusSummary` (ULBs per elected-body status in the active dataset) from the State
+  side's own `computeEulbStatusSummary`, so PMU sees the same Eligible / Ineligible / 6th Schedule
+  counts as the State page; computed on every read here, since PMU reviews from 13 onward.
 - **No PMU-specific schema or collection exists** (`src/schemas/xvi-fc/` has only `state/` and
   `ulb/`), and none is needed — every PMU-specific fact (who reviewed what, when) is captured by
   reusing the State side's own row/form history collections with `PMU_APPROVE`/`PMU_REJECT`-tagged
