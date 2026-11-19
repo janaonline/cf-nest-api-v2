@@ -47,6 +47,8 @@ export class AfsMetric {
     confidenceLow: number;
     arithmeticPass: number;
     arithmeticFail: number;
+    /** Arithmetic skipped because the uploaded doc type isn't in the file (mismatch) */
+    arithmeticSkipped: number;
     overallPass: number;
     overallPartial: number;
     overallFail: number;

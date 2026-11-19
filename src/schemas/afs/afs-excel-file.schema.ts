@@ -41,7 +41,7 @@ export class AfsDigitizationV3Scores {
   @Prop({ type: Number })
   accuracyScore?: number;
 
-  /** PASS / FAIL / NOT_APPLICABLE (FastAPI `arithmetic_assessment`) */
+  /** PASS / FAIL / NOT_APPLICABLE / SKIPPED (doc mismatch) (FastAPI `arithmetic_assessment`) */
   @Prop({ type: String })
   arithmeticAssessment?: string;
 

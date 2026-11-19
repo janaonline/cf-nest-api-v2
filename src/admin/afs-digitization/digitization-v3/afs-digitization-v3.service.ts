@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
@@ -111,6 +111,12 @@ const AFS_FILE_PROJECTION = Object.fromEntries(
     .map((path) => [path.replace('ulbFile.', 'afsFile.'), 1]),
 );
 
+/** How long after a job finishes the score snapshot is recounted (one recount covers every job finished meanwhile). */
+const SCORE_REFRESH_DELAY_MS = 3 * 60 * 1000;
+
+/** Arithmetic status FastAPI stores when the uploaded doc type isn't in the PDF (no checks ran). */
+const ARITHMETIC_SKIPPED = 'SKIPPED';
+
 /** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
 const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
 
@@ -120,6 +126,8 @@ export interface OverallRecalcSummary {
   unchanged: number;
   /** No stored crosscheck score, so no overall can be derived */
   skipped: number;
+  /** Mismatched files whose `scores.arithmeticAssessment` was set (or would be, on a dry run) to SKIPPED */
+  arithmeticSkippedSet: number;
   dryRun: boolean;
   /** e.g. `PARTIAL->PASS`: how many files moved between each pair */
   transitions: Record<string, number>;
@@ -215,6 +223,8 @@ export interface DigitizationV3ScoreMetrics {
   confidenceLow: number;
   arithmeticPass: number;
   arithmeticFail: number;
+  /** Arithmetic did not run because the uploaded doc type isn't in the file (mismatch) */
+  arithmeticSkipped: number;
   overallPass: number;
   overallPartial: number;
   overallFail: number;
@@ -251,8 +261,9 @@ export interface DigitizationV3OverallMetrics {
 }
 
 @Injectable()
-export class AfsDigitizationV3Service implements OnModuleInit {
+export class AfsDigitizationV3Service implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AfsDigitizationV3Service.name);
+  private scoreRefreshTimer?: NodeJS.Timeout;
 
   constructor(
     @InjectQueue(AFS_DIGITIZATION_V3_QUEUE)
@@ -743,19 +754,28 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   /**
    * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
-   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI:
+   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI. A mismatched file also gets
+   * `scores.arithmeticAssessment = SKIPPED` (arithmetic doesn't run when the uploaded type isn't in the PDF):
    *   document mismatch (scores.isMismatch)        -> FAIL
-   *   OCR confidence < 80                          -> FAIL
+   *   Textract confidence < 80                     -> FAIL
    *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
    *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
    *   crosscheck < 80 and arithmetic FAIL          -> FAIL
    *   otherwise                                    -> PARTIAL
-   * A file with no `ocrConfidenceScore` counts as OCR pass (as in FastAPI). FastAPI also fails OCR when nothing was
+   * A file with no `ocrConfidenceScore` counts as Textract pass (as in FastAPI). FastAPI also fails OCR when nothing was
    * extracted, which the file does not record, so such a file is judged on crosscheck + arithmetic only.
    * `dryRun` (the default at the endpoint) only counts.
    */
   async recalculateOverallAssessment(dryRun: boolean): Promise<OverallRecalcSummary> {
-    const summary: OverallRecalcSummary = { scanned: 0, changed: 0, unchanged: 0, skipped: 0, dryRun, transitions: {} };
+    const summary: OverallRecalcSummary = {
+      scanned: 0,
+      changed: 0,
+      unchanged: 0,
+      skipped: 0,
+      arithmeticSkippedSet: 0,
+      dryRun,
+      transitions: {},
+    };
     const BATCH = 1000;
 
     for (const slot of ['ulbFile', 'afsFile'] as const) {
@@ -779,35 +799,45 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         const s = d[slot]?.scores ?? {};
         const { ocrConfidenceScore: ocr, accuracyScore: accuracy, arithmeticAssessment: arithmetic } = s;
         const old: string | undefined = s.overallAssessment;
+        const $set: Record<string, unknown> = {};
+
+        // A document mismatch skips arithmetic (FastAPI stores SKIPPED; older files kept FAIL or nothing)
+        if (s.isMismatch === true && arithmetic !== ARITHMETIC_SKIPPED) {
+          $set[`${slot}.scores.arithmeticAssessment`] = ARITHMETIC_SKIPPED;
+          summary.arithmeticSkippedSet++;
+        }
+
         // A document mismatch fails the file whatever the other scores say, even with no crosscheck score
         if (s.isMismatch !== true && typeof accuracy !== 'number') {
           summary.skipped++;
-          continue;
+        } else {
+          let next: string;
+          if (s.isMismatch === true) next = 'FAIL';
+          else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
+          else {
+            const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
+            const arithmeticOk = arithmetic !== 'FAIL';
+            next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
+          }
+          if (next === old) {
+            summary.unchanged++;
+          } else {
+            summary.changed++;
+            const key = `${old ?? 'none'}->${next}`;
+            summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
+            $set[`${slot}.scores.overallAssessment`] = next;
+          }
         }
-        let next: string;
-        if (s.isMismatch === true) next = 'FAIL';
-        else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
-        else {
-          const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
-          const arithmeticOk = arithmetic !== 'FAIL';
-          next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
-        }
-        if (next === old) {
-          summary.unchanged++;
-          continue;
-        }
-        summary.changed++;
-        const key = `${old ?? 'none'}->${next}`;
-        summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
-        if (!dryRun) {
-          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set: { [`${slot}.scores.overallAssessment`]: next } } } });
+
+        if (!dryRun && Object.keys($set).length) {
+          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set } } });
           if (ops.length >= BATCH) await flush();
         }
       }
       await flush();
     }
 
-    if (!dryRun && summary.changed) await this.refreshScoreMetrics();
+    if (!dryRun && (summary.changed || summary.arithmeticSkippedSet)) await this.refreshScoreMetrics();
     return summary;
   }
 
@@ -1207,7 +1237,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * Recounts how many v3-digitized files (ULB slot, same rule as the `digitized` card) have each score and stores it on
    * the v3 metrics row. Called after a rebuild and after the score backfills; a failure is logged, never thrown.
    */
-  async refreshScoreMetrics(): Promise<void> {
+  async refreshScoreMetrics(): Promise<boolean> {
     try {
       const has = (path: string) => ({ $sum: { $cond: [{ $ne: [{ $type: path }, 'missing'] }, 1, 0] } });
       const is = (path: string, value: string) => ({ $sum: { $cond: [{ $eq: [path, value] }, 1, 0] } });
@@ -1236,6 +1266,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               },
               arithmeticPass: is('$ulbFile.scores.arithmeticAssessment', 'PASS'),
               arithmeticFail: is('$ulbFile.scores.arithmeticAssessment', 'FAIL'),
+              arithmeticSkipped: is('$ulbFile.scores.arithmeticAssessment', ARITHMETIC_SKIPPED),
               overallPass: is('$ulbFile.scores.overallAssessment', 'PASS'),
               overallPartial: is('$ulbFile.scores.overallAssessment', 'PARTIAL'),
               overallFail: is('$ulbFile.scores.overallAssessment', 'FAIL'),
@@ -1259,6 +1290,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         confidenceLow: 0,
         arithmeticPass: 0,
         arithmeticFail: 0,
+        arithmeticSkipped: 0,
         overallPass: 0,
         overallPartial: 0,
         overallFail: 0,
@@ -1269,9 +1301,28 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         { $set: { scoreSummary: { ...counts, computedAt: new Date() }, runSummary } },
         { upsert: true },
       );
+      return true;
     } catch (error) {
       this.logger.error('Could not refresh the digitization v3 score metrics', error instanceof Error ? error.stack : String(error));
+      return false;
     }
+  }
+
+  /**
+   * Refreshes the score snapshot shortly after a job finishes. The recount reads every digitized file, so a burst of
+   * finishing jobs shares one refresh: the first one starts the timer, the rest ride on it.
+   */
+  private scheduleScoreRefresh(): void {
+    if (this.scoreRefreshTimer) return;
+    this.scoreRefreshTimer = setTimeout(() => {
+      this.scoreRefreshTimer = undefined;
+      void this.refreshScoreMetrics(); // logs its own failures
+    }, SCORE_REFRESH_DELAY_MS);
+    this.scoreRefreshTimer.unref?.(); // never keeps the process alive
+  }
+
+  onModuleDestroy() {
+    if (this.scoreRefreshTimer) clearTimeout(this.scoreRefreshTimer);
   }
 
   /**
@@ -1349,6 +1400,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       .lean()
       .exec();
     await this.recordTransition(this.statusOf(previous), next);
+    // A finished file changes the score and run snapshots (counts above already moved by $inc)
+    if (next === DigitizationV3Statuses.DIGITIZED || next === DigitizationV3Statuses.FAILED) this.scheduleScoreRefresh();
   }
 
   /** A counter problem must never fail or retry a digitization job, so it is logged and swallowed. */
