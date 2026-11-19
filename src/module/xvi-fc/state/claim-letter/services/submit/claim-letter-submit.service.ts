@@ -17,10 +17,6 @@ import {
   type ClaimLetterInstallment,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
-  ClaimLetterBatchUlb,
-  ClaimLetterBatchUlbDocument,
-} from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
-import {
   CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
   CLAIM_LETTER_MAX_BATCH_NUMBER,
@@ -51,7 +47,14 @@ type SubmitBatch = {
   editLockAcquiredAt?: Date | null;
 };
 
-/** `IN_PROGRESS -> UNDER_REVIEW_BY_MOHUA` and the checks that must pass first (ADR 0003). */
+/** Submitted already: with the SO (15), or moved on by the SO to MoHUA review (5) or approved (7). */
+const ALREADY_SUBMITTED_STATUSES: number[] = [
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+/** `IN_PROGRESS -> UNDER_REVIEW_BY_SO` and the checks that must pass first (ADR 0003). */
 @Injectable()
 export class ClaimLetterSubmitService {
   constructor(
@@ -64,8 +67,6 @@ export class ClaimLetterSubmitService {
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
-    @InjectModel(ClaimLetterBatchUlb.name)
-    private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
   ) {}
 
   /** Idempotent on retry (ADR 0001); the checks before the transaction are listed in ADR 0003. */
@@ -83,7 +84,7 @@ export class ClaimLetterSubmitService {
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, String(parent.state));
 
-    if (parent.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+    if (ALREADY_SUBMITTED_STATUSES.includes(parent.currentFormStatus)) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(parent, user));
     }
     // Abandon keeps IN_PROGRESS and has already released the locks, so the flag is checked on its own.
@@ -130,7 +131,7 @@ export class ClaimLetterSubmitService {
           },
           {
             $set: {
-              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
               submittedAt: new Date(),
               submittedBy: userOid,
               updatedBy: userOid,
@@ -151,7 +152,7 @@ export class ClaimLetterSubmitService {
             batchNumber: updated.batchNumber,
             version: updated.version,
             fromStatus: FORM_STATUS.IN_PROGRESS,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
             actionSource: 'DIRECT_STATE_REVIEW',
             // Both exist: the filter pinned both.
             submittedFiles: { signedClaimFile: updated.signedClaimFile!, finalClaimPdf: updated.finalClaimPdf! },
@@ -179,7 +180,7 @@ export class ClaimLetterSubmitService {
     // Concurrent status change (or an in-flight `updateDraft`) between our initial read and the
     // guarded update.
     const current = await this.batchModel.findById(claimLetterId).lean<SubmitBatch | null>().exec();
-    if (current?.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+    if (current && ALREADY_SUBMITTED_STATUSES.includes(current.currentFormStatus)) {
       return xviFcSuccess('Claim letter already submitted to MoHUA.', mapClaimLetterBatchDocToSummary(current, user));
     }
     if (current?.editLockToken && this.isEditLockActive(current.editLockAcquiredAt)) {
@@ -205,37 +206,17 @@ export class ClaimLetterSubmitService {
     year: Types.ObjectId;
     installment: ClaimLetterInstallment;
   }): Promise<void> {
-    const stateId = String(scope.state);
-    const yearId = String(scope.year);
-    const [children, gate] = await Promise.all([
-      this.batchUlbModel
-        .find({ claimLetter: scope._id })
-        .select('ulbId ulbSnapshot.name')
-        .lean<{ ulbId: Types.ObjectId; ulbSnapshot: { name: string } }[]>()
-        .exec(),
-      this.eligibilityService.evaluateStateLevelGate(stateId, yearId, scope.installment),
-    ]);
-    if (!gate.passed) {
-      const failed = gate.sources.filter((s) => s.result === 'FAILED').map((s) => s.displayLabel ?? s.formType);
+    const { failedStateConditions, ineligibleUlbs } = await this.eligibilityService.recheckClaimLetter(scope);
+    if (failedStateConditions.length) {
       throw new BadRequestException(
-        `The State-level claim conditions are no longer met: ${failed.join(', ')}. Resolve them before submitting.`,
+        `The State-level claim conditions are no longer met: ${failedStateConditions.join(', ')}. Resolve them before submitting.`,
       );
     }
-
-    const ulbLevel = await this.eligibilityService.resolveUlbLevelEligibility(
-      stateId,
-      yearId,
-      scope.installment,
-      children.map((c) => String(c.ulbId)),
-    );
-    const ineligible = children
-      .filter((c) => ulbLevel.perUlbEligible.get(String(c.ulbId)) === false)
-      .map((c) => c.ulbSnapshot.name);
-    if (ineligible.length === 0) return;
-    const shown = ineligible.slice(0, 10);
-    const suffix = ineligible.length > shown.length ? ` and ${ineligible.length - shown.length} more` : '';
+    if (ineligibleUlbs.length === 0) return;
+    const shown = ineligibleUlbs.slice(0, 10).map((u) => u.name);
+    const suffix = ineligibleUlbs.length > shown.length ? ` and ${ineligibleUlbs.length - shown.length} more` : '';
     throw new BadRequestException(
-      `${ineligible.length} ULB(s) in this batch are no longer eligible: ${shown.join(', ')}${suffix}. ` +
+      `${ineligibleUlbs.length} ULB(s) in this batch are no longer eligible: ${shown.join(', ')}${suffix}. ` +
         'Remove them from the batch before submitting.',
     );
   }

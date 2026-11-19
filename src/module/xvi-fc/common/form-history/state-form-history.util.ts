@@ -21,6 +21,7 @@ const RETURNED_STATUSES: ReadonlySet<number> = new Set([
   FORM_STATUS.RETURNED_BY_STATE,
   FORM_STATUS.RETURNED_BY_PMU,
   FORM_STATUS.RETURNED_BY_MOHUA,
+  FORM_STATUS.RETURNED_BY_SO,
 ]);
 
 export function isReturnedStatus(toStatus: number): boolean {
@@ -30,17 +31,22 @@ export function isReturnedStatus(toStatus: number): boolean {
 /**
  * Who performed a transition, derived from the status change rather than the `action` enum (that enum
  * only lists State + PMU actions, and FC Unspent's history has no `action` at all).
- * `UNDER_REVIEW_BY_MOHUA` is a PMU approval only when it came from `UNDER_REVIEW_BY_PMU`; otherwise it is
- * a State submission straight to MoHUA (pre-PMU data).
+ * `UNDER_REVIEW_BY_SO` is a PMU approval (the form was at `UNDER_REVIEW_BY_PMU`); `UNDER_REVIEW_BY_MOHUA` is a
+ * MoHUA-side move when it came from `UNDER_REVIEW_BY_SO`, a PMU approval when it came from `UNDER_REVIEW_BY_PMU`
+ * (pre-SO data), and otherwise a State submission straight to MoHUA (pre-PMU data).
  */
 export function deriveActorRole(fromStatus: number | undefined, toStatus: number): StateFormHistoryActorRole {
   switch (toStatus) {
     case FORM_STATUS.RETURNED_BY_PMU:
       return 'PMU';
+    case FORM_STATUS.UNDER_REVIEW_BY_SO:
+      return 'PMU';
     case FORM_STATUS.RETURNED_BY_MOHUA:
+    case FORM_STATUS.RETURNED_BY_SO:
     case FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA:
       return 'MoHUA';
     case FORM_STATUS.UNDER_REVIEW_BY_MOHUA:
+      if (fromStatus === FORM_STATUS.UNDER_REVIEW_BY_SO) return 'MoHUA';
       return fromStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU ? 'PMU' : 'State';
     default:
       return 'State';

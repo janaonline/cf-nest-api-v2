@@ -114,7 +114,7 @@ export class DevolutionFormulaPmuReviewController {
       stateId,
       yearId,
       this.parseInstallment(installment),
-      dto.pmuRemarks,
+      dto.rejectionRemarks,
       user,
       ip,
       userAgent,

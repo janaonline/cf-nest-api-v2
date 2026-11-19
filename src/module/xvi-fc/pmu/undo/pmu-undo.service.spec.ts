@@ -45,7 +45,7 @@ describe('PmuUndoService', () => {
       endSession: jest.fn().mockResolvedValue(undefined),
     };
     const db = { startSession: jest.fn().mockResolvedValue(session) };
-    sfcModel = { findOne: formAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })), db };
+    sfcModel = { findOne: formAt(FORM_STATUS.UNDER_REVIEW_BY_SO), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })), db };
     sfcHistory = { create: jest.fn().mockResolvedValue([]) };
     gtcModel = { findOne: formAt(FORM_STATUS.RETURNED_BY_PMU, { installment: 1 }), findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: formOid })), db };
     gtcHistory = { create: jest.fn().mockResolvedValue([]) };
@@ -127,7 +127,7 @@ describe('PmuUndoService', () => {
       expect(eligibility.assertNoClaimLetterLocks).toHaveBeenCalledWith(stateOid, yearOid, session);
       expect(eligibility.assertPmuDecision).toHaveBeenCalledWith(
         { type: 'SFC_STATUS', id: formOid },
-        FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+        FORM_STATUS.UNDER_REVIEW_BY_SO,
         session,
       );
       expect(sfcHistory.create).toHaveBeenCalledWith(expect.any(Array), expect.objectContaining({ session }));
@@ -141,16 +141,16 @@ describe('PmuUndoService', () => {
       expect(session.commitTransaction).not.toHaveBeenCalled();
     });
 
-    it.each([FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.RETURNED_BY_PMU])(
+    it.each([FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_PMU])(
       'moves status %i back to 13 conditionally, clears the remark and logs %i -> 10 -> 13',
       async (status) => {
-        sfcModel.findOne = formAt(status, { pmuRemarks: 'Old remark' });
+        sfcModel.findOne = formAt(status, { rejectionRemarks: 'Old remark' });
 
         const result = await run({ type: 'SFC_STATUS' });
 
         const [filter, update] = sfcModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>, { $set: object }];
         expect(filter).toEqual({ _id: formOid, currentFormStatus: status });
-        expect(update.$set).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, pmuRemarks: null });
+        expect(update.$set).toMatchObject({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, rejectionRemarks: null });
         expect(result.data).toEqual({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU, currentFormStatusLabel: 'Under Review by PMU' });
 
         const [docs] = sfcHistory.create.mock.calls[0] as [Record<string, unknown>[]];

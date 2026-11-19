@@ -83,8 +83,7 @@ type FcUnspentLeanDoc = XvifcActorSourceDocument & {
   fcDeclaration?: FileInfo | null;
   fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
-  pmuRemarks?: string | null;
-  mohuaRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 type FcUnspentExistingLean = {
@@ -184,8 +183,7 @@ export class FcUnspentDeclarationService {
       questions,
       rowEditFields,
       unspentUlbData,
-      pmuRemarks: doc?.pmuRemarks ?? null,
-      mohuaRemarks: doc?.mohuaRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
     };
 
     return xviFcSuccess('FC Unspent Declaration form fetched.', responseData);
@@ -732,6 +730,7 @@ export class FcUnspentDeclarationService {
     // "Dependencies" section.
     if (
       devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_PMU ||
+      devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_SO ||
       devolutionStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA
     ) {
       return {
@@ -748,7 +747,11 @@ export class FcUnspentDeclarationService {
       };
     }
 
-    if (devolutionStatus === FORM_STATUS.RETURNED_BY_MOHUA || devolutionStatus === FORM_STATUS.RETURNED_BY_PMU) {
+    if (
+      devolutionStatus === FORM_STATUS.RETURNED_BY_MOHUA ||
+      devolutionStatus === FORM_STATUS.RETURNED_BY_PMU ||
+      devolutionStatus === FORM_STATUS.RETURNED_BY_SO
+    ) {
       return {
         dependency: {
           devolutionStatus,

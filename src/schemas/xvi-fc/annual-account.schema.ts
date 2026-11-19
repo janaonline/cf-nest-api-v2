@@ -27,6 +27,9 @@ export enum AnnualAccountFormStatus {
    *  discretionary Request Exemption entry for this section's formId (30/31) — see
    *  `RequestExemptionService`/`mohua/request-exemption`. Never a manual ULB/STATE action. */
   EXEMPTED_ACKNOWLEDGED = 'EXEMPTED_ACKNOWLEDGED',
+  /** The MoHUA Section Officer returned the claim letter this section was in — mirrors the shared
+   *  FORM_STATUS.RETURNED_BY_SO (16). The ULB corrects and resubmits to the State. */
+  RETURNED_BY_SO = 'RETURNED_BY_SO',
 }
 
 export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
@@ -42,6 +45,7 @@ export const FORM_STATUS_ID: Record<AnnualAccountFormStatus, number> = {
   [AnnualAccountFormStatus.UNDO]: 10,
   [AnnualAccountFormStatus.ACTION_REQUIRED]: 11,
   [AnnualAccountFormStatus.EXEMPTED_ACKNOWLEDGED]: 12,
+  [AnnualAccountFormStatus.RETURNED_BY_SO]: 16,
 };
 
 export type XviFcAnnualAccountDocument = HydratedDocument<XviFcAnnualAccount>;
@@ -222,37 +226,30 @@ export class DocumentItem {
   manualReviewDecision!: DecisionInfo | null;
 
   /**
-   * Failed re-upload attempts since ADMIN last RETURNED a manual-review request for this document.
-   * Incremented only while `manualReviewDecision.status === 'RETURNED'` is still the live decision
-   * (i.e. no fresh upload has passed OCR since) — see `isUploadBlocked`/`MAX_POST_REJECTION_ATTEMPTS`
-   * in annual-account-status-access.util.ts. Capped at MAX_POST_REJECTION_ATTEMPTS: once reached,
-   * Re-upload is hidden and Request Manual Review re-opens instead — self-service is exhausted, but
-   * escalating to a human always stays available (a pure time-based lockout with no recourse would
-   * be too risky for a form with real filing deadlines). Reset to 0 whenever this document reaches
-   * PASSED, or when a *second* manual-review rejection sets uploadBlockedUntil (see
-   * manualReviewRejectionCount below) — either way starting the next cycle fresh. Deliberately not
-   * reset by a plain retry/re-upload the way retryValidationCount is — it must survive across
-   * re-uploads to actually count "attempts since rejection".
+   * Real OCR FAILs since ADMIN last RETURNED a manual-review request for this document (a crashed
+   * OCR job is not counted). Incremented only while `manualReviewDecision.status === 'RETURNED'` is
+   * the live decision (AnnualAccountOcrResultWriter.computePostRejectionUpdate). Capped at
+   * MAX_POST_REJECTION_ATTEMPTS (3): the 3rd FAIL sets uploadBlockedUntil (24 hours); once that passes
+   * the ULB can request another review, or re-upload, which starts a fresh 3. Reset to 0 when ADMIN
+   * returns a request, approves one, or the document reaches PASSED. Not reset by a plain
+   * retry/re-upload the way retryValidationCount is — it counts "attempts since rejection".
    */
   @Prop({ default: 0 })
   postRejectionAttemptsUsed!: number;
 
   /**
-   * Total number of times ADMIN has RETURNED a manual-review request for this document, across its
-   * whole lifecycle — reset to 0 once it reaches PASSED. The *first* rejection only starts the
-   * postRejectionAttemptsUsed window above (self-service re-upload, no cooldown). Only a *second*
-   * rejection (i.e. this counter reaching 2) sets uploadBlockedUntil — by that point a human has
-   * confirmed twice that something is genuinely wrong, which is a meaningfully stronger signal than
-   * "OCR failed 3 times unassisted" (which could just as easily mean the OCR rule itself is flaky).
+   * Total number of times ADMIN has RETURNED a manual-review request for this document — an
+   * audit/stats counter only (getManualReviewHistoryStats), it gates nothing. Reset to 0 once the
+   * document reaches PASSED through OCR.
    */
   @Prop({ default: 0 })
   manualReviewRejectionCount!: number;
 
   /**
-   * Set once a second manual-review rejection lands (see manualReviewRejectionCount) — the ULB
-   * cannot upload a new version of, or request another review for, this document until this
-   * timestamp passes. Null the rest of the time; cleared (along with the two counters above) once
-   * the document reaches PASSED.
+   * Set for 24 hours on the 3rd real OCR FAIL after a manual-review rejection (see
+   * postRejectionAttemptsUsed) — the ULB cannot upload a new version of, retry, or request another
+   * review for this document until this timestamp passes. Cleared once the document reaches PASSED
+   * or ADMIN approves a review.
    */
   @Prop({ type: Date, default: null })
   uploadBlockedUntil!: Date | null;

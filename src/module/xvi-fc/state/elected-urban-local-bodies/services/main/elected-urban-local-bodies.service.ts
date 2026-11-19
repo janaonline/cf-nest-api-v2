@@ -298,7 +298,7 @@ export class ElectedUrbanLocalBodiesService {
       statusSummary,
       instructions: [],
       meta: { version: 1 },
-      pmuRemarks: doc?.pmuRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
     };
 
     return xviFcSuccess('Elected Urban Local Bodies form fetched.', responseData);
@@ -614,7 +614,7 @@ export class ElectedUrbanLocalBodiesService {
       updatedBy: _updatedBy,
       updatedAt: _updatedAt,
       ...createdWithoutAuditFields
-    } = created.toObject() as Record<string, unknown>;
+    } = created.toObject() as unknown as Record<string, unknown>;
     return xviFcSuccess('Elected Urban Local Bodies form saved as draft.', {
       ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),
@@ -895,7 +895,9 @@ export class ElectedUrbanLocalBodiesService {
             form: existing._id,
             datasetVersion: activeDatasetVersion,
             isActive: true,
-            rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA] },
+            rowStatus: {
+              $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA, FORM_STATUS.RETURNED_BY_SO],
+            },
           },
           { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
           { session },

@@ -68,6 +68,7 @@ describe('DurManualReviewService.decideManualReview', () => {
   let mockDurModel: { findById: jest.Mock; updateOne: jest.Mock };
   let mockUserModel: { findById: jest.Mock };
   let mockManualReviewRequestModel: { findOneAndUpdate: jest.Mock; create: jest.Mock };
+  let mockUploadHistoryModel: { updateOne: jest.Mock };
   let mockDurService: { getProcessingStatus: jest.Mock };
 
   const adminUser: AuthUser = { _id: '507f1f77bcf86cd799439099', role: 'ADMIN', scope: 'ADMIN' } as AuthUser;
@@ -96,6 +97,7 @@ describe('DurManualReviewService.decideManualReview', () => {
       findOneAndUpdate: jest.fn().mockResolvedValue({ _id: 'request-1' }),
       create: jest.fn().mockResolvedValue(undefined),
     };
+    mockUploadHistoryModel = { updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
     mockDurService = { getProcessingStatus: jest.fn().mockResolvedValue({}) };
 
     service = new DurManualReviewService(
@@ -103,7 +105,7 @@ describe('DurManualReviewService.decideManualReview', () => {
       {} as any,
       mockUserModel as any,
       mockManualReviewRequestModel as any,
-      {} as any,
+      mockUploadHistoryModel as any,
       mockDurService as any,
       {} as any,
       {} as any,
@@ -137,7 +139,108 @@ describe('DurManualReviewService.decideManualReview', () => {
 
     expect(mockDurModel.updateOne).toHaveBeenCalledWith(
       { _id: DUR_ID, documents: { $elemMatch: { docId: 'tiedGrant', manualReviewDecision: null } } },
-      expect.objectContaining({ $set: expect.objectContaining({ 'documents.$.processingStatus': 'PASSED' }) }),
+      expect.objectContaining({
+        $set: expect.objectContaining({
+          'documents.$.processingStatus': 'PASSED',
+          // Same clean-up a validation PASS does.
+          'documents.$.postRejectionAttemptsUsed': 0,
+          'documents.$.uploadBlockedUntil': null,
+        }),
+      }),
+    );
+    expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+      { uploadId: 'upload-1' },
+      { $set: { processingStatus: 'PASSED' } },
+    );
+  });
+
+  it('a RETURNED decision leaves the upload history row alone', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
+    mockDurModel.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
+
+    await service.decideManualReview(DUR_ID, 'tiedGrant' as any, { decision: 'RETURNED', note: 'Wrong file' } as any, adminUser);
+
+    expect(mockUploadHistoryModel.updateOne).not.toHaveBeenCalled();
+  });
+});
+
+describe('DurManualReviewService.requestManualReview', () => {
+  let service: DurManualReviewService;
+  let mockDurModel: { findById: jest.Mock; updateOne: jest.Mock };
+  let mockManualReviewRequestModel: { create: jest.Mock };
+  let mockDurService: { validateViewAccess: jest.Mock; assertCanUlbUpload: jest.Mock; getProcessingStatus: jest.Mock };
+
+  const DUR_ID = '507f1f77bcf86cd799439014';
+  const ulbUser: AuthUser = {
+    _id: '507f1f77bcf86cd799439098',
+    role: 'ULB-EDITOR',
+    scope: 'ULB',
+    ulb: '507f1f77bcf86cd799439011',
+  } as AuthUser;
+
+  const durWithUpload = (upload: Record<string, unknown>) => ({
+    _id: DUR_ID,
+    ulb: '507f1f77bcf86cd799439011',
+    design_year: '507f1f77bcf86cd799439013',
+    currentFormStatus: 2,
+    documents: [
+      {
+        docId: 'tiedGrant',
+        currentUpload: { uploadId: 'upload-1', ocrInfo: { validationStatus: 'FAIL' }, ...upload },
+        manualReviewDecision: null,
+      },
+    ],
+  });
+
+  beforeEach(() => {
+    mockDurModel = { findById: jest.fn(), updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }) };
+    mockManualReviewRequestModel = { create: jest.fn().mockResolvedValue(undefined) };
+    mockDurService = {
+      validateViewAccess: jest.fn().mockResolvedValue(undefined),
+      assertCanUlbUpload: jest.fn(),
+      getProcessingStatus: jest.fn().mockResolvedValue({}),
+    };
+
+    service = new DurManualReviewService(
+      mockDurModel as any,
+      {} as any,
+      {} as any,
+      mockManualReviewRequestModel as any,
+      {} as any,
+      mockDurService as any,
+      {} as any,
+      {} as any,
+    );
+  });
+
+  it('rejects a first-attempt FAIL (v1, retried at most once), same rule as the UI', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 1, retryValidationCount: 1 })));
+
+    await expect(service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser)).rejects.toThrow(
+      'Please retry or re-upload the document before requesting a manual review.',
+    );
+    expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects when the form is no longer ULB-editable', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 2 })));
+    mockDurService.assertCanUlbUpload.mockImplementation(() => {
+      throw new ForbiddenException('This form cannot be edited while its status is Under Review by State.');
+    });
+
+    await expect(service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser)).rejects.toThrow(ForbiddenException);
+    expect(mockDurModel.updateOne).not.toHaveBeenCalled();
+    expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
+  });
+
+  it('creates the request for a re-uploaded (v2) FAIL on an editable form', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 2 })));
+
+    await service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser);
+
+    expect(mockDurService.assertCanUlbUpload).toHaveBeenCalledWith(expect.objectContaining({ _id: DUR_ID }), 'tiedGrant');
+    expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
+      expect.objectContaining({ docId: 'tiedGrant', uploadId: 'upload-1', status: 'PENDING' }),
     );
   });
 });

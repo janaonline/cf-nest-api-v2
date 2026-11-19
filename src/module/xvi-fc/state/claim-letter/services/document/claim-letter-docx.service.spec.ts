@@ -11,13 +11,14 @@ const p = (text: string, extra: Partial<ClaimLetterParagraph> = {}): ClaimLetter
   ...extra,
 });
 
-function fullDocument(): ClaimLetterFullDocument {
+function fullDocument(overrides: Partial<ClaimLetterFullDocument> = {}): ClaimLetterFullDocument {
   return {
     refNo: 'CL/SS/2026-27/1-2',
     stateName: 'Sample State',
     designYearLabel: '2026-27',
     installment: 1,
     batchNumber: 2,
+    resubmissionNumber: 0,
     asOn: '27 Oct 2026, 15:30',
     letter: {
       letterhead: {
@@ -83,6 +84,7 @@ function fullDocument(): ClaimLetterFullDocument {
       ELIGIBLE: [{ ulbId: 'u1', cells: ['1', 'ULB A', 'Constituted', 'Yes', 'Nil', '617.28', '617.28'] }],
       INELIGIBLE: [],
     },
+    ...overrides,
   };
 }
 
@@ -143,6 +145,14 @@ describe('ClaimLetterDocxService', () => {
     expect(documentService.buildFullDocument).toHaveBeenCalledWith(parent);
     expect(fileName).toBe('CF_Sample-State_Claim-letter-1-2_2026-27.docx');
     expect(buffer.subarray(0, 2).toString()).toBe('PK');
+  });
+
+  it('adds -R<n> to the .docx name of a letter built after a return', async () => {
+    documentService.buildFullDocument.mockResolvedValue(fullDocument({ resubmissionNumber: 1 }));
+
+    const { fileName } = await service.generate({ _id: new Types.ObjectId() } as never);
+
+    expect(fileName).toBe('CF_Sample-State_Claim-letter-1-2-R1_2026-27.docx');
   });
 
   it('renders model text, highlights placeholders and lays the annexure out landscape', async () => {

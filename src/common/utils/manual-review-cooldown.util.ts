@@ -23,6 +23,14 @@ export const UPLOAD_BLOCKED_MESSAGE =
   `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_HOURS} hours. ` +
   `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
 
+/** Manual review is for a document the ULB already tried to fix: retried more than once on the same
+ *  file, or re-uploaded (version 2+). Mirrors the UI's isEligibleForManualReview. */
+export function isPastFirstAttempt(upload: { retryValidationCount?: number | null; version?: number | null }): boolean {
+  return (upload.retryValidationCount ?? 0) > 1 || (upload.version ?? 1) > 1;
+}
+
+export const FIRST_ATTEMPT_MESSAGE = 'Please retry or re-upload the document before requesting a manual review.';
+
 /** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
 export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {
   return !!uploadBlockedUntil && uploadBlockedUntil.getTime() > Date.now();

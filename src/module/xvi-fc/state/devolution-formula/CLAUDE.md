@@ -96,7 +96,7 @@ submitted. `null` on `CREATE_DRAFT`.
 ## Row-level claim-lock enforcement (PMU Review feature)
 
 `assertNoActiveClaimLockForUlb` (`services/row/devolution-formula-row.service.ts`) queries
-`ClaimLetterUlbLock` directly (`{state, year, installment, ulbId, lockState: 'ACTIVE'}`) and throws
+`ClaimLetterUlbLock` directly (`{state, year, installment, ulbId}`, `lockState` ACTIVE or ACKNOWLEDGED) and throws
 `ConflictException` — the only call site is `updateRow`'s single-portal-row-edit path. This is
 Devolution's own edit-lock mechanism (not a new `FORM_STATUS`): a ULB claimed in an active claim
 letter can't have its allocation figures edited out from under that claim, but the whole form's own
@@ -110,14 +110,11 @@ per-row regardless of lock status, so a locked row's frozen values and an edited
 both land in `totalAllocatedSum` the same way they always did — the lock only blocks the edit
 itself, not the reconciliation read.
 
-**Known gap, not fixed here (deliberately out of scope for this check)**: this lock is enforced
-only against `updateRow`'s single-row portal edit. A full Excel re-upload
-(`DevolutionFormulaExcelService.validateExcel`/`revalidateExcel`) hard-deletes and recreates every
-row in the new dataset version (see the ADR above) — including a locked ULB's row — with no lock
-check of its own. A State could still displace a locked ULB's allocation data via a full
-Excel re-upload while a claim letter holds it. Flagged, not fixed: wiring the Excel-upload path to
-the same lock check is a larger, separately-scoped change (it touches the ADR-governed
-dataset-versioning transaction), not a stub-implementation task.
+The whole-dataset paths (`validateExcel` re-upload, `revalidateExcel`, `deleteUploadedExcel`) have their
+own guard, `assertNoFrozenDfRows` (`helpers/devolution-formula-frozen-rows.helpers.ts`): refused while any
+active row is at 5 or 7, i.e. part of a claim letter the SO approved. While a letter is only under SO review
+the form itself is at 15, which `assertCanStateEditForm` already refuses; a later letter's return reopens the
+form (16), and this guard is what keeps the earlier letter's rows from being replaced (claim-letter ADR 0007).
 
 ## Known gaps (tracked as TODOs in code, not implemented here)
 

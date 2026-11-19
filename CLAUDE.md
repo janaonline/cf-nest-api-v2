@@ -35,11 +35,34 @@ npm run migrate:xvifc-slb-state            # Backfills the new required `state` 
 npm run migrate:pmu-role-rename           # One-off: renames role XVIFC_PMU -> MOHUA_PMU in users + sidemenus
                                           # (scripts/migrate-pmu-role-rename.ts). Re-runnable; `-- --dry-run` counts.
                                           # Afterwards clear the side-menu cache (both role keys); PMU users must log in again
+npm run migrate:xvifc-so-claim-statuses   # SO review stage: sets claimEligibility.acceptedFormStatuses to [15,5,7] on the five State
+                                          # forms (22/23/24/25/35), adds 15 to rowAcceptedFormStatuses on 23/25, and fixes SLB (32) to
+                                          # [8,5,7] (scripts/update-xvifc-claim-eligibility-statuses-for-so.ts). Re-runnable; then clears
+                                          # the no-TTL FormJson cache (`formJson:<NODE_ENV>:*`). `-- --dry-run` reports only,
+                                          # `-- --no-cache-clear` skips the cache step
+npm run migrate:xvifc-so-action-gates     # Adds 16 (RETURNED_BY_SO) next to 4 in the ULB document gates of `xvifc_action_gates`
+                                          # (upload/reupload/retry/delete), so a form the SO returned shows the same buttons as one
+                                          # the State returned (scripts/add-xvifc-returned-by-so-action-gates.ts). Re-runnable;
+                                          # `-- --dry-run` lists only. No cache to clear
+npm run migrate:xvifc-rejection-remarks   # Renames the 5 State forms' return reason to `rejectionRemarks` (SFC, Elected Body,
+                                          # Devolution, FC Unspent, GTC): moves `pmuRemarks` and, on Devolution/FC Unspent,
+                                          # `mohuaRemarks` into it, then unsets both (scripts/migrate-xvifc-rejection-remarks.ts).
+                                          # Run it with the deploy that renames the field. Re-runnable; `-- --dry-run` counts only
 npm run seed:xvifc-pmu-doe-menu           # Gives the MOHUA_PMU and DOE roles their sidebar rows (Overview, Profile > People
                                           # and Roles, Support) for every MoHUA menu year (scripts/seed-xvifc-pmu-doe-menu.ts).
                                           # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. The side
                                           # menu is cached with no TTL, so afterwards run DELETE xvi-fc/admin/cache/side-menu.
                                           # Run it only once the UI with the matching routes is deployed
+npm run seed:xvifc-mohua-claims-menu      # Adds a "Grant Management" group (after Profile) with "Claims & Submissions" to the MoHUA sidebar for every MoHUA
+                                          # menu year (scripts/seed-xvifc-mohua-claims-menu.ts). Idempotent; `-- --dry-run` reports,
+                                          # `-- --year <id>` limits to one year. Clear the no-TTL side-menu cache afterwards
+                                          # (DELETE xvi-fc/admin/cache/side-menu) and run it only once the UI route is deployed.
+                                          # `-- --role MOHUA_PMU` adds the same row to the PMU sidebar (read-only page)
+npm run seed:xvifc-mohua-om-menu          # Adds an "OM Generation" group (after Grant Management) with "Generate OM" and "OM Generation
+                                          # History" to the MoHUA sidebar for every MoHUA menu year (scripts/seed-xvifc-mohua-om-menu.ts).
+                                          # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. Clear the no-TTL
+                                          # side-menu cache afterwards and run it only once the UI routes are deployed.
+                                          # `-- --role MOHUA_PMU` adds only "OM Generation History" to the PMU sidebar (read-only)
 ```
 
 ## Architecture
@@ -67,7 +90,8 @@ src/
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
 │   │                    # notifications (read-only feed for the State navbar bell + sidebar dots: the 5 State
 │   │                    # forms' raw status via MohuaStateConditionsService + a count of ULB forms awaiting
-│   │                    # State review; stateless, nothing stored),
+│   │                    # State review + a count of claim letters MoHUA returned (16/6) with no letter submitted
+│   │                    # in the same slot since; stateless, nothing stored),
 │   │                    # request-exemption (discretionary STATE→MoHUA exemption requests, formId 34 — see
 │   │                    # master/form-json-config/CLAUDE.md's formId registry). Two branches share one collection
 │   │                    # (xvifc_eligibility_exemptions): per-ULB (`ulb` a real ObjectId, one document per
@@ -89,8 +113,9 @@ src/
 │   │                    # when it's merely been submitted.
 │   ├── mohua/           # overview (read-only cross-state endpoint: GET xvi-fc/mohua/overview/:yearId — every state's
 │   │                    # stage derived from its 5 state-condition forms' currentFormStatus + allocation (basic + performance) +
-│   │                    # expected-ULB count; MOHUA/DOE (read-only)/ADMIN scope only, never cached — every dashboard read
-│   │                    # check goes through `isMohuaViewScope` (common/utils/xvi-fc-scope.util.ts)) plus the per-state
+│   │                    # expected-ULB count; MOHUA/DOE/PMU (read-only)/ADMIN scope only, never cached — the three dashboard
+│   │                    # controllers check `isNationalDashboardScope` (MoHUA + DoE + PMU, whose Overview is this same
+│   │                    # dashboard; common/utils/xvi-fc-scope.util.ts), other MoHUA reads `isMohuaViewScope`) plus the per-state
 │   │                    # GET xvi-fc/mohua/state/:stateId/:yearId (allocation, the 5 condition forms, per-form ULB
 │   │                    # submission counts), the state's paginated ULB list GET xvi-fc/mohua/state/:stateId/:yearId/ulbs (search,
 │   │                    # sort by ULB name/allocation, allocation from the Devolution Formula active dataset, unspent balance
@@ -104,6 +129,36 @@ src/
 │   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
 │   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
+│   │                    # claim-letters (read-only Claims & Submissions screens: GET xvi-fc/mohua/claim-letters/:yearId/:installment — every
+│   │                    # state's first-claim status, installment allocation (half of basic + performance from grantAllocation) and amount claimed, plus a national `overview` (total allocation; claims submitted / under SO review / approved = 5+7 / returned, each with claims, states and amount — released isn't tracked yet); .../state/:stateId/:yearId/:installment — one
+│   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs. Lists letters at status 15 (under SO review), 16 (returned by the SO),
+│   │                    # 5 (under MoHUA review), 6 (returned by MoHUA) and 7 (acknowledged, read-only) that are READY, not abandoned and not superseded — MOHUA_CLAIM_LETTERS_LISTED_STATUSES;
+│   │                    # each letter row carries its `batchNumber` (1 to 3, CLAIM_LETTER_MAX_BATCH_NUMBER). A state's letters response also carries a
+│   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
+│   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/PMU (read-only, for the national dashboard)/ADMIN only; the State-side
+│   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a
+│   │                    # letter under SO review (UNDER_REVIEW_BY_SO, 15) to UNDER_REVIEW_BY_MOHUA (5) and logs it in one transaction,
+│   │                    # pinned on the status + `revision` the page showed. It first re-runs the letter's conditions fresh, as submit
+│   │                    # does (409 naming the ULBs that no longer hold; the SO returns instead). It also moves the letter's State/ULB forms
+│   │                    # (and rows) to 5 and approves the pending exemptions it relied on, in the same transaction
+│   │                    # (ClaimLetterFormStatusService, which refuses if a form changed or was deleted since submit, and logs each moved
+│   │                    # form in that form's own history). A return emails the State users and each ULB whose own forms reopened, after
+│   │                    # commit (FormReturnedNotificationService.notifyClaimLetterReturned). See state/claim-letter ADR 0007.
+│   │                    # POST .../letter/:id/return is the SO's return (15 -> 16): the letter closes (also flagged isAbandoned, so its
+│   │                    # batch slot and ULB locks are freed and the State builds a new letter; MoHUA still lists it) and only what
+│   │                    # the SO marked goes to 16. The SO first marks the ULBs to return (PUT .../letter/:id/ulb/:ulbId/decision:
+│   │                    # RETURNED with that ULB's forms, Elected Body / FC Unspent / Devolution rows and remark, or PENDING to clear;
+│   │                    # there is no approved mark - an unmarked ULB counts as fine; an "Eligible via exemption" ULB is marked only
+│   │                    # through `rejectExemptionFormIds`, its own discretionary exemptions still at 5), saved as
+│   │                    # `soDecision` on the claim ULB row; approve is refused while any ULB is RETURNED, and the return body carries
+│   │                    # only the State-wide items (claim letter, SFC, GTC) (see state/claim-letter/CLAUDE.md). MoHUA's final 5 -> 7 and its return (6) are not built yet. The State's claim-letter submit now lands on 15. Status 16 is
+│   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7))
+│   │                    # om (Office Memorandum, one per claim letter the SO verified: GET xvi-fc/mohua/om/:yearId/:installment lists
+│   │                    # States and their verified letters; .../letter/:id/document + PATCH .../draft (the "No." and "Dated" boxes);
+│   │                    # POST .../letter/:id/generate numbers it OM/<STATE>/<FY>/<n>, freezes its content and returns one PDF: the OM, the claim letter's ULB lists (frozen with the OM), then the
+│   │                    # claim letter's annexures from its frozen final PDF; GET :omId/pdf; PUT :omId/signed-file (PDF, 5 MB); GET history/:yearId/:installment. The GETs are open to MoHUA, DoE and
+│   │                    # PMU (read-only monitoring) and ADMIN; draft, generate and the signed upload are MoHUA's. The SO's approve copies
+│   │                    # the letter's ULBs into xvifc_om_ulbs; rows A-K come from the claim letter's own document — see mohua/om/CLAUDE.md)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below),
 │   │                     # XviFcUlbOptionsService/Controller (GET xvi-fc/ulb-options?stateId=&yearId= - a
@@ -174,6 +229,7 @@ Full docs live with the code, not here: [`module/xvi-fc/common/services/CLAUDE.m
 ### Database
 
 One physical connection (`MONGO_URI`), two logical databases selected by name:
+
 - `MONGO_DB_NAME` — main app database, set as `dbName` on the default `MongooseModule.forRootAsync` connection
 - `DIGITIZATION_DB_NAME` — digitization database, exposed as connection `'digitization_db'`. `src/core/database/digitization-db.module.ts` (global) derives it from the default connection via `connection.useDb(DIGITIZATION_DB_NAME, { useCache: true })` instead of opening a second socket/connection pool — both databases must live on the same server/cluster reachable via `MONGO_URI`.
 
@@ -187,11 +243,12 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 4. `JwtRefreshStrategy` extracts the refresh token from the `refresh_token` cookie and compares against the stored hash
 5. `JwtAuthGuard` is registered globally (APP_GUARD); routes decorated with `@Public()` bypass it
 6. OTP login: `OtpService` generates + sends OTP, stored in Redis with `OTP_TTL_SECONDS` TTL
-7. XVI-FC grant-cycle eligibility gate: for `Role.ULB` users logging in with `dto.type` of `16thFC`/`XVIFC`, `LoginService.login()` checks `UlbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC')` — checked only *after* credentials are confirmed valid (never before, to avoid leaking a ULB's eligibility to an unauthenticated caller) — and rejects with `ForbiddenException` before issuing tokens if the ULB's type is excluded (e.g. Cantonment Board). `GET /auth/me` also exposes a live `isEligibleForXviFc` flag for already-authenticated sessions. `OtpService.verifyOtp()` deliberately does **not** carry this gate — it's a shared endpoint used by every grant cycle (15th FC, Ranking, etc.), and neither `VerifyOtpDto` nor the Redis OTP record carry a `type`/grant-cycle field to scope a check on the way `dto.type` lets `login()` do; a Cantonment-Board ULB that authenticates via this path is still blocked at the XVI-FC write-path guards (`assertUlbEligibleForGrantCycle`) and the frontend's `/xvifc/**` route guard (which re-derives eligibility live via `/auth/me`, independent of how the token was issued).
+7. XVI-FC grant-cycle eligibility gate: for `Role.ULB` users logging in with `dto.type` of `16thFC`/`XVIFC`, `LoginService.login()` checks `UlbEligibilityService.isUlbEligibleForGrantCycle(ulb, 'XVIFC')` — checked only _after_ credentials are confirmed valid (never before, to avoid leaking a ULB's eligibility to an unauthenticated caller) — and rejects with `ForbiddenException` before issuing tokens if the ULB's type is excluded (e.g. Cantonment Board). `GET /auth/me` also exposes a live `isEligibleForXviFc` flag for already-authenticated sessions. `OtpService.verifyOtp()` deliberately does **not** carry this gate — it's a shared endpoint used by every grant cycle (15th FC, Ranking, etc.), and neither `VerifyOtpDto` nor the Redis OTP record carry a `type`/grant-cycle field to scope a check on the way `dto.type` lets `login()` do; a Cantonment-Board ULB that authenticates via this path is still blocked at the XVI-FC write-path guards (`assertUlbEligibleForGrantCycle`) and the frontend's `/xvifc/**` route guard (which re-derives eligibility live via `/auth/me`, independent of how the token was issued).
 
 ### Authorization
 
 16 roles defined in `src/module/auth/enum/role.enum.ts`, including `xvi-fc`-specific ones (`PMU`, `AAINA`, `ULB-EDITOR`/`ULB-VIEWER`, `STATE-EDITOR`/`STATE-VIEWER`). Protect routes with:
+
 ```ts
 @Roles(Role.ADMIN, Role.STATE)   // applied at controller or handler level
 @UseGuards(RolesGuard)
@@ -199,21 +256,24 @@ When defining models that belong to the digitization DB, use `MongooseModule.for
 
 `RolesGuard` reads `@Roles()` metadata; if no metadata is set the route is accessible to any authenticated user.
 
-**DoE (`XVIFC_DOE`, scope `DOE`) is a read-only copy of the MoHUA dashboard.** Its permission table (`XVIFC_DOE_PERMISSIONS`) holds only view permissions — plus `REVIEW_STATE_SUBMISSIONS_PMU`, which is just the read gate for the read-only form screens — and the admin (Submitter) additionally manages the DoE team. Because ~50 write endpoints have no decorator-level role check and rely on service-side checks, `DoeReadOnlyGuard` (registered right after `JwtAuthGuard`, `auth/guards/doe-read-only.guard.ts`) rejects every non-GET request from a DoE user except an explicit allowlist (own session/profile/notifications, DoE team management) — this also covers the unguarded `POST file/signed-url`. A new endpoint that a DoE user must be able to *write* has to be added to that allowlist; one a DoE user must *read* needs `isMohuaViewScope` wherever MoHUA's read is allowed (and wherever MoHUA's read skips an exemption-stub write).
+**DoE (`XVIFC_DOE`, scope `DOE`) is a read-only copy of the MoHUA dashboard.** Its permission table (`XVIFC_DOE_PERMISSIONS`) holds only view permissions — plus `REVIEW_STATE_SUBMISSIONS_PMU`, which is just the read gate for the read-only form screens — and the admin (Submitter) additionally manages the DoE team. Because ~50 write endpoints have no decorator-level role check and rely on service-side checks, `DoeReadOnlyGuard` (registered right after `JwtAuthGuard`, `auth/guards/doe-read-only.guard.ts`) rejects every non-GET request from a DoE user except an explicit allowlist (own session/profile/notifications, DoE team management) — this also covers the unguarded `POST file/signed-url`. A new endpoint that a DoE user must be able to _write_ has to be added to that allowlist; one a DoE user must _read_ needs `isMohuaViewScope` wherever MoHUA's read is allowed (and wherever MoHUA's read skips an exemption-stub write).
 
 ### Response Shape
 
 `ResponseTransformInterceptor` wraps every response:
+
 ```json
 { "success": true, "data": ..., "timestamp": "..." }
 ```
 
 Auth endpoints (`/login`, `/refresh`, `/verifyOtp`) are special-cased to flatten to:
+
 ```json
 { "success": true, "token": ..., "user": ..., "timestamp": "..." }
 ```
 
 `HttpExceptionFilter` normalizes errors to:
+
 ```json
 { "statusCode": ..., "message": ..., "timestamp": "...", "path": "..." }
 ```
@@ -223,6 +283,7 @@ Custom status codes in use: `440` (session expired), `422` (invalid OTP), `409` 
 ### BullMQ Queues
 
 Queue name constants are in `src/core/constants/queues.ts`. There are five queues:
+
 - `EMAIL_QUEUE` — async email sending via Nodemailer
 - `AFS_DIGITIZATION_QUEUE` — AFS file processing
 - `AUDITORS_REPORT_OCR_QUEUE` — OCR for audit documents
@@ -234,6 +295,7 @@ BullBoard admin UI is at `/admin/queues` (HTTP basic auth via `ADMIN_USER`/`ADMI
 ### Key Global Providers
 
 Registered in `AppModule` and available everywhere:
+
 - `CacheModule` (global, 5-min TTL, **in-memory** — local to a single Node process, not shared across
   replicas; prefer `RedisService` over this for anything that must invalidate consistently across
   instances, e.g. `UlbEligibilityService`'s reference-data cache)
@@ -246,11 +308,9 @@ Registered in `AppModule` and available everywhere:
 ### Testing Patterns
 
 Unit tests mock Mongoose models via `getModelToken(ModelName.name)`:
+
 ```ts
-providers: [
-  MyService,
-  { provide: getModelToken(User.name), useValue: mockUserModel },
-]
+providers: [MyService, { provide: getModelToken(User.name), useValue: mockUserModel }];
 ```
 
 E2E tests use `supertest` against a full NestJS app bootstrapped in `beforeAll`.
@@ -259,19 +319,19 @@ E2E tests use `supertest` against a full NestJS app bootstrapped in `beforeAll`.
 
 Required variables (see `.env` for dev defaults):
 
-| Variable | Purpose |
-|---|---|
-| `MONGO_URI` | MongoDB server/cluster connection (single physical connection, no db name) |
-| `MONGO_DB_NAME` | Main app database name (default connection) |
-| `DIGITIZATION_DB_NAME` | Digitization database name (reuses the default connection via `useDb`, connection name `'digitization_db'`) |
-| `REDIS_URL` | Redis for BullMQ and OTP storage |
-| `JWT_SECRET` / `JWT_REFRESH_SECRET` | Token signing |
-| `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME` | S3 buckets |
-| `RECAPTCHA_SECRET_KEY` | reCAPTCHA v3 (set `RECAPTCHA_SKIP_DEV=true` locally) |
-| `OTP_TTL_SECONDS` | OTP expiry in Redis |
-| `OTP_FORCE_REAL_DELIVERY` | Set `true` in dev/staging to send real OTPs (random code + actual SMS/email) without flipping `NODE_ENV` |
-| `CLIENT_URL` / `WHITELISTED_DOMAINS` | CORS origins |
-| `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`) |
-| `MANUAL_REVIEW_NOTIFY_EMAIL` | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`) |
-| `XVIFC_REMINDER_CRONS_ENABLED` | Master on/off switch for the 3 dwell-time/summary crons in `module/xvi-fc/common/reminders` — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value. Does not gate `FormReturnedNotificationService`, which is event-triggered, not a cron |
-| `CRON_EMAIL_BCC` | BCC'd only on the weekly state summary cron email (`module/xvi-fc/common/reminders/weekly-state-summary.service.ts`) so the team can monitor what's actually being sent. Not applied to the ULB in-progress reminder, the STATE review digest, or any other email (OTP, manual-review decisions, etc.) |
+| Variable                                                   | Purpose                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `MONGO_URI`                                                | MongoDB server/cluster connection (single physical connection, no db name)                                                                                                                                                                                                                               |
+| `MONGO_DB_NAME`                                            | Main app database name (default connection)                                                                                                                                                                                                                                                              |
+| `DIGITIZATION_DB_NAME`                                     | Digitization database name (reuses the default connection via `useDb`, connection name `'digitization_db'`)                                                                                                                                                                                              |
+| `REDIS_URL`                                                | Redis for BullMQ and OTP storage                                                                                                                                                                                                                                                                         |
+| `JWT_SECRET` / `JWT_REFRESH_SECRET`                        | Token signing                                                                                                                                                                                                                                                                                            |
+| `AWS_BUCKET_NAME` / `AWS_DIGITIZATION_BUCKET_NAME`         | S3 buckets                                                                                                                                                                                                                                                                                               |
+| `RECAPTCHA_SECRET_KEY`                                     | reCAPTCHA v3 (set `RECAPTCHA_SKIP_DEV=true` locally)                                                                                                                                                                                                                                                     |
+| `OTP_TTL_SECONDS`                                          | OTP expiry in Redis                                                                                                                                                                                                                                                                                      |
+| `OTP_FORCE_REAL_DELIVERY`                                  | Set `true` in dev/staging to send real OTPs (random code + actual SMS/email) without flipping `NODE_ENV`                                                                                                                                                                                                 |
+| `CLIENT_URL` / `WHITELISTED_DOMAINS`                       | CORS origins                                                                                                                                                                                                                                                                                             |
+| `BANK_ACCOUNT_ENCRYPTION_KEY` / `BANK_ACCOUNT_HASH_SECRET` | `xvi-fc` ULB bank-account encryption/hashing (`module/xvi-fc/ulb/bank-account`)                                                                                                                                                                                                                          |
+| `MANUAL_REVIEW_NOTIFY_EMAIL`                               | Fixed inbox emailed when a ULB requests manual review of a failed OCR validation (`module/xvi-fc/ulb/annual_accounts`)                                                                                                                                                                                   |
+| `XVIFC_REMINDER_CRONS_ENABLED`                             | Master on/off switch for the 3 dwell-time/summary crons in `module/xvi-fc/common/reminders` — must be exactly `'true'` for their scheduled runs to fire; manual triggers bypass this flag regardless of its value. Does not gate `FormReturnedNotificationService`, which is event-triggered, not a cron |
+| `CRON_EMAIL_BCC`                                           | BCC'd only on the weekly state summary cron email (`module/xvi-fc/common/reminders/weekly-state-summary.service.ts`) so the team can monitor what's actually being sent. Not applied to the ULB in-progress reminder, the STATE review digest, or any other email (OTP, manual-review decisions, etc.)   |

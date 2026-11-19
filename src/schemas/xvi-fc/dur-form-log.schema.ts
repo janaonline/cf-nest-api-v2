@@ -45,6 +45,7 @@ export class XviFcDurFormLog {
       FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
       FORM_STATUS.APPROVED_BY_STATE,
       FORM_STATUS.UNDO,
+      FORM_STATUS.RETURNED_BY_SO,
     ],
     required: true,
   })

@@ -5,6 +5,7 @@ import type { HydratedFieldConfig } from 'src/module/xvi-fc/common/types/field-c
 import type { EulbValidationStatus } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
 import type { PmuRowSummaryCore } from 'src/module/xvi-fc/common/types/pmu-row-summary.type';
 import type { PmuReviewPermissions } from 'src/module/xvi-fc/common/types/pmu-review-permissions.type';
+import type { EulbStatusSummary } from 'src/module/xvi-fc/state/elected-urban-local-bodies/types/elected-urban-local-bodies.types';
 
 /** Lean form projection read/written by the PMU review domain — scoped to only the fields PMU
  *  review needs, mirroring FC Unspent's own `FcUnspentPmuFormLean`. */
@@ -14,7 +15,7 @@ export interface EulbPmuFormLean {
   year: Types.ObjectId;
   currentFormStatus: number;
   activeDatasetVersion: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 }
 
 /** Lean row projection used throughout the PMU review domain (list, transitions, snapshots). */
@@ -54,9 +55,12 @@ export interface EulbPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on PMU reject, never cleared until the next transition overwrites it. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   questions: HydratedFieldConfig[];
   rowSummary: EulbPmuRowSummary;
+  /** ULBs per elected-body status in the active dataset (constituted / not / 6th Schedule) — the same
+   *  counts the State's own page shows, from the same `computeEulbStatusSummary`. */
+  statusSummary: EulbStatusSummary;
   /** Excel upload's validation status — needed by the frontend to bridge the synthetic
    *  `electedBodyExcelValidationStatus` control that `signedElectedbodyFile`'s `visibleWhen`
    *  condition gates on (same mechanism the State's own GET response/page already uses). */
