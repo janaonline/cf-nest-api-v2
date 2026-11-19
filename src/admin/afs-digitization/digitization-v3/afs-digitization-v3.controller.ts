@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  InternalServerErrorException,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -29,6 +40,19 @@ export class AfsDigitizationV3Controller {
   @Get('metrics')
   @Public()
   async metrics() {
+    return { success: true, data: await this.digitizationV3Service.getMetrics() };
+  }
+
+  /**
+   * Recounts the score and run snapshot now (the "Refresh" button) and returns the fresh overall metrics.
+   * The snapshot is also refreshed a few minutes after a job finishes, so this is only needed to see it sooner.
+   */
+  @Post('metrics/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refreshMetrics() {
+    if (!(await this.digitizationV3Service.refreshScoreMetrics())) {
+      throw new InternalServerErrorException('Could not refresh the metrics');
+    }
     return { success: true, data: await this.digitizationV3Service.getMetrics() };
   }
 
