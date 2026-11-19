@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
@@ -110,6 +110,9 @@ const AFS_FILE_PROJECTION = Object.fromEntries(
     .filter((path) => path.startsWith('ulbFile.'))
     .map((path) => [path.replace('ulbFile.', 'afsFile.'), 1]),
 );
+
+/** How long after a job finishes the score snapshot is recounted (one recount covers every job finished meanwhile). */
+const SCORE_REFRESH_DELAY_MS = 3 * 60 * 1000;
 
 /** Arithmetic status FastAPI stores when the uploaded doc type isn't in the PDF (no checks ran). */
 const ARITHMETIC_SKIPPED = 'SKIPPED';
@@ -258,8 +261,9 @@ export interface DigitizationV3OverallMetrics {
 }
 
 @Injectable()
-export class AfsDigitizationV3Service implements OnModuleInit {
+export class AfsDigitizationV3Service implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AfsDigitizationV3Service.name);
+  private scoreRefreshTimer?: NodeJS.Timeout;
 
   constructor(
     @InjectQueue(AFS_DIGITIZATION_V3_QUEUE)
@@ -1233,7 +1237,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * Recounts how many v3-digitized files (ULB slot, same rule as the `digitized` card) have each score and stores it on
    * the v3 metrics row. Called after a rebuild and after the score backfills; a failure is logged, never thrown.
    */
-  async refreshScoreMetrics(): Promise<void> {
+  async refreshScoreMetrics(): Promise<boolean> {
     try {
       const has = (path: string) => ({ $sum: { $cond: [{ $ne: [{ $type: path }, 'missing'] }, 1, 0] } });
       const is = (path: string, value: string) => ({ $sum: { $cond: [{ $eq: [path, value] }, 1, 0] } });
@@ -1297,9 +1301,28 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         { $set: { scoreSummary: { ...counts, computedAt: new Date() }, runSummary } },
         { upsert: true },
       );
+      return true;
     } catch (error) {
       this.logger.error('Could not refresh the digitization v3 score metrics', error instanceof Error ? error.stack : String(error));
+      return false;
     }
+  }
+
+  /**
+   * Refreshes the score snapshot shortly after a job finishes. The recount reads every digitized file, so a burst of
+   * finishing jobs shares one refresh: the first one starts the timer, the rest ride on it.
+   */
+  private scheduleScoreRefresh(): void {
+    if (this.scoreRefreshTimer) return;
+    this.scoreRefreshTimer = setTimeout(() => {
+      this.scoreRefreshTimer = undefined;
+      void this.refreshScoreMetrics(); // logs its own failures
+    }, SCORE_REFRESH_DELAY_MS);
+    this.scoreRefreshTimer.unref?.(); // never keeps the process alive
+  }
+
+  onModuleDestroy() {
+    if (this.scoreRefreshTimer) clearTimeout(this.scoreRefreshTimer);
   }
 
   /**
@@ -1377,6 +1400,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       .lean()
       .exec();
     await this.recordTransition(this.statusOf(previous), next);
+    // A finished file changes the score and run snapshots (counts above already moved by $inc)
+    if (next === DigitizationV3Statuses.DIGITIZED || next === DigitizationV3Statuses.FAILED) this.scheduleScoreRefresh();
   }
 
   /** A counter problem must never fail or retry a digitization job, so it is logged and swallowed. */
