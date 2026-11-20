@@ -203,6 +203,7 @@ export class ClaimLetterService {
       this.resolveStateName(stateId),
     ]);
     const nextBatchNumber = firstFreeBatchNumber(batchSlotInfo.usedBatchNumbers, formConfig.maxClaimLetters);
+    const canPrepare = getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS);
 
     const expectedUlbIds = expectedUlbs.map((u) => u.ulbId);
     const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
@@ -224,8 +225,10 @@ export class ClaimLetterService {
       claimAmountEditable: formConfig.claimAmountEditable,
       varianceLowerPercent: formConfig.varianceLowerPercent,
       varianceUpperPercent: formConfig.varianceUpperPercent,
-      canCreate: nextBatchNumber !== null && getEffectivePermissions(user).includes(Permission.PREPARE_GRANT_LETTERS),
-      createBlockedReason: nextBatchNumber === null ? allLettersInUseMessage(formConfig.maxClaimLetters) : null,
+      canCreate: nextBatchNumber !== null && canPrepare,
+      // Only for someone who could create one, or the UI offers a create action to a viewer.
+      createBlockedReason:
+        canPrepare && nextBatchNumber === null ? allLettersInUseMessage(formConfig.maxClaimLetters) : null,
     };
 
     return xviFcSuccess('Claim letter context fetched.', context);

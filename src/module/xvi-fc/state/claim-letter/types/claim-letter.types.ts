@@ -125,7 +125,7 @@ export interface ClaimLetterClaimContext {
   /** PREPARE_GRANT_LETTERS and a free place under the letter cap; stands in for permissions.canEdit before a
    *  letter exists. */
   canCreate: boolean;
-  /** Set when every place is taken (formjson 26 `meta.maxClaimLetters`). */
+  /** Set when every place is taken (formjson 26 `meta.maxClaimLetters`), for a user with PREPARE_GRANT_LETTERS only. */
   createBlockedReason: string | null;
 }
 

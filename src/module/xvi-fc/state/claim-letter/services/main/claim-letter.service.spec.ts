@@ -457,6 +457,15 @@ describe('ClaimLetterService', () => {
       );
     });
 
+    it('gives a viewer no reason when every place is taken, since a viewer cannot create one', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data).toMatchObject({ canCreate: false, nextBatchNumber: null, createBlockedReason: null });
+    });
+
     it('offers the next place up to a higher cap', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
       formJsonConfigService.loadFormConfig.mockResolvedValue({
