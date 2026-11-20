@@ -19,6 +19,26 @@ export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;
 
+/** History Status filter, in the State's terms: under review covers 15 and 5, returned covers 16 and 6. */
+export const CLAIM_LETTER_HISTORY_STATUS_FILTERS = [
+  'IN_PROGRESS',
+  'UNDER_REVIEW',
+  'RETURNED',
+  'ACKNOWLEDGED',
+  'DISCARDED',
+] as const;
+export type ClaimLetterHistoryStatusFilter = (typeof CLAIM_LETTER_HISTORY_STATUS_FILTERS)[number];
+
+/** History columns the State can sort by; `updatedAt` (Last activity) is the default. */
+export const CLAIM_LETTER_HISTORY_SORT_FIELDS = [
+  'updatedAt',
+  'submittedAt',
+  'batchNumber',
+  'ulbCount',
+  'claimedTotal',
+] as const;
+export type ClaimLetterHistorySortField = (typeof CLAIM_LETTER_HISTORY_SORT_FIELDS)[number];
+
 /** Most ULBs one batch holds, and one ULB-picker load returns; above any State's ULB count. */
 export const CLAIM_LETTER_MAX_ULBS = 1000;
 

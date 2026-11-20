@@ -13,6 +13,7 @@ import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { YearIdToLabel } from 'src/core/constants/years';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
@@ -1216,6 +1217,54 @@ describe('ClaimLetterService', () => {
       await service.listHistory(stateId.toString(), yearId.toString(), {}, stateUser);
 
       expect(query['sort']).toHaveBeenCalledWith({ updatedAt: -1, _id: -1 });
+    });
+
+    it.each([
+      ['IN_PROGRESS', { currentFormStatus: FORM_STATUS.IN_PROGRESS, isAbandoned: false }],
+      [
+        'UNDER_REVIEW',
+        { currentFormStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] } },
+      ],
+      ['RETURNED', { currentFormStatus: { $in: [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA] } }],
+      ['ACKNOWLEDGED', { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }],
+      // A return also sets isAbandoned, so Discarded leaves returned letters out (same rule as the label).
+      [
+        'DISCARDED',
+        { isAbandoned: true, currentFormStatus: { $nin: [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA] } },
+      ],
+    ] as const)('filters status %s', async (status, condition) => {
+      batchModel.find.mockReturnValue(q([]));
+
+      await service.listHistory(stateId.toString(), yearId.toString(), { status }, stateUser);
+
+      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter).toMatchObject({ assemblyStatus: 'READY', ...condition });
+    });
+
+    it('adds a batch filter only when provided', async () => {
+      batchModel.find.mockReturnValue(q([]));
+
+      await service.listHistory(stateId.toString(), yearId.toString(), {}, stateUser);
+      await service.listHistory(stateId.toString(), yearId.toString(), { batchNumber: 2 }, stateUser);
+
+      const [[withoutBatch], [withBatch]] = batchModel.find.mock.calls as [Record<string, unknown>][];
+      expect(withoutBatch).not.toHaveProperty('batchNumber');
+      expect(withBatch['batchNumber']).toBe(2);
+    });
+
+    it.each([
+      ['claimedTotal', 'asc', { 'financialSummary.currentSelectedClaim': 1, _id: 1 }],
+      ['batchNumber', 'desc', { batchNumber: -1, resubmissionNumber: -1, _id: -1 }],
+      ['submittedAt', 'asc', { submittedAt: 1, _id: 1 }],
+    ] as const)('sorts by %s %s, with _id last in the same direction', async (sortBy, sortOrder, sort) => {
+      const query = q([]);
+      batchModel.find.mockReturnValue(query);
+
+      await service.listHistory(stateId.toString(), yearId.toString(), { sortBy, sortOrder }, stateUser);
+
+      const [used] = query['sort'].mock.calls[0] as [Record<string, number>];
+      expect(used).toEqual(sort);
+      expect(Object.keys(used)).toEqual(Object.keys(sort));
     });
 
     it('returns paginated batch summaries with total count', async () => {

@@ -32,6 +32,7 @@ import {
 } from '../../constants/claim-letter.constants';
 import { assertInstallmentSupported } from '../../helpers/claim-letter-installment.helpers';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
+import { historySort, historyStatusCondition } from '../../helpers/claim-letter-history.helpers';
 import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
@@ -517,6 +518,8 @@ export class ClaimLetterService {
       assemblyStatus: 'READY',
     };
     if (query.installment !== undefined) filter.installment = query.installment;
+    if (query.batchNumber !== undefined) filter.batchNumber = query.batchNumber;
+    if (query.status) Object.assign(filter, historyStatusCondition(query.status));
 
     const page = query.page ?? CLAIM_LETTER_PAGINATION_DEFAULT_PAGE;
     const limit = query.limit ?? CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT;
@@ -524,8 +527,8 @@ export class ClaimLetterService {
     const [docs, total] = await Promise.all([
       this.batchModel
         .find(filter)
-        // Last modified first; _id breaks ties so paging never skips or repeats a letter.
-        .sort({ updatedAt: -1, _id: -1 })
+        // Last modified first unless the State picked a column.
+        .sort(historySort(query.sortBy, query.sortOrder))
         .skip((page - 1) * limit)
         .limit(limit)
         .lean<LeanClaimLetterBatch[]>()

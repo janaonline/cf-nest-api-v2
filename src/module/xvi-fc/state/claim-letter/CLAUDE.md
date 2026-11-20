@@ -40,7 +40,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   totals. Its cached `*ForDisplay` methods serve read-only display paths only; create, edit, submit
   and the letter always evaluate fresh.
 - `services/main/claim-letter.service.ts` - read paths (eligibility summary, claim context, detail,
-  history) and the signed-file upload.
+  history) and the signed-file upload. The history filters by Status (in the State's terms) and batch, and sorts by
+  column (`helpers/claim-letter-history.helpers.ts`); Last activity, newest first, by default.
 - `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
   locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
   order is eligible, ineligible, then in another batch. `limit` goes up to `CLAIM_LETTER_MAX_ULBS`
@@ -53,7 +54,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
   first) and its checks (ADR 0003).
 - `services/form-status/` - `ClaimLetterFormStatusService`, called by the SO's approve (mohua/claim-letters): in the
   caller's transaction it moves the letter's forms to 5. State forms (and the selected ULBs' Elected Body / FC Unspent rows, plus their Devolution
-  rows: `rowStatus` is null until this move, then 5)  come from the
+  rows: `rowStatus` is null until this move, then 5) come from the
   evidence frozen on the letter, from 15; each selected ULB's forms (Annual Accounts, Bank Account, SLB, DUR) are found
   live from 8 through the enabled ULB-level form-json sources, so a letter built before a ULB form became a condition
   still moves it (a ULB the letter recorded as exempt for a form is skipped). One conditional `updateMany` per
@@ -88,8 +89,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
 - `services/letter-details/` - the State-entered letter details (see "Letter details").
 - `services/final-pdf/` - the final claim letter that goes to MoHUA (see "Final claim letter").
 - `services/form-json/` - this feature's own formjson (formId 26, `CLAIM_LETTER_FORM_ID`): the
-  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR
-  0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
+  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR 0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
   `CLAIM_LETTER_VARIANCE_*_PERCENT`, used only while the switch is on), `meta.letterDetailKeys`,
   `meta.letterDetailSkipPrefill` and `meta.mergeDocuments`. Invalid entries are logged and skipped.
   `loadFormConfig` fetches the document once per call and derives all of it; never add a second
