@@ -11,16 +11,17 @@
  *   npm run seed:xvifc-mohua-om-menu                       # apply to every MoHUA menu year
  *   npm run seed:xvifc-mohua-om-menu -- --dry-run          # report only
  *   npm run seed:xvifc-mohua-om-menu -- --year <yearId>    # one year only
+ *   npm run seed:xvifc-mohua-om-menu -- --role MOHUA_PMU   # PMU: only "OM Generation History" (read-only)
  */
 import 'dotenv/config';
 import mongoose from 'mongoose';
 
 const COLLECTION = 'sidemenus';
 const MODULE = 'XVI-FC';
-const ROLE = 'MOHUA';
+const ROLES = ['MOHUA', 'MOHUA_PMU'] as const;
 const GROUP_NAME = 'OM Generation';
 const AFTER_GROUP_NAMES = ['Grant Management', 'Profile'];
-const ITEMS = [
+const ALL_ITEMS = [
   { featureKey: 'om-generation', name: 'Generate OM', icon: 'bi bi-file-earmark-plus' },
   { featureKey: 'om-history', name: 'OM Generation History', icon: 'bi bi-clock-history' },
 ];
@@ -29,6 +30,12 @@ async function main() {
   const uri = process.env.MONGO_URI;
   if (!uri) throw new Error('MONGO_URI is not set');
   const dryRun = process.argv.includes('--dry-run');
+  // MoHUA by default; `--role MOHUA_PMU` gives PMU the same row, read-only (PMU monitors MoHUA's work).
+  const roleFlag = process.argv.includes('--role');
+  const role = roleFlag ? process.argv[process.argv.indexOf('--role') + 1] : 'MOHUA';
+  if (!ROLES.includes(role as (typeof ROLES)[number])) throw new Error(`--role "${role ?? ''}" must be one of ${ROLES.join(', ')}`);
+  // PMU only monitors: it gets the history, never Generate OM.
+  const ITEMS = role === 'MOHUA' ? ALL_ITEMS : ALL_ITEMS.filter((item) => item.featureKey === 'om-history');
   const yearFlag = process.argv.includes('--year');
   const yearArg = yearFlag ? process.argv[process.argv.indexOf('--year') + 1] : undefined;
   // A bare `--year` must fail, not silently write to every year.
@@ -37,11 +44,11 @@ async function main() {
   await mongoose.connect(uri, { dbName: process.env.MONGO_DB_NAME });
   const menu = mongoose.connection.db!.collection(COLLECTION);
 
-  const scope = { module: MODULE, role: ROLE };
+  const scope = { module: MODULE, role };
   const years = (await menu.distinct('year', scope)).filter(
     (year) => !yearArg || String(year) === yearArg,
   ) as mongoose.Types.ObjectId[];
-  console.log(`${years.length} MoHUA menu year(s)${yearArg ? ` (limited to ${yearArg})` : ''}`);
+  console.log(`${years.length} ${role} menu year(s)${yearArg ? ` (limited to ${yearArg})` : ''}`);
 
   let added = 0;
   for (const year of years) {

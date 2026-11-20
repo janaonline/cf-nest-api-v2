@@ -47,3 +47,41 @@ export async function copyClaimLetterUlbsToOm(
   );
   return children.length;
 }
+
+/** A ULB of this letter whose OM row another letter holds, the clash on the unique index above. */
+export interface OmUlbHeldElsewhere {
+  ulbName: string;
+  heldBy: Types.ObjectId;
+}
+
+/**
+ * The letter's ULBs that already have an OM row from another letter for the same installment. Read only after the
+ * copy failed on the unique index, so a successful approval runs no extra query. Nothing deletes OM rows, so this is
+ * stale data (e.g. a test reset) or, once built, MoHUA's return of a verified letter.
+ */
+export async function findOmUlbsHeldElsewhere(
+  batchUlbModel: Model<ClaimLetterBatchUlb>,
+  omUlbModel: Model<OmUlb>,
+  claimLetter: Types.ObjectId,
+): Promise<OmUlbHeldElsewhere[]> {
+  const children = await batchUlbModel
+    .find({ claimLetter })
+    .select('state year installment ulbId ulbSnapshot.name')
+    .lean<Pick<ClaimUlbLean, 'state' | 'year' | 'installment' | 'ulbId' | 'ulbSnapshot'>[]>()
+    .exec();
+  if (!children.length) return [];
+
+  const { state, year, installment } = children[0];
+  const held = await omUlbModel
+    .find({ state, year, installment, ulbId: { $in: children.map((c) => c.ulbId) }, claimLetter: { $ne: claimLetter } })
+    .select('ulbId claimLetter')
+    .lean<{ ulbId: Types.ObjectId; claimLetter: Types.ObjectId }[]>()
+    .exec();
+  if (!held.length) return [];
+
+  const nameByUlb = new Map(children.map((c) => [String(c.ulbId), c.ulbSnapshot?.name ?? String(c.ulbId)]));
+  return held.map((row) => ({
+    ulbName: nameByUlb.get(String(row.ulbId)) ?? String(row.ulbId),
+    heldBy: row.claimLetter,
+  }));
+}

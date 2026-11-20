@@ -42,7 +42,6 @@ import { ClaimLetterDocumentService } from './services/document/claim-letter-doc
 import { ClaimLetterDocxService } from './services/document/claim-letter-docx.service';
 import { ClaimLetterFormJsonService } from './services/form-json/claim-letter-form-json.service';
 import { ClaimLetterLetterDetailsService } from './services/letter-details/claim-letter-letter-details.service';
-import { ClaimLetterActiveBatchService } from './services/active-batch/claim-letter-active-batch.service';
 import { ClaimLetterFinalPdfService } from './services/final-pdf/claim-letter-final-pdf.service';
 import { ClaimLetterSubmitService } from './services/submit/claim-letter-submit.service';
 import { ClaimLetterFormStatusService } from './services/form-status/claim-letter-form-status.service';
@@ -81,7 +80,6 @@ import { FormJsonModule } from 'src/master/form-json/form-json.module';
     ClaimLetterDocumentService,
     ClaimLetterDocxService,
     ClaimLetterLetterDetailsService,
-    ClaimLetterActiveBatchService,
     ClaimLetterFinalPdfService,
     ClaimLetterSubmitService,
     ClaimLetterFormStatusService,

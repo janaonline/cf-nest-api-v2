@@ -1,19 +1,24 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimLetterService } from './claim-letter.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
+import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+import { CLAIM_LETTER_BUSY_MESSAGE } from '../../helpers/claim-letter-concurrency.helpers';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { YearIdToLabel } from 'src/core/constants/years';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 
 function q<T>(value: T) {
   const chain: Record<string, jest.Mock> = {};
@@ -46,6 +51,7 @@ describe('ClaimLetterService', () => {
     evaluateStateLevelGate: jest.Mock;
     resolveUlbLevelEligibility: jest.Mock;
     countBatchUlbsWithExemptionUnderReview: jest.Mock;
+    assertStateConditionsMet: jest.Mock;
   };
   let expectedUlbSetService: { resolve: jest.Mock };
   let fileInfoNormalizer: { normalizeInboundFileInfo: jest.Mock };
@@ -56,13 +62,6 @@ describe('ClaimLetterService', () => {
     isSfcExempted: jest.Mock;
     letterQuestionsFor: jest.Mock;
   };
-  let activeBatchService: {
-    resolveActiveBatch: jest.Mock;
-    resolveBlockingBatchNumber: jest.Mock;
-    assertActive: jest.Mock;
-    blockingBatchNumberFor: jest.Mock;
-    blockedReason: jest.Mock;
-  };
   let batchModel: {
     findOne: jest.Mock;
     find: jest.Mock;
@@ -71,6 +70,17 @@ describe('ClaimLetterService', () => {
     findById: jest.Mock;
   };
   let stateModel: { findById: jest.Mock };
+  let formStatusService: { assertStateFormsStillReady: jest.Mock };
+  let undoEligibility: { touchClaimUndoGuard: jest.Mock };
+  let historyService: { findLatestRejection: jest.Mock };
+  let batchUlbModel: { find: jest.Mock };
+  let session: {
+    startTransaction: jest.Mock;
+    commitTransaction: jest.Mock;
+    abortTransaction: jest.Mock;
+    endSession: jest.Mock;
+  };
+  let connection: { startSession: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const yearId = new Types.ObjectId();
@@ -95,6 +105,7 @@ describe('ClaimLetterService', () => {
       evaluateStateLevelGate: jest.fn().mockResolvedValue({ passed: true, sources: [] }),
       resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
       countBatchUlbsWithExemptionUnderReview: jest.fn().mockResolvedValue(0),
+      assertStateConditionsMet: jest.fn().mockResolvedValue(undefined),
     };
     expectedUlbSetService = { resolve: jest.fn() };
     fileInfoNormalizer = {
@@ -112,9 +123,14 @@ describe('ClaimLetterService', () => {
       }),
     };
     formJsonConfigService = {
-      loadFormConfig: jest
-        .fn()
-        .mockResolvedValue({ questions: [], varianceLowerPercent: 90, varianceUpperPercent: 110, letterQuestions: [] }),
+      loadFormConfig: jest.fn().mockResolvedValue({
+        questions: [],
+        claimAmountEditable: false,
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+        letterQuestions: [],
+        maxClaimLetters: 3,
+      }),
       loadClaimAmountConfig: jest.fn().mockResolvedValue({ editable: false, lowerPercent: 90, upperPercent: 110 }),
     };
     letterDetailsService = {
@@ -122,13 +138,6 @@ describe('ClaimLetterService', () => {
       assertComplete: jest.fn().mockResolvedValue(undefined),
       isSfcExempted: jest.fn().mockResolvedValue(false),
       letterQuestionsFor: jest.fn().mockReturnValue([]),
-    };
-    activeBatchService = {
-      resolveActiveBatch: jest.fn().mockResolvedValue(null),
-      resolveBlockingBatchNumber: jest.fn().mockResolvedValue(null),
-      assertActive: jest.fn().mockResolvedValue(undefined),
-      blockingBatchNumberFor: jest.fn().mockReturnValue(null),
-      blockedReason: jest.fn((n: number) => `Batch ${n} is still in progress or under MoHUA review.`),
     };
     batchModel = {
       findOne: jest.fn(),
@@ -138,6 +147,17 @@ describe('ClaimLetterService', () => {
       findById: jest.fn(),
     };
     stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Test State' })) };
+    formStatusService = { assertStateFormsStillReady: jest.fn().mockResolvedValue(undefined) };
+    undoEligibility = { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) };
+    historyService = { findLatestRejection: jest.fn().mockResolvedValue(null) };
+    batchUlbModel = { find: jest.fn().mockReturnValue(q([])) };
+    session = {
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      abortTransaction: jest.fn().mockResolvedValue(undefined),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+    connection = { startSession: jest.fn().mockResolvedValue(session) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -147,8 +167,12 @@ describe('ClaimLetterService', () => {
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: ClaimLetterLetterDetailsService, useValue: letterDetailsService },
-        { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
+        { provide: ClaimLetterFormStatusService, useValue: formStatusService },
+        { provide: PmuUndoEligibilityService, useValue: undoEligibility },
+        { provide: ClaimLetterHistoryService, useValue: historyService },
+        { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
+        { provide: getModelToken(ClaimLetterBatchUlb.name), useValue: batchUlbModel },
         { provide: getModelToken(State.name), useValue: stateModel },
       ],
     }).compile();
@@ -196,7 +220,6 @@ describe('ClaimLetterService', () => {
         ulbLevelCriteria: [],
         ulbReadiness: { eligible: 2, total: 2 },
         remainingUlbCount: 0,
-        activeBatchNumber: null,
         claimAmountEditable: false,
       });
     });
@@ -374,7 +397,7 @@ describe('ClaimLetterService', () => {
         availableToClaim: 20,
       });
       eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['1']);
-      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }]));
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1, currentFormStatus: 2 }]));
 
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
 
@@ -383,6 +406,7 @@ describe('ClaimLetterService', () => {
         expectedUlbCount: 2,
         batchSlotsUsed: 1,
         batchSlotsMax: 3,
+        openDraftCount: 1,
         nextBatchNumber: 2,
         financialOverview: {
           totalInstallmentAllocation: 25,
@@ -410,28 +434,84 @@ describe('ClaimLetterService', () => {
       expect(result.data?.canCreate).toBe(true);
     });
 
-    it('turns canCreate off with a reason while another batch is active', async () => {
+    it('keeps canCreate on while other letters are drafts or under review (ADR 0009)', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      activeBatchService.resolveActiveBatch.mockResolvedValue({ _id: new Types.ObjectId(), batchNumber: 1 });
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }]));
       const reviewerUser: AuthUser = { ...stateUser, xviFcSubrole: 'reviewer' };
 
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
 
-      expect(result.data?.canCreate).toBe(false);
-      expect(result.data?.createBlockedReason).toMatch(/Batch 1/);
+      expect(result.data).toMatchObject({ canCreate: true, createBlockedReason: null, nextBatchNumber: 3 });
+    });
+
+    it('turns canCreate off with a reason once every place under the formjson cap is taken', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+      const reviewerUser: AuthUser = { ...stateUser, xviFcSubrole: 'reviewer' };
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, reviewerUser);
+
+      expect(result.data).toMatchObject({ canCreate: false, nextBatchNumber: null, batchSlotsMax: 3 });
+      expect(result.data?.createBlockedReason).toBe(
+        'All 3 claim letters for this installment are in use. A letter that is discarded or returned frees its place.',
+      );
+    });
+
+    it('gives a viewer no reason when every place is taken, since a viewer cannot create one', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data).toMatchObject({ canCreate: false, nextBatchNumber: null, createBlockedReason: null });
+    });
+
+    it('offers the next place up to a higher cap', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [],
+        claimAmountEditable: false,
+        varianceLowerPercent: 90,
+        varianceUpperPercent: 110,
+        letterQuestions: [],
+        maxClaimLetters: 5,
+      });
+      batchModel.find.mockReturnValue(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data).toMatchObject({ batchSlotsMax: 5, batchSlotsUsed: 3, nextBatchNumber: 4 });
+    });
+
+    it('counts only the open drafts, for the last-draft note of a new letter (ADR 0009)', async () => {
+      expectedUlbSetService.resolve.mockResolvedValue([]);
+      batchModel.find.mockReturnValue(
+        q([
+          { batchNumber: 1, currentFormStatus: 15 },
+          { batchNumber: 2, currentFormStatus: 2 },
+          { batchNumber: 3, currentFormStatus: 5 },
+        ]),
+      );
+
+      const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
+
+      expect(result.data).toMatchObject({ batchSlotsUsed: 3, openDraftCount: 1 });
     });
 
     it('sources the claim-amount switch and band from ClaimLetterFormJsonService, keyed by yearId', async () => {
       expectedUlbSetService.resolve.mockResolvedValue([]);
-      formJsonConfigService.loadClaimAmountConfig.mockResolvedValue({
-        editable: true,
-        lowerPercent: 80,
-        upperPercent: 120,
+      formJsonConfigService.loadFormConfig.mockResolvedValue({
+        questions: [],
+        claimAmountEditable: true,
+        varianceLowerPercent: 80,
+        varianceUpperPercent: 120,
+        letterQuestions: [],
+        maxClaimLetters: 3,
       });
 
       const result = await service.getClaimContext(stateId.toString(), yearId.toString(), 1, stateUser);
 
-      expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledWith(yearId.toString());
+      expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledWith(yearId.toString());
       expect(result.data?.claimAmountEditable).toBe(true);
       expect(result.data?.varianceLowerPercent).toBe(80);
       expect(result.data?.varianceUpperPercent).toBe(120);
@@ -867,51 +947,249 @@ describe('ClaimLetterService', () => {
       expect(letterDetailsService.evaluate).toHaveBeenCalledWith({ letterNo: 'A/1' }, formConfig, [letterNoField]);
     });
 
-    it('reports the blocking batch, turns off final submit and hides the letter action with the reason', async () => {
+    describe("a draft beside the State's other letters (ADR 0009)", () => {
       const signedFileField = { key: 'signedClaimFile', formFieldType: 'file' };
-      batchModel.findOne.mockReturnValue(
-        q({
-          _id: new Types.ObjectId(),
-          state: stateId,
-          year: yearId,
-          installment: 1,
-          batchNumber: 2,
-          version: 1,
-          revision: 0,
-          currentFormStatus: 2,
-          assemblyStatus: 'READY',
-          ulbCount: 3,
-          isAbandoned: false,
-          signedClaimFile: { path: 'x/signed.pdf' },
-          financialSummary,
-          createdAt: new Date(),
-        }),
-      );
-      formJsonConfigService.loadFormConfig.mockResolvedValue({
-        questions: [signedFileField],
-        varianceLowerPercent: 90,
-        varianceUpperPercent: 110,
-        letterQuestions: [],
+      const draftId = new Types.ObjectId();
+      const draft = (extra: Record<string, unknown> = {}) => ({
+        _id: draftId,
+        state: stateId,
+        year: yearId,
+        installment: 1,
+        batchNumber: 2,
+        version: 1,
+        revision: 0,
+        currentFormStatus: 2,
+        assemblyStatus: 'READY',
+        ulbCount: 3,
+        isAbandoned: false,
+        signedClaimFile: { path: 'x/signed.pdf' },
+        financialSummary: { ...financialSummary, currentSelectedClaim: 400 },
+        createdAt: new Date(),
+        ...extra,
       });
-      activeBatchService.resolveBlockingBatchNumber.mockResolvedValue(1);
       const adminUser: AuthUser = { ...stateUser, xviFcSubrole: 'admin' };
 
-      const result = await service.getDetail(new Types.ObjectId().toString(), adminUser);
+      beforeEach(() => {
+        formJsonConfigService.loadFormConfig.mockResolvedValue({
+          questions: [signedFileField],
+          claimAmountEditable: false,
+          varianceLowerPercent: 90,
+          varianceUpperPercent: 110,
+          letterQuestions: [],
+          maxClaimLetters: 3,
+        });
+      });
 
-      expect(result.data?.blockedByBatchNumber).toBe(1);
-      expect(result.data?.blockedReason).toMatch(/Batch 1/);
-      // The guard gets the batch's own status, so an abandoned or finished batch is never blocked.
-      const [guarded] = activeBatchService.resolveBlockingBatchNumber.mock.calls[0] as [
-        { currentFormStatus: unknown; isAbandoned: unknown },
-      ];
-      expect(typeof guarded.currentFormStatus).toBe('number');
-      expect(guarded.isAbandoned).toBe(false);
-      expect(result.data?.permissions.canFinalSubmit).toBe(false);
-      // Signed, but the final claim letter is not offered while another batch is active.
-      expect(result.data?.finalClaimLetterStage).toBeNull();
-      const content = result.data?.questions?.[0]?.supportingContent?.[0];
-      expect(content?.description).toMatch(/Batch 1/);
-      expect(content?.actions?.every((a) => a.visible === false)).toBe(true);
+      it('hides the letter sections and turns off submit while a State-level condition fails', async () => {
+        batchModel.findOne.mockReturnValue(q(draft()));
+        eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+          passed: false,
+          sources: [{ formType: 'SFC_STATUS', displayLabel: 'SFC Status', result: 'FAILED' }],
+        });
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        const message =
+          'SFC Status is not verified yet. This claim letter can be downloaded, signed and submitted once it is verified.';
+        expect(data?.blockedReason).toBe(message);
+        expect(data?.stateFormNotice).toBe(message);
+        expect(data?.permissions.canFinalSubmit).toBe(false);
+        expect(data?.finalClaimLetterStage).toBeNull();
+        const content = data?.questions?.[0]?.supportingContent?.[0];
+        expect(content?.description).toBe(message);
+        expect(content?.actions?.every((a) => a.visible === false)).toBe(true);
+      });
+
+      it('names the letter the State form came back with while it is being corrected', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            draft({
+              signedClaimFile: null,
+              stateFormReturnNotice: {
+                letterName: 'Claim Letter 1',
+                formNames: ['SFC Status'],
+                signedFileRemoved: false,
+              },
+            }),
+          ),
+        );
+        eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+          passed: false,
+          sources: [{ formType: 'SFC_STATUS', displayLabel: 'SFC Status', result: 'FAILED' }],
+        });
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.stateFormNotice).toBe(
+          'SFC Status was returned for correction by MoHUA with Claim Letter 1. You can download, sign and submit this ' +
+            'letter once it is corrected and verified.',
+        );
+      });
+
+      it('explains a removed signed letter until the next upload, even once the State forms pass again', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            draft({
+              signedClaimFile: null,
+              stateFormReturnNotice: {
+                letterName: 'Claim Letter 1',
+                formNames: ['SFC Status', 'GTC'],
+                signedFileRemoved: true,
+              },
+            }),
+          ),
+        );
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.blockedReason).toBeNull();
+        expect(data?.stateFormNotice).toBe(
+          'Your signed letter was removed because SFC Status and GTC were returned for correction by MoHUA with Claim ' +
+            'Letter 1. Once they are corrected and verified, download this letter again, get it signed by the concerned ' +
+            'authority and upload it.',
+        );
+      });
+
+      it('names a State form failing beyond the notice in the same banner', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            draft({
+              signedClaimFile: null,
+              stateFormReturnNotice: {
+                letterName: 'Claim Letter 1',
+                formIds: [22],
+                formNames: ['SFC Status'],
+                signedFileRemoved: true,
+              },
+            }),
+          ),
+        );
+        eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+          passed: false,
+          sources: [
+            { formId: 22, formType: 'SFC_STATUS', displayLabel: 'SFC Status', result: 'PASSED' },
+            { formId: 35, formType: 'GTC', displayLabel: 'Grant Transfer Certificate', result: 'FAILED' },
+          ],
+        });
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.stateFormNotice).toBe(
+          'Your signed letter was removed because SFC Status was returned for correction by MoHUA with Claim Letter 1. ' +
+            'Once it is corrected and verified, download this letter again, get it signed by the concerned authority ' +
+            'and upload it. Grant Transfer Certificate is not verified yet. This claim letter can be downloaded, signed ' +
+            'and submitted once it is verified.',
+        );
+      });
+
+      it('does not repeat the block reason when only the notice forms fail', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            draft({
+              signedClaimFile: null,
+              stateFormReturnNotice: {
+                letterName: 'Claim Letter 1',
+                formIds: [22],
+                formNames: ['SFC Status'],
+                signedFileRemoved: false,
+              },
+            }),
+          ),
+        );
+        eligibilityService.evaluateStateLevelGateForDisplay.mockResolvedValue({
+          passed: false,
+          sources: [{ formId: 22, formType: 'SFC_STATUS', displayLabel: 'SFC Status', result: 'FAILED' }],
+        });
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.stateFormNotice).toBe(
+          'SFC Status was returned for correction by MoHUA with Claim Letter 1. You can download, sign and submit this ' +
+            'letter once it is corrected and verified.',
+        );
+      });
+
+      it("flags the last draft and shows the other letters' money as it is now", async () => {
+        batchModel.findOne.mockReturnValue(q(draft()));
+        // Every place of 3 taken, and no other draft open.
+        batchModel.find.mockReturnValue(
+          q([
+            { _id: draftId, currentFormStatus: 2 },
+            { _id: new Types.ObjectId(), currentFormStatus: 15 },
+            { _id: new Types.ObjectId(), currentFormStatus: 5 },
+          ]),
+        );
+        eligibilityService.getFinancialOverview.mockResolvedValue({
+          totalInstallmentAllocation: 1000,
+          totalAlreadyAcknowledged: 0,
+          totalClaimInProgress: 300,
+          totalClaimInDraft: 100,
+          availableToClaim: 600,
+        });
+        expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'u1' }, { ulbId: 'u2' }, { ulbId: 'u3' }]);
+        eligibilityService.resolveRemainingUlbIds.mockResolvedValue(['u3']);
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.isLastPlace).toBe(true);
+        // Read with the flag, so the page never pairs a fresh flag with an old count.
+        expect(data?.remainingUlbCount).toBe(1);
+        expect(eligibilityService.resolveRemainingUlbIds).toHaveBeenCalledWith(
+          stateId.toString(),
+          yearId.toString(),
+          1,
+          ['u1', 'u2', 'u3'],
+        );
+        expect(batchModel.find).toHaveBeenCalledWith(expect.objectContaining({ installment: 1, isAbandoned: false }));
+        expect(eligibilityService.getFinancialOverview).toHaveBeenCalledWith(
+          stateId.toString(),
+          yearId.toString(),
+          1,
+          draftId.toString(),
+        );
+        expect(data?.financialSummary).toMatchObject({
+          totalClaimInProgress: 300,
+          totalClaimInDraft: 100,
+          availableToClaim: 600,
+          currentSelectedClaim: 400,
+          remainingIfAcknowledged: 200,
+        });
+        expect(data?.blockedReason).toBeNull();
+        expect(data?.stateFormNotice).toBeNull();
+      });
+
+      it('is not the last draft while a place is still free', async () => {
+        batchModel.findOne.mockReturnValue(q(draft()));
+        batchModel.find.mockReturnValue(
+          q([
+            { _id: draftId, currentFormStatus: 2 },
+            { _id: new Types.ObjectId(), currentFormStatus: 15 },
+          ]),
+        );
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.isLastPlace).toBe(false);
+        expect(data?.remainingUlbCount).toBeNull();
+        expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
+      });
+
+      it('is not the last draft while another draft is open, even with every place taken', async () => {
+        batchModel.findOne.mockReturnValue(q(draft()));
+        // Four drafts under a cap lowered to 3.
+        batchModel.find.mockReturnValue(
+          q([
+            { _id: draftId, currentFormStatus: 2 },
+            { _id: new Types.ObjectId(), currentFormStatus: 2 },
+            { _id: new Types.ObjectId(), currentFormStatus: 2 },
+            { _id: new Types.ObjectId(), currentFormStatus: 2 },
+          ]),
+        );
+
+        const { data } = await service.getDetail(draftId.toString(), adminUser);
+
+        expect(data?.isLastPlace).toBe(false);
+      });
     });
 
     it('degrades to an empty questions list (not a 500) when the formjsons entry is not yet seeded', async () => {
@@ -944,6 +1222,108 @@ describe('ClaimLetterService', () => {
 
       expect(result.data?.questions).toEqual([]);
     });
+
+    describe('returnSummary', () => {
+      const claimLetterId = new Types.ObjectId();
+      const agra = new Types.ObjectId();
+      const mathura = new Types.ObjectId();
+      const letter = (overrides: Record<string, unknown>) => ({
+        _id: claimLetterId,
+        state: stateId,
+        year: yearId,
+        installment: 1,
+        batchNumber: 1,
+        version: 1,
+        revision: 1,
+        assemblyStatus: 'READY',
+        ulbCount: 2,
+        isAbandoned: true,
+        financialSummary,
+        createdAt: new Date(),
+        ...overrides,
+      });
+
+      it('lists what the SO returned on a letter it returned itself', async () => {
+        batchModel.findOne.mockReturnValue(q(letter({ currentFormStatus: FORM_STATUS.RETURNED_BY_SO })));
+        historyService.findLatestRejection.mockResolvedValue({
+          rejectedSourceRefs: [
+            { formId: 22, formDocumentId: new Types.ObjectId(), ulbId: null, rowDocumentId: null, remark: 'Fix' },
+            { formId: 30, formDocumentId: new Types.ObjectId(), ulbId: mathura, rowDocumentId: null, remark: 'Audit' },
+            {
+              formId: 23,
+              formDocumentId: new Types.ObjectId(),
+              ulbId: agra,
+              rowDocumentId: new Types.ObjectId(),
+              remark: 'Row',
+            },
+            { formId: 23, formDocumentId: new Types.ObjectId(), ulbId: null, rowDocumentId: null, remark: 'See rows' },
+          ],
+          changedBy: null,
+          changedAt: new Date(),
+        });
+        batchUlbModel.find.mockReturnValue(
+          q([
+            { ulbId: mathura, ulbSnapshot: { name: 'Mathura' }, soDecision: { remark: 'Audit report missing' } },
+            { ulbId: agra, ulbSnapshot: { name: 'Agra' }, soDecision: { remark: null } },
+          ]),
+        );
+
+        const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+        expect(historyService.findLatestRejection).toHaveBeenCalledWith(claimLetterId);
+        expect(batchUlbModel.find).toHaveBeenCalledWith({
+          claimLetter: claimLetterId,
+          'soDecision.status': 'RETURNED',
+        });
+        expect(data!.returnSummary).toEqual({
+          stateForms: [
+            { formId: 22, name: 'SFC Status', ulbCount: 0 },
+            { formId: 23, name: 'Elected Body Status', ulbCount: 1 },
+          ],
+          ulbs: [
+            { ulbId: String(agra), ulbName: 'Agra', items: ['Elected Body Status'], remark: null },
+            {
+              ulbId: String(mathura),
+              ulbName: 'Mathura',
+              items: ['Annual Accounts (Audited)'],
+              remark: 'Audit report missing',
+            },
+          ],
+        });
+      });
+
+      it('has none for a letter returned with another letter, and makes no extra reads', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            letter({
+              currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
+              returnedWith: {
+                claimLetter: new Types.ObjectId(),
+                letterName: 'Claim Letter 2',
+                formNames: ['SFC Status'],
+              },
+            }),
+          ),
+        );
+
+        const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+        expect(data!.returnSummary).toBeNull();
+        expect(historyService.findLatestRejection).not.toHaveBeenCalled();
+        expect(batchUlbModel.find).not.toHaveBeenCalled();
+      });
+
+      it('has none for a draft or a letter under review', async () => {
+        for (const currentFormStatus of [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_SO]) {
+          batchModel.findOne.mockReturnValue(q(letter({ currentFormStatus, isAbandoned: false })));
+
+          const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+          expect(data!.returnSummary).toBeNull();
+        }
+        expect(historyService.findLatestRejection).not.toHaveBeenCalled();
+      });
+    });
   });
 
   describe('listHistory', () => {
@@ -973,6 +1353,63 @@ describe('ClaimLetterService', () => {
       expect(filter['installment']).toBe(1);
     });
 
+    it('lists the last modified letter first, with _id breaking ties so paging is stable', async () => {
+      const query = q([]);
+      batchModel.find.mockReturnValue(query);
+
+      await service.listHistory(stateId.toString(), yearId.toString(), {}, stateUser);
+
+      expect(query['sort']).toHaveBeenCalledWith({ updatedAt: -1, _id: -1 });
+    });
+
+    it.each([
+      ['IN_PROGRESS', { currentFormStatus: FORM_STATUS.IN_PROGRESS, isAbandoned: false }],
+      [
+        'UNDER_REVIEW',
+        { currentFormStatus: { $in: [FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.UNDER_REVIEW_BY_MOHUA] } },
+      ],
+      ['RETURNED', { currentFormStatus: { $in: [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA] } }],
+      ['ACKNOWLEDGED', { currentFormStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA }],
+      // A return also sets isAbandoned, so Discarded leaves returned letters out (same rule as the label).
+      [
+        'DISCARDED',
+        { isAbandoned: true, currentFormStatus: { $nin: [FORM_STATUS.RETURNED_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA] } },
+      ],
+    ] as const)('filters status %s', async (status, condition) => {
+      batchModel.find.mockReturnValue(q([]));
+
+      await service.listHistory(stateId.toString(), yearId.toString(), { status }, stateUser);
+
+      const [filter] = batchModel.find.mock.calls[0] as [Record<string, unknown>];
+      expect(filter).toMatchObject({ assemblyStatus: 'READY', ...condition });
+    });
+
+    it('adds a batch filter only when provided', async () => {
+      batchModel.find.mockReturnValue(q([]));
+
+      await service.listHistory(stateId.toString(), yearId.toString(), {}, stateUser);
+      await service.listHistory(stateId.toString(), yearId.toString(), { batchNumber: 2 }, stateUser);
+
+      const [[withoutBatch], [withBatch]] = batchModel.find.mock.calls as [Record<string, unknown>][];
+      expect(withoutBatch).not.toHaveProperty('batchNumber');
+      expect(withBatch['batchNumber']).toBe(2);
+    });
+
+    it.each([
+      ['claimedTotal', 'asc', { 'financialSummary.currentSelectedClaim': 1, _id: 1 }],
+      ['batchNumber', 'desc', { batchNumber: -1, resubmissionNumber: -1, _id: -1 }],
+      ['submittedAt', 'asc', { submittedAt: 1, _id: 1 }],
+    ] as const)('sorts by %s %s, with _id last in the same direction', async (sortBy, sortOrder, sort) => {
+      const query = q([]);
+      batchModel.find.mockReturnValue(query);
+
+      await service.listHistory(stateId.toString(), yearId.toString(), { sortBy, sortOrder }, stateUser);
+
+      const [used] = query['sort'].mock.calls[0] as [Record<string, number>];
+      expect(used).toEqual(sort);
+      expect(Object.keys(used)).toEqual(Object.keys(sort));
+    });
+
     it('returns paginated batch summaries with total count', async () => {
       const claimLetterId = new Types.ObjectId();
       batchModel.find.mockReturnValue(
@@ -993,6 +1430,7 @@ describe('ClaimLetterService', () => {
             supersedes: null,
             supersededBy: null,
             createdAt: new Date(),
+            updatedAt: new Date(),
           },
         ]),
       );
@@ -1067,6 +1505,18 @@ describe('ClaimLetterService', () => {
       expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
+    it('refuses while a State-level condition fails, so nothing is signed before a returned form is fixed', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
+      eligibilityService.assertStateConditionsMet.mockRejectedValue(
+        new ConflictException('SFC Status is not verified yet.'),
+      );
+
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(
+        'SFC Status is not verified yet.',
+      );
+      expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
     it('persists the normalized file, returns the updated summary, and never writes history (file upload is not a workflow transition — docs/adr/0003-workflow-transitions.md)', async () => {
       batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
       batchModel.findOneAndUpdate.mockReturnValue(
@@ -1088,8 +1538,100 @@ describe('ClaimLetterService', () => {
       const result = await service.uploadSignedFile('x', fileRef, stateUser);
 
       expect(result.data?.hasSignedFile).toBe(true);
+      const [filter, update] = batchModel.findOneAndUpdate.mock.calls[0] as [
+        Record<string, unknown>,
+        { $set: Record<string, unknown> },
+      ];
+      // No notice was read, so a return that leaves one before this write makes it a conflict (ADR 0009).
+      expect(filter).toMatchObject({ _id: 'x', currentFormStatus: 2, isAbandoned: false, stateFormReturnNotice: null });
+      // A new signed letter answers the notice left by a State form return (ADR 0009).
+      expect(update.$set['stateFormReturnNotice']).toBeNull();
+    });
+
+    it('pins the notice it read, so a newer State form return in between is a conflict, not cleared', async () => {
+      const at = new Date('2026-11-19T10:00:00Z');
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: 'x',
+          state: stateId,
+          currentFormStatus: 2,
+          stateFormReturnNotice: { letterName: 'Claim Letter 1', at },
+        }),
+      );
+      batchModel.findOneAndUpdate.mockReturnValue(q(null));
+
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow(
+        'The claim letter changed while uploading. Reload and try again.',
+      );
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter).toMatchObject({ _id: 'x', currentFormStatus: 2, isAbandoned: false });
+      expect(filter['stateFormReturnNotice.at']).toBe(at);
+    });
+
+    it('takes the per-State guard and re-checks its State forms inside the transaction, before the write', async () => {
+      const order: string[] = [];
+      const parentId = new Types.ObjectId();
+      batchModel.findOne.mockReturnValue(q({ _id: parentId, state: stateId, year: yearId, currentFormStatus: 2 }));
+      undoEligibility.touchClaimUndoGuard.mockImplementation(() => order.push('guard'));
+      formStatusService.assertStateFormsStillReady.mockImplementation(() => order.push('state forms'));
+      batchModel.findOneAndUpdate.mockImplementation(() => {
+        order.push('write');
+        return q({ _id: parentId, state: stateId, currentFormStatus: 2, financialSummary, createdAt: new Date() });
+      });
+
+      await service.uploadSignedFile(String(parentId), fileRef, stateUser);
+
+      expect(order).toEqual(['guard', 'state forms', 'write']);
+      expect(undoEligibility.touchClaimUndoGuard).toHaveBeenCalledWith(stateId, yearId, session);
+      expect(formStatusService.assertStateFormsStillReady).toHaveBeenCalledWith(parentId, session);
+      const [, , options] = batchModel.findOneAndUpdate.mock.calls[0] as [unknown, unknown, { session: unknown }];
+      expect(options.session).toBe(session);
+      expect(session.commitTransaction).toHaveBeenCalled();
+      expect(session.endSession).toHaveBeenCalled();
+    });
+
+    it('writes nothing when an SO return reopened a State form after the gate check, even if the notice still matches', async () => {
+      // A second return leaves a "signed letter removed" notice as it was, so only this re-check catches it.
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: 'x',
+          state: stateId,
+          year: yearId,
+          currentFormStatus: 2,
+          stateFormReturnNotice: { at: new Date('2026-11-19T10:00:00Z'), signedFileRemoved: true },
+        }),
+      );
+      formStatusService.assertStateFormsStillReady.mockRejectedValue(
+        new ConflictException('A State form changed while you were working on this letter. Reload and try again.'),
+      );
+
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow('A State form changed');
+      expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.endSession).toHaveBeenCalled();
+    });
+
+    it('turns a write conflict with an SO decision on the same State into a 409 to retry', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, year: yearId, currentFormStatus: 2 }));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({ _id: 'x', state: stateId, currentFormStatus: 2, financialSummary, createdAt: new Date() }),
+      );
+      session.commitTransaction.mockRejectedValue(Object.assign(new Error('WriteConflict'), { code: 112 }));
+
+      const err = await service.uploadSignedFile('x', fileRef, stateUser).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).message).toBe(CLAIM_LETTER_BUSY_MESSAGE);
+    });
+
+    it('starts no transaction when the gate check or the same-file check ends the upload first', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
+      eligibilityService.assertStateConditionsMet.mockRejectedValueOnce(new ConflictException('blocked'));
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow('blocked');
+
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({ file: undefined, errors: [] });
+      await service.uploadSignedFile('x', fileRef, stateUser);
+
+      expect(connection.startSession).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the guarded update matches nothing (concurrent status change)', async () => {

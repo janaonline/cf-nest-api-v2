@@ -4,6 +4,7 @@ import { Types } from 'mongoose';
 import { ClaimLetterDocxService } from './claim-letter-docx.service';
 import type { ClaimLetterDocumentService } from './claim-letter-document.service';
 import type { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
+import type { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import type { ClaimLetterFullDocument, ClaimLetterParagraph } from '../../types/claim-letter-document.types';
 
 const p = (text: string, extra: Partial<ClaimLetterParagraph> = {}): ClaimLetterParagraph => ({
@@ -97,19 +98,29 @@ async function documentXml(service: ClaimLetterDocxService, doc: ClaimLetterFull
 describe('ClaimLetterDocxService', () => {
   const documentService = { buildFullDocument: jest.fn(), loadParent: jest.fn() };
   const letterDetailsService = { assertComplete: jest.fn() };
+  const eligibilityService = { assertStateConditionsMet: jest.fn() };
   const service = new ClaimLetterDocxService(
     documentService as unknown as ClaimLetterDocumentService,
     letterDetailsService as unknown as ClaimLetterLetterDetailsService,
+    eligibilityService as unknown as ClaimLetterEligibilityService,
   );
 
   describe('generateForDownload', () => {
     const user = { _id: 'u1' } as never;
-    const parent = { _id: new Types.ObjectId(), year: new Types.ObjectId(), letterDetails: {} };
+    const parent = {
+      _id: new Types.ObjectId(),
+      state: new Types.ObjectId(),
+      year: new Types.ObjectId(),
+      installment: 1,
+      currentFormStatus: 2,
+      letterDetails: {},
+    };
 
     beforeEach(() => {
       documentService.loadParent.mockResolvedValue(parent);
       documentService.buildFullDocument.mockResolvedValue(fullDocument());
       letterDetailsService.assertComplete.mockReset();
+      eligibilityService.assertStateConditionsMet.mockReset().mockResolvedValue(undefined);
     });
 
     it('checks the letter details before building the file', async () => {
@@ -133,6 +144,25 @@ describe('ClaimLetterDocxService', () => {
 
       await expect(service.generateForDownload('claim-1', user)).rejects.toThrow('incomplete');
       expect(documentService.buildFullDocument).not.toHaveBeenCalled();
+    });
+
+    it("refuses a draft's download while a State-level condition fails (ADR 0009)", async () => {
+      documentService.buildFullDocument.mockClear();
+      eligibilityService.assertStateConditionsMet.mockRejectedValue(new Error('SFC Status is not verified yet.'));
+
+      await expect(service.generateForDownload('claim-1', user)).rejects.toThrow('SFC Status is not verified yet.');
+      expect(eligibilityService.assertStateConditionsMet).toHaveBeenCalledWith(
+        String(parent.state),
+        String(parent.year),
+        1,
+      );
+      expect(documentService.buildFullDocument).not.toHaveBeenCalled();
+    });
+
+    it('does not check the State-level conditions for a submitted letter', async () => {
+      documentService.loadParent.mockResolvedValue({ ...parent, currentFormStatus: 15 });
+      await service.generateForDownload('claim-1', user);
+      expect(eligibilityService.assertStateConditionsMet).not.toHaveBeenCalled();
     });
   });
 

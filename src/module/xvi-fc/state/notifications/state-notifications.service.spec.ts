@@ -91,6 +91,16 @@ describe('StateNotificationsService', () => {
     expect(result.data.claimLettersReturned).toBe(0);
   });
 
+  it('keeps the form and ULB indicators when the claim-letter count fails, reporting 0 returns', async () => {
+    claimLetterModel.aggregate.mockReturnValue({ exec: () => Promise.reject(new Error('db down')) });
+
+    const result = await service.getNotifications(stateId, yearId, stateUser);
+
+    expect(result.data.forms).toHaveLength(2);
+    expect(result.data.ulbSubmissionsAwaitingReview).toBe(7);
+    expect(result.data.claimLettersReturned).toBe(0);
+  });
+
   it("counts only this state and year's letters returned by the SO (16) or MoHUA (6)", async () => {
     await service.getNotifications(stateId, yearId, stateUser);
 

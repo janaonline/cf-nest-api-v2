@@ -31,6 +31,7 @@ function batchDoc(overrides: Record<string, unknown> = {}): Record<string, unkno
     supersedes: null,
     supersededBy: null,
     createdAt: new Date('2026-07-01T00:00:00.000Z'),
+    updatedAt: new Date('2026-07-02T10:30:00.000Z'),
     ...overrides,
   };
 }
@@ -48,6 +49,12 @@ function mockUser(overrides: Partial<AuthUser> = {}): AuthUser {
 }
 
 describe('mapClaimLetterBatchDocToSummary', () => {
+  it('returns the last write time for the History "Last activity" column', () => {
+    expect(mapClaimLetterBatchDocToSummary(batchDoc(), mockUser()).updatedAt).toEqual(
+      new Date('2026-07-02T10:30:00.000Z'),
+    );
+  });
+
   it('returns the -R number, 0 for a letter saved before the field existed', () => {
     expect(mapClaimLetterBatchDocToSummary(batchDoc(), mockUser()).resubmissionNumber).toBe(0);
     expect(mapClaimLetterBatchDocToSummary(batchDoc({ resubmissionNumber: 2 }), mockUser()).resubmissionNumber).toBe(2);

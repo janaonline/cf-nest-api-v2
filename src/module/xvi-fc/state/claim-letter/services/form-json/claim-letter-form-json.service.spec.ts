@@ -100,7 +100,30 @@ describe('ClaimLetterFormJsonService', () => {
         letterSkipPrefill: new Set(),
         letterConfigured: false,
         mergeDocuments: [],
+        maxClaimLetters: 3,
       });
+    });
+
+    it('reads meta.maxClaimLetters, a whole number 1-10 (ADR 0009)', async () => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: { maxClaimLetters: 5 } });
+      expect((await service.loadFormConfig(yearId)).maxClaimLetters).toBe(5);
+      expect(await service.loadMaxClaimLetters(yearId)).toBe(5);
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['0', 0],
+      ['11', 11],
+      ['2.5', 2.5],
+      ['a string', '4'],
+      ['null', null],
+    ])('uses 3 when meta.maxClaimLetters is %s', async (_label, value) => {
+      formJsonService['findActiveByDesignYearAndFormId'] = jest
+        .fn()
+        .mockResolvedValue({ ...CLAIM_LETTER_FORM_JSON, meta: value === undefined ? {} : { maxClaimLetters: value } });
+      expect((await service.loadFormConfig(yearId)).maxClaimLetters).toBe(3);
     });
 
     it('propagates non-NotFoundException errors', async () => {

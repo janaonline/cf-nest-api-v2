@@ -28,6 +28,7 @@ describe('MohuaClaimLettersService', () => {
     findOne: jest.Mock;
     findOneAndUpdate: jest.Mock<unknown, WriteCall>;
     aggregate: jest.Mock;
+    updateMany: jest.Mock<Promise<{ modifiedCount: number }>, WriteCall>;
   };
   let batchUlbModel: {
     find: jest.Mock;
@@ -39,7 +40,7 @@ describe('MohuaClaimLettersService', () => {
   };
   let exemptionModel: { find: jest.Mock };
   let exemptionService: { approve: jest.Mock; reject: jest.Mock };
-  let omUlbModel: { countDocuments: jest.Mock; insertMany: jest.Mock };
+  let omUlbModel: { countDocuments: jest.Mock; insertMany: jest.Mock; find: jest.Mock };
   let grantAllocationModel: { find: jest.Mock };
   let lockModel: { deleteMany: jest.Mock };
   let fileTokens: { signFileUrlForSession: jest.Mock };
@@ -49,9 +50,14 @@ describe('MohuaClaimLettersService', () => {
     recheckClaimLetter: jest.Mock;
   };
   let expectedUlbs: { resolve: jest.Mock; idsByState: jest.Mock };
-  let formStatus: { moveFormsToMohuaReview: jest.Mock; returnFormsForCorrection: jest.Mock };
+  let formStatus: {
+    moveFormsToMohuaReview: jest.Mock;
+    returnFormsForCorrection: jest.Mock;
+    describeReturnableStateForms: jest.Mock;
+  };
+  let undoEligibility: { touchClaimUndoGuard: jest.Mock };
   let returnNotifications: { notifyClaimLetterReturned: jest.Mock };
-  let history: { recordTransition: jest.Mock; findLatestRejection: jest.Mock };
+  let history: { recordTransition: jest.Mock; recordTransitions: jest.Mock; findLatestRejection: jest.Mock };
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
@@ -89,6 +95,7 @@ describe('MohuaClaimLettersService', () => {
       findOne: jest.fn().mockReturnValue(q(batch())),
       findOneAndUpdate: jest.fn<unknown, WriteCall>().mockReturnValue(q({ _id: batchId })),
       aggregate: jest.fn().mockReturnValue(q([])),
+      updateMany: jest.fn<Promise<{ modifiedCount: number }>, WriteCall>().mockResolvedValue({ modifiedCount: 0 }),
     };
     batchUlbModel = {
       find: jest.fn().mockReturnValue(q([])),
@@ -117,9 +124,15 @@ describe('MohuaClaimLettersService', () => {
     formStatus = {
       moveFormsToMohuaReview: jest.fn().mockResolvedValue({ moved: {} }),
       returnFormsForCorrection: jest.fn().mockResolvedValue([]),
+      describeReturnableStateForms: jest.fn().mockResolvedValue([
+        { formId: 22, returnable: true, lockReason: null, acceptedWithLetter: null },
+        { formId: 35, returnable: true, lockReason: null, acceptedWithLetter: null },
+      ]),
     };
+    undoEligibility = { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) };
     history = {
       recordTransition: jest.fn().mockResolvedValue(undefined),
+      recordTransitions: jest.fn().mockResolvedValue(undefined),
       findLatestRejection: jest.fn().mockResolvedValue(null),
     };
     session = {
@@ -137,6 +150,7 @@ describe('MohuaClaimLettersService', () => {
     omUlbModel = {
       countDocuments: jest.fn().mockReturnValue({ session: jest.fn().mockResolvedValue(0) }),
       insertMany: jest.fn().mockResolvedValue([]),
+      find: jest.fn().mockReturnValue(q([])),
     };
 
     returnNotifications = { notifyClaimLetterReturned: jest.fn().mockResolvedValue(undefined) };
@@ -157,6 +171,7 @@ describe('MohuaClaimLettersService', () => {
       exemptionService as never,
       omUlbModel as never,
       returnNotifications as never,
+      undoEligibility as never,
     );
   });
 
@@ -313,8 +328,35 @@ describe('MohuaClaimLettersService', () => {
           amount: 130_000_000,
           status: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
           statusLabel: 'Under Review by MoHUA',
+          returnedWith: null,
         },
       ]);
+    });
+
+    it('names the letter a letter was returned with, and the State forms (ADR 0009)', async () => {
+      const otherId = new Types.ObjectId();
+      batchModel.find.mockReturnValue(
+        q([
+          batch({
+            currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
+            returnedWith: {
+              claimLetter: otherId,
+              letterName: 'Claim Letter 1',
+              letterRef: 'CF_TR_2026-27_1-1',
+              formIds: [22],
+              formNames: ['SFC Status'],
+            },
+          }),
+        ]),
+      );
+
+      const result = await service.listStateClaimLetters(String(tripura._id), yearId, 1);
+
+      expect(result.claimLetters[0].returnedWith).toEqual({
+        letterId: String(otherId),
+        number: 'CF_TR_2026-27_1-1',
+        formNames: ['SFC Status'],
+      });
     });
 
     it('summarises the state: ULBs claimed and pending, ULBs per status, and the amount claimed against the balance', async () => {
@@ -416,7 +458,56 @@ describe('MohuaClaimLettersService', () => {
       expect(detail.state).toEqual({ id: String(tripura._id), name: 'Tripura' });
     });
 
-    it('reports zeros when no ULB relied on an exemption and no other letter is submitted', async () => {
+    it("under SO review, offers SFC and GTC as the dialog shows them and lists the State's other letters there", async () => {
+      batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })));
+      formStatus.describeReturnableStateForms.mockResolvedValue([
+        { formId: 22, returnable: false, lockReason: 'ACCEPTED', acceptedWithLetter: 'Claim Letter 1' },
+        { formId: 35, returnable: true, lockReason: null, acceptedWithLetter: null },
+      ]);
+      const otherId = new Types.ObjectId();
+      batchModel.find.mockReturnValue(q([{ _id: otherId, fileBaseName: 'CF_TR_2026-27_1-2' }]));
+
+      const detail = await service.getClaimLetter(String(batchId));
+
+      expect(detail.stateForms).toEqual([
+        {
+          formId: 22,
+          name: 'SFC Status',
+          returnable: false,
+          lockReason: 'ACCEPTED',
+          acceptedWithLetter: 'Claim Letter 1',
+        },
+        {
+          formId: 35,
+          name: 'Grant Transfer Certificate',
+          returnable: true,
+          lockReason: null,
+          acceptedWithLetter: null,
+        },
+      ]);
+      expect(detail.otherLettersUnderReview).toEqual([{ id: String(otherId), number: 'CF_TR_2026-27_1-2' }]);
+      expect(batchUlbModel.countDocuments).toHaveBeenCalledWith({
+        claimLetter: batchId,
+        'soDecision.status': 'RETURNED',
+        'soDecision.rowFormIds.0': { $exists: true },
+      });
+      expect(batchModel.find).toHaveBeenCalledWith(
+        expect.objectContaining({ _id: { $ne: batchId }, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }),
+      );
+    });
+
+    it('offers no return items once the letter is past SO review', async () => {
+      const detail = await service.getClaimLetter(String(batchId));
+
+      expect(detail.stateForms).toEqual([]);
+      expect(detail.otherLettersUnderReview).toEqual([]);
+      expect(formStatus.describeReturnableStateForms).not.toHaveBeenCalled();
+    });
+
+    it('reports zeros when no ULB relied on an exemption and no letter counts as submitted', async () => {
+      // A returned letter is not "submitted" itself, so with no other letter the submitted totals are zero.
+      batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.RETURNED_BY_SO })));
+
       const { summary } = await service.getClaimLetter(String(batchId));
 
       expect(summary).toMatchObject({
@@ -608,6 +699,33 @@ describe('MohuaClaimLettersService', () => {
       expect(result.id).toBe(String(batchId));
     });
 
+    it("takes the State's guard first in the transaction, so it can't interleave with a return or submit (ADR 0009)", async () => {
+      const order: string[] = [];
+      undoEligibility.touchClaimUndoGuard.mockImplementation(() => order.push('guard'));
+      batchModel.findOneAndUpdate.mockImplementation(() => {
+        order.push('letter');
+        return q({ _id: batchId });
+      });
+
+      await service.approve(String(batchId), 3, undefined, approver);
+
+      expect(order).toEqual(['guard', 'letter']);
+      expect(undoEligibility.touchClaimUndoGuard).toHaveBeenCalledWith(
+        tripura._id,
+        expect.any(Types.ObjectId),
+        session,
+      );
+    });
+
+    it('turns a write conflict with another decision on the same State into a 409 to retry', async () => {
+      session.commitTransaction.mockRejectedValue(Object.assign(new Error('WriteConflict'), { code: 112 }));
+
+      await expect(service.approve(String(batchId), 3, undefined, approver)).rejects.toThrow(
+        "Another action on this State's claim letters is in progress. Please try again.",
+      );
+      expect(session.abortTransaction).toHaveBeenCalled();
+    });
+
     it("copies the verified letter's ULBs into the OM rows, in the approval's transaction", async () => {
       const child = {
         _id: new Types.ObjectId(),
@@ -627,6 +745,60 @@ describe('MohuaClaimLettersService', () => {
         [expect.objectContaining({ claimLetter: batchId, claimLetterUlb: child._id, ulbId: child.ulbId, om: null })],
         { session },
       );
+    });
+
+    describe('a ULB whose OM row another letter already holds', () => {
+      const otherLetter = new Types.ObjectId();
+      const khowai = {
+        _id: new Types.ObjectId(),
+        state: tripura._id,
+        year: new Types.ObjectId(yearId),
+        installment: 1,
+        ulbId: new Types.ObjectId(),
+        ulbSnapshot: { name: 'Khowai Municipal Council' },
+        allocatedAmount: 30,
+        claimedAmount: 30,
+      };
+      const duplicateKey = Object.assign(new Error('E11000 duplicate key error collection: xvifc_om_ulbs'), {
+        code: 11000,
+      });
+
+      beforeEach(() => {
+        batchUlbModel.find.mockReturnValue(q([khowai]));
+        omUlbModel.insertMany.mockRejectedValue(duplicateKey);
+      });
+
+      it('names the ULB and the letter holding its OM row, instead of the generic duplicate error', async () => {
+        omUlbModel.find.mockReturnValue(q([{ ulbId: khowai.ulbId, claimLetter: otherLetter }]));
+        batchModel.find.mockReturnValue(q([{ _id: otherLetter, batchNumber: 1, resubmissionNumber: 0 }]));
+
+        const err = await service.approve(String(batchId), 3, undefined, approver).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as ConflictException).message).toBe(
+          "Khowai Municipal Council is already in the OM list of Claim Letter 1 for this installment, so this letter can't " +
+            'be approved. Please contact the CityFinance team.',
+        );
+        expect(omUlbModel.find).toHaveBeenCalledWith(
+          expect.objectContaining({ installment: 1, ulbId: { $in: [khowai.ulbId] }, claimLetter: { $ne: batchId } }),
+        );
+        expect(session.abortTransaction).toHaveBeenCalled();
+        expect(session.commitTransaction).not.toHaveBeenCalled();
+      });
+
+      it('says "another claim letter" when the holding letter no longer exists', async () => {
+        omUlbModel.find.mockReturnValue(q([{ ulbId: khowai.ulbId, claimLetter: otherLetter }]));
+        batchModel.find.mockReturnValue(q([]));
+
+        await expect(service.approve(String(batchId), 3, undefined, approver)).rejects.toThrow(
+          'Khowai Municipal Council is already in the OM list of another claim letter for this installment, so this ' +
+            "letter can't be approved. Please contact the CityFinance team.",
+        );
+      });
+
+      it('keeps the original error when no other letter holds an OM row of these ULBs', async () => {
+        await expect(service.approve(String(batchId), 3, undefined, approver)).rejects.toBe(duplicateKey);
+      });
     });
 
     it('refuses, and writes nothing, when the letter changed since the page loaded', async () => {
@@ -802,6 +974,7 @@ describe('MohuaClaimLettersService', () => {
       expect(returnNotifications.notifyClaimLetterReturned).toHaveBeenCalledWith({
         stateId: expect.anything() as unknown,
         refNo: expect.stringMatching(/^CL\/TR\/2026-27\/1-/) as unknown,
+        alsoReturned: null,
         stateRemark: 'Fix the SFC status',
         stateItems: ['SFC Status'],
         ulbs: [
@@ -844,6 +1017,183 @@ describe('MohuaClaimLettersService', () => {
       expect(lockModel.deleteMany).not.toHaveBeenCalled();
       expect(formStatus.returnFormsForCorrection).not.toHaveBeenCalled();
       expect(session.abortTransaction).toHaveBeenCalled();
+    });
+
+    describe("a State form reaches the State's other letters (ADR 0009)", () => {
+      const sfcRef = {
+        formId: 22,
+        formDocumentId: new Types.ObjectId(),
+        rowDocumentId: null,
+        ulbId: null,
+        remark: 'x',
+      };
+      const sibling = { _id: new Types.ObjectId(), batchNumber: 2, resubmissionNumber: 0, version: 1 };
+
+      beforeEach(() => {
+        formStatus.returnFormsForCorrection.mockResolvedValue([sfcRef]);
+        batchModel.find.mockReturnValue(q([sibling]));
+        batchModel.updateMany.mockResolvedValue({ modifiedCount: 1 });
+        stateModel.findById.mockReturnValue(q({ code: 'TR' }));
+      });
+
+      it("returns every other letter under SO review with it, and removes the drafts' signed letters", async () => {
+        await service.returnForCorrection(
+          String(batchId),
+          dto({ affectedLetterIds: [String(sibling._id)] }),
+          so,
+          '1.2.3.4',
+          'jest',
+        );
+
+        expect(undoEligibility.touchClaimUndoGuard).toHaveBeenCalledWith(
+          tripura._id,
+          expect.any(Types.ObjectId),
+          session,
+        );
+        expect(batchModel.find).toHaveBeenCalledWith(
+          expect.objectContaining({
+            state: tripura._id,
+            installment: 1,
+            _id: { $ne: batchId },
+            currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+            isAbandoned: false,
+          }),
+        );
+        const [siblings, drafts, signedDrafts] = batchModel.updateMany.mock.calls;
+        expect(siblings[0]).toEqual({
+          _id: { $in: [sibling._id] },
+          currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+          isAbandoned: false,
+        });
+        const info = {
+          claimLetter: batchId,
+          letterName: 'Claim Letter 1',
+          letterRef: 'CF_TR_2026-27_1',
+          formIds: [22],
+          formNames: ['SFC Status'],
+          signedFileRemoved: false,
+          at: expect.any(Date) as unknown,
+        };
+        expect(siblings[1].$set).toMatchObject({
+          currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
+          isAbandoned: true,
+          mohuaRemarks: 'Fix the SFC status',
+          returnedWith: info,
+        });
+        expect(lockModel.deleteMany).toHaveBeenCalledWith(
+          { claimLetter: { $in: [sibling._id] }, lockState: 'ACTIVE' },
+          { session },
+        );
+        expect(history.recordTransitions).toHaveBeenCalledWith(
+          [
+            expect.objectContaining({
+              claimLetter: sibling._id,
+              batchNumber: 2,
+              fromStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+              toStatus: FORM_STATUS.RETURNED_BY_SO,
+              actionSource: 'DEPENDENCY_INVALIDATION',
+              rejectedSourceRefs: [sfcRef],
+            }),
+          ],
+          session,
+        );
+        // Unsigned drafts get the notice first, except one an earlier return already took the signed letter from (it
+        // keeps that notice); signed ones then lose the signed letter and the merged PDF.
+        expect(drafts[0]).toMatchObject({
+          currentFormStatus: FORM_STATUS.IN_PROGRESS,
+          signedClaimFile: null,
+          'stateFormReturnNotice.signedFileRemoved': { $ne: true },
+        });
+        expect(drafts[1].$set).toEqual({ stateFormReturnNotice: info });
+        expect(signedDrafts[0]).toMatchObject({ signedClaimFile: { $ne: null } });
+        expect(signedDrafts[1].$set).toMatchObject({
+          signedClaimFile: null,
+          finalClaimPdf: null,
+          stateFormReturnNotice: { ...info, signedFileRemoved: true },
+        });
+        expect(session.commitTransaction).toHaveBeenCalled();
+        expect(returnNotifications.notifyClaimLetterReturned).toHaveBeenCalledWith(
+          expect.objectContaining({
+            alsoReturned: { refNos: ['CL/TR/2026-27/1-2'], formNames: ['SFC Status'] },
+          }),
+        );
+      });
+
+      it('also follows a ULB row return, which reopens the whole State form', async () => {
+        const rowRef = { formId: 23, formDocumentId: new Types.ObjectId(), rowDocumentId: new Types.ObjectId(), ulbId };
+        const formRef = { formId: 23, formDocumentId: rowRef.formDocumentId, rowDocumentId: null, ulbId: null };
+        formStatus.returnFormsForCorrection.mockResolvedValue([rowRef, formRef]);
+
+        await service.returnForCorrection(
+          String(batchId),
+          dto({ stateFormIds: [], affectedLetterIds: [String(sibling._id)] }),
+          so,
+        );
+
+        expect(batchModel.updateMany.mock.calls[0][1].$set).toMatchObject({
+          returnedWith: expect.objectContaining({ formIds: [23], formNames: ['Elected Body Status'] }) as unknown,
+        });
+      });
+
+      it('refuses, writing nothing, when the letters under SO review differ from those the dialog listed', async () => {
+        await expect(service.returnForCorrection(String(batchId), dto({ affectedLetterIds: [] }), so)).rejects.toThrow(
+          'Another claim letter of this State was submitted or decided while you were reviewing.',
+        );
+
+        expect(batchModel.updateMany).not.toHaveBeenCalled();
+        expect(session.abortTransaction).toHaveBeenCalled();
+        expect(session.commitTransaction).not.toHaveBeenCalled();
+      });
+
+      it('leaves the other letters alone when only a ULB form or the claim letter is returned', async () => {
+        formStatus.returnFormsForCorrection.mockResolvedValue([
+          { formId: 33, formDocumentId: new Types.ObjectId(), rowDocumentId: null, ulbId, remark: 'x' },
+        ]);
+
+        await service.returnForCorrection(String(batchId), dto({ stateFormIds: [26] }), so);
+
+        expect(batchModel.updateMany).not.toHaveBeenCalled();
+        expect(history.recordTransitions).not.toHaveBeenCalled();
+        expect(returnNotifications.notifyClaimLetterReturned).toHaveBeenCalledWith(
+          expect.objectContaining({ alsoReturned: null }),
+        );
+      });
+
+      it('refuses SFC once an approval accepted it, as a conflict so the page reloads, before anything is written', async () => {
+        formStatus.describeReturnableStateForms.mockResolvedValue([
+          { formId: 22, returnable: false, lockReason: 'ACCEPTED', acceptedWithLetter: 'Claim Letter 1' },
+          { formId: 35, returnable: true, lockReason: null, acceptedWithLetter: null },
+        ]);
+
+        const err = await service.returnForCorrection(String(batchId), dto(), so).catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(ConflictException);
+        expect((err as ConflictException).message).toBe(
+          'SFC Status was accepted with Claim Letter 1 and can no longer be returned.',
+        );
+        expect(connection.startSession).not.toHaveBeenCalled();
+      });
+
+      it.each([
+        ['ACCEPTED', null, 'SFC Status was already accepted and can no longer be returned.'],
+        [
+          'EXEMPTED',
+          null,
+          "This letter relies on the State's exemption for SFC Status, so there is no form to return.",
+        ],
+        ['NOT_IN_REVIEW', null, "SFC Status is not under review with this letter, so it can't be returned with it."],
+      ])(
+        'refuses SFC the dialog shows as %s, with the same reason',
+        async (lockReason, acceptedWithLetter, message) => {
+          formStatus.describeReturnableStateForms.mockResolvedValue([
+            { formId: 22, returnable: false, lockReason, acceptedWithLetter },
+            { formId: 35, returnable: true, lockReason: null, acceptedWithLetter: null },
+          ]);
+
+          await expect(service.returnForCorrection(String(batchId), dto(), so)).rejects.toThrow(message);
+          expect(connection.startSession).not.toHaveBeenCalled();
+        },
+      );
     });
 
     it('needs a ULB marked returned or a State item picked', async () => {
