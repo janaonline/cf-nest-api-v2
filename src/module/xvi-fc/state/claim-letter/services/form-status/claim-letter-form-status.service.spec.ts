@@ -699,9 +699,40 @@ describe('ClaimLetterFormStatusService.describeReturnableStateForms (ADR 0009)',
     const noSources = await describeWith([], {});
 
     expect(forms).toEqual([
-      { formId: 22, returnable: false, lockReason: 'EXEMPTED', acceptedWithLetter: null },
+      { formId: 22, returnable: false, lockReason: 'EXEMPTED', acceptedWithLetter: null, stateExemptionId: null },
       { formId: 35, returnable: false, lockReason: 'NOT_IN_REVIEW', acceptedWithLetter: null },
     ]);
     expect(noSources.map((f) => f.lockReason)).toEqual(['NOT_IN_REVIEW', 'NOT_IN_REVIEW']);
+  });
+
+  it("passes on the State's own exemption request, so the SO can decide it (an automatic exemption has none)", async () => {
+    const requestId = oid();
+    const [own] = await describeWith(
+      [
+        {
+          formId: 22,
+          result: 'EXEMPTED',
+          formDocumentId: null,
+          exemptionId: requestId,
+          exemptionKind: 'DISCRETIONARY_STATE',
+        },
+      ],
+      {},
+    );
+    const [auto] = await describeWith(
+      [
+        {
+          formId: 22,
+          result: 'EXEMPTED',
+          formDocumentId: null,
+          exemptionId: requestId,
+          exemptionKind: 'AUTO_NEW_ULB_STUB',
+        },
+      ],
+      {},
+    );
+
+    expect(own).toMatchObject({ lockReason: 'EXEMPTED', stateExemptionId: requestId });
+    expect(auto.stateExemptionId).toBeNull();
   });
 });

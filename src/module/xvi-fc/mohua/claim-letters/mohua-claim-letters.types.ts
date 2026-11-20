@@ -86,6 +86,13 @@ export interface MohuaClaimLetterReturnableStateForm {
   lockReason: 'ACCEPTED' | 'EXEMPTED' | 'NOT_IN_REVIEW' | null;
   /** The letter whose approval moved it on, e.g. "Claim Letter 1"; null unless ACCEPTED and found. */
   acceptedWithLetter: string | null;
+  /**
+   * The letter relied on the State's own exemption request for this form, still under review (5): ticking the form
+   * rejects that request instead of reopening a form (there is none).
+   */
+  rejectsExemption: boolean;
+  /** Live status of that State exemption request (5, 6 or 7); null when the letter relied on none. */
+  exemptionStatus: number | null;
 }
 
 /** The band under a state's claim letters. Money is whole Rupees. */
