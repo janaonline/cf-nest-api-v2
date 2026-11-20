@@ -9,12 +9,35 @@ export const CLAIM_LETTER_SUPPORTED_INSTALLMENT = 1;
 /** Claim Letter's own formjsons document (registry: master/form-json-config/CLAUDE.md). */
 export const CLAIM_LETTER_FORM_ID = 26;
 
-/** Logical batch slots per State/year/installment (docs/adr/0002-batching-and-locks.md). */
-export const CLAIM_LETTER_MAX_BATCH_NUMBER = 3;
+/** Claim letters per State/year/installment when formjson 26 `meta.maxClaimLetters` is unset or invalid (ADR 0009). */
+export const CLAIM_LETTER_DEFAULT_MAX_LETTERS = 3;
+
+/** Highest `meta.maxClaimLetters`; also the schema's upper bound on `batchNumber`. */
+export const CLAIM_LETTER_MAX_LETTERS_LIMIT = 10;
 
 export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;
+
+/** History Status filter, in the State's terms: under review covers 15 and 5, returned covers 16 and 6. */
+export const CLAIM_LETTER_HISTORY_STATUS_FILTERS = [
+  'IN_PROGRESS',
+  'UNDER_REVIEW',
+  'RETURNED',
+  'ACKNOWLEDGED',
+  'DISCARDED',
+] as const;
+export type ClaimLetterHistoryStatusFilter = (typeof CLAIM_LETTER_HISTORY_STATUS_FILTERS)[number];
+
+/** History columns the State can sort by; `updatedAt` (Last activity) is the default. */
+export const CLAIM_LETTER_HISTORY_SORT_FIELDS = [
+  'updatedAt',
+  'submittedAt',
+  'batchNumber',
+  'ulbCount',
+  'claimedTotal',
+] as const;
+export type ClaimLetterHistorySortField = (typeof CLAIM_LETTER_HISTORY_SORT_FIELDS)[number];
 
 /** Most ULBs one batch holds, and one ULB-picker load returns; above any State's ULB count. */
 export const CLAIM_LETTER_MAX_ULBS = 1000;
@@ -84,3 +107,19 @@ export const CLAIM_LETTER_ROW_CRITERIA = {
 
 /** Election Status row value that the row C sentence counts. */
 export const CLAIM_LETTER_SIXTH_SCHEDULE_VALUE = '6th Schedule';
+
+/** What the return emails and the State's returned-letter box call each item the SO can return (formIds as in
+ *  master/form-json-config/CLAUDE.md). */
+export const CLAIM_LETTER_FORM_NAMES: Readonly<Record<number, string>> = {
+  26: 'Claim Letter',
+  22: 'SFC Status',
+  23: 'Elected Body Status',
+  24: 'ULB-wise Allocation',
+  25: 'FC Unspent Declaration',
+  35: 'Grant Transfer Certificate',
+  30: 'Annual Accounts (Audited)',
+  31: 'Annual Accounts (Provisional)',
+  32: 'Service Level Benchmarks',
+  33: 'Bank Account',
+  36: 'Detailed Utilisation Report',
+};

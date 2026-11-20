@@ -18,7 +18,6 @@ import { XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterDocumentService } from './claim-letter-document.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { printedText } from '../../helpers/claim-letter-letter.helpers';
 import type { ClaimLetterParagraph } from '../../types/claim-letter-document.types';
 
@@ -66,7 +65,6 @@ describe('ClaimLetterDocumentService', () => {
   let exemptionResolver: { resolveDiscretionary: jest.Mock };
   let batchModel: { findOne: jest.Mock };
   let sfcModel: { findOne: jest.Mock };
-  let activeBatch: { assertActive: jest.Mock };
 
   function criterion(
     formId: number,
@@ -121,7 +119,6 @@ describe('ClaimLetterDocumentService', () => {
     sfcModel = { findOne: jest.fn(() => q({ data: { whichAwardPeriod: '6th SFC', awardPeriod: '2026-2031' } })) };
     redis = { get: jest.fn().mockResolvedValue(null), set: jest.fn().mockResolvedValue(undefined) };
     exemptionResolver = { resolveDiscretionary: jest.fn().mockResolvedValue(null) };
-    activeBatch = { assertActive: jest.fn().mockResolvedValue(undefined) };
     eligibility = {
       resolveUlbLevelEligibility: jest.fn().mockResolvedValue({
         perUlbEligible: new Map([
@@ -213,7 +210,6 @@ describe('ClaimLetterDocumentService', () => {
         },
         { provide: RedisService, useValue: redis },
         { provide: ExemptionResolverService, useValue: exemptionResolver },
-        { provide: ClaimLetterActiveBatchService, useValue: activeBatch },
         { provide: ConfigService, useValue: { get: () => 'test' } },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
         {
@@ -453,7 +449,7 @@ describe('ClaimLetterDocumentService', () => {
         key: 'ELIGIBLE',
         subheading:
           'The table below lists eligible ULBs included in the current claim batch. ' +
-          'Other eligible ULBs may be included in subsequent claims.',
+          'Other eligible ULBs may be included in other claim letters.',
       });
     });
 
@@ -595,18 +591,14 @@ describe('ClaimLetterDocumentService', () => {
       await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow(NotFoundException);
     });
 
-    it('blocks every document endpoint while another batch is the active one', async () => {
-      activeBatch.assertActive.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
-      await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
-      await expect(service.getDocumentUlbs(claimLetterId, 'ELIGIBLE', 1, stateUser)).rejects.toThrow(ConflictException);
-      await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
+    it("serves a letter whatever the State's other letters are doing (ADR 0009)", async () => {
+      await expect(service.loadParent(claimLetterId, stateUser)).resolves.toMatchObject({ _id: parent['_id'] });
     });
 
-    it('refuses an abandoned batch before the active-batch check', async () => {
+    it('refuses an abandoned batch', async () => {
       batchModel.findOne.mockReturnValue(q({ ...parent, isAbandoned: true }));
       await expect(service.getDocument(claimLetterId, stateUser)).rejects.toThrow('This claim batch was discarded.');
       await expect(service.loadParent(claimLetterId, stateUser)).rejects.toThrow(ConflictException);
-      expect(activeBatch.assertActive).not.toHaveBeenCalled();
     });
 
     it("forbids another State's user", async () => {

@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { FilterQuery, Model, Types } from 'mongoose';
@@ -34,6 +34,7 @@ import {
   DevolutionFormulaRowDocument,
 } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { sumAmountsExactly } from '../../helpers/claim-letter-financial.helpers';
+import { failingStateFormNames, stateConditionsBlockMessage } from '../../helpers/claim-letter-returned.helpers';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 
 /** What no longer holds for a claim letter's ULBs (see `recheckClaimLetter`). Empty lists mean it still holds. */
@@ -309,6 +310,13 @@ export class ClaimLetterEligibilityService {
       rowEvidenceByFormId: new Map(),
       perCriterion: [],
     };
+  }
+
+  /** A draft's download and signed upload wait while a State-level condition fails, e.g. a State form the SO returned
+   *  with another letter is being corrected (ADR 0009). Fresh, never the display cache. */
+  async assertStateConditionsMet(stateId: string, designYearId: string, installment: 1 | 2): Promise<void> {
+    const gate = await this.evaluateStateLevelGate(stateId, designYearId, installment);
+    if (!gate.passed) throw new ConflictException(stateConditionsBlockMessage(failingStateFormNames(gate.sources)));
   }
 
   async evaluateStateLevelGate(

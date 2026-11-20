@@ -12,7 +12,6 @@ import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import type { S3Service } from 'src/core/s3/s3.service';
 import type { FormJsonService } from 'src/master/form-json/form-json.service';
-import type { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import type { ClaimLetterFormJsonService, ClaimLetterMergeDocument } from '../form-json/claim-letter-form-json.service';
 import {
   ClaimLetterFinalPdfService,
@@ -92,7 +91,6 @@ describe('ClaimLetterFinalPdfService', () => {
   let findOneCalls: { collection: string; filter: Record<string, unknown> }[];
   let s3: { getPdfBufferFromS3: jest.Mock; uploadPrivate: jest.Mock };
   let batchModel: { findOne: jest.Mock; updateOne: jest.Mock };
-  let activeBatch: { assertActive: jest.Mock };
   let formJsonService: { findEnabledClaimEligibilitySources: jest.Mock };
   let service: ClaimLetterFinalPdfService;
 
@@ -139,7 +137,6 @@ describe('ClaimLetterFinalPdfService', () => {
       findOne: jest.fn(() => q(parent)),
       updateOne: jest.fn(() => ({ exec: jest.fn().mockResolvedValue({}) })),
     };
-    activeBatch = { assertActive: jest.fn().mockResolvedValue(undefined) };
     const formJson = { loadFormConfig: jest.fn().mockResolvedValue({ mergeDocuments: MERGE_DOCUMENTS }) };
     formJsonService = { findEnabledClaimEligibilitySources: jest.fn().mockResolvedValue(ELIGIBILITY_SOURCES) };
     const stateModel = { findById: jest.fn(() => q({ name: 'Sample State' })) };
@@ -147,7 +144,6 @@ describe('ClaimLetterFinalPdfService', () => {
     service = new ClaimLetterFinalPdfService(
       formJson as unknown as ClaimLetterFormJsonService,
       formJsonService as unknown as FormJsonService,
-      activeBatch as unknown as ClaimLetterActiveBatchService,
       s3 as unknown as S3Service,
       connection as never,
       batchModel as never,
@@ -325,7 +321,6 @@ describe('ClaimLetterFinalPdfService', () => {
     service = new ClaimLetterFinalPdfService(
       formJson as unknown as ClaimLetterFormJsonService,
       formJsonService as unknown as FormJsonService,
-      activeBatch as unknown as ClaimLetterActiveBatchService,
       s3 as unknown as S3Service,
       { collection: () => ({ findOne: jest.fn() }) } as never,
       batchModel as never,
@@ -335,7 +330,7 @@ describe('ClaimLetterFinalPdfService', () => {
     expect(data).toMatchObject({ included: ['Signed claim letter'], missing: [], pageCount: 3 });
   });
 
-  it('needs a signed letter, an editable batch and the active batch', async () => {
+  it('needs a signed letter and an editable batch', async () => {
     parent['signedClaimFile'] = null;
     await expect(service.getFinalPdf(claimLetterId, user)).rejects.toThrow(BadRequestException);
 
@@ -346,10 +341,6 @@ describe('ClaimLetterFinalPdfService', () => {
     parent['currentFormStatus'] = 2;
     parent['isAbandoned'] = true;
     await expect(service.getFinalPdf(claimLetterId, user)).rejects.toThrow('This claim letter was discarded.');
-
-    parent['isAbandoned'] = false;
-    activeBatch.assertActive.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
-    await expect(service.getFinalPdf(claimLetterId, user)).rejects.toThrow('Batch 1 is still in progress');
   });
 
   describe('after submission', () => {
@@ -359,8 +350,7 @@ describe('ClaimLetterFinalPdfService', () => {
       s3.getPdfBufferFromS3.mockClear();
       s3.uploadPrivate.mockClear();
       findOneCalls = [];
-      // Neither the active-batch rule nor a later upload applies to the copy MoHUA received.
-      activeBatch.assertActive.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
+      // A later upload doesn't apply to the copy MoHUA received.
       formDocs['xvifc_gtc'] = { data: { i2GtcFile: { path: 'gtc/i2-v2.pdf' } } };
     });
 

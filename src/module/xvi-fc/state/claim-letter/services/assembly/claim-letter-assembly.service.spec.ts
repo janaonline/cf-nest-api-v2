@@ -6,7 +6,6 @@ import { ClaimLetterAssemblyService } from './claim-letter-assembly.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
@@ -96,8 +95,9 @@ describe('ClaimLetterAssemblyService', () => {
     getClaimStatusBreakdown: jest.Mock;
   };
   let historyService: { recordTransition: jest.Mock };
-  let formJsonConfigService: { loadClaimAmountConfig: jest.Mock };
-  let activeBatchService: { assertCanCreate: jest.Mock };
+  let formJsonConfigService: { loadClaimAmountConfig: jest.Mock; loadFormConfig: jest.Mock };
+  /** formjson 26 `meta.maxClaimLetters` as the stubbed loadFormConfig reports it (ADR 0009). */
+  let maxClaimLetters: number;
 
   const allocation = {
     allocatedAmount: 100,
@@ -237,11 +237,26 @@ describe('ClaimLetterAssemblyService', () => {
     };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
     // The production default: switch off, so the claim is the allocation.
+    // create and edit read the whole config once (loadFormConfig); it follows the claim-amount stub, so a test
+    // switching that stub switches both.
+    maxClaimLetters = 3;
     formJsonConfigService = {
       loadClaimAmountConfig: jest.fn().mockResolvedValue({ editable: false, lowerPercent: 90, upperPercent: 110 }),
+      loadFormConfig: jest.fn(),
     };
-
-    activeBatchService = { assertCanCreate: jest.fn().mockResolvedValue(undefined) };
+    formJsonConfigService.loadFormConfig.mockImplementation(async (yearIdArg: string) => {
+      const claim = (await formJsonConfigService.loadClaimAmountConfig(yearIdArg)) as {
+        editable: boolean;
+        lowerPercent: number;
+        upperPercent: number;
+      };
+      return {
+        claimAmountEditable: claim.editable,
+        varianceLowerPercent: claim.lowerPercent,
+        varianceUpperPercent: claim.upperPercent,
+        maxClaimLetters,
+      };
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -256,8 +271,10 @@ describe('ClaimLetterAssemblyService', () => {
         { provide: ClaimLetterEligibilityService, useValue: eligibilityService },
         { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
-        { provide: ClaimLetterActiveBatchService, useValue: activeBatchService },
-        { provide: PmuUndoEligibilityService, useValue: { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) } },
+        {
+          provide: PmuUndoEligibilityService,
+          useValue: { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) },
+        },
       ],
     }).compile();
 
@@ -296,10 +313,27 @@ describe('ClaimLetterAssemblyService', () => {
     expect(connection.startSession).not.toHaveBeenCalled();
   });
 
-  it('refuses to create a batch while another batch is active, before any write', async () => {
-    activeBatchService.assertCanCreate.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
-    await expect(service.createDraft(baseInput())).rejects.toThrow('Batch 1 is still in progress');
-    expect(connection.startSession).not.toHaveBeenCalled();
+  it("creates a draft while the State's other letters are drafts or under review (ADR 0009)", async () => {
+    batchModel.find.mockReturnValueOnce(q([{ batchNumber: 1 }, { batchNumber: 2 }])); // allocateBatchNumber
+    batchModel.create.mockResolvedValue([{ _id: parentId, batchNumber: 3, version: 1 }]);
+    batchUlbModel.find.mockReturnValue(q([persistedChild({ batchNumber: 3 })]));
+
+    await service.createDraft(baseInput());
+
+    const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(createArgs[0]).toMatchObject({ batchNumber: 3 });
+  });
+
+  it('takes places up to the formjson cap, not a fixed 3', async () => {
+    maxClaimLetters = 5;
+    batchModel.find.mockReturnValueOnce(q([{ batchNumber: 1 }, { batchNumber: 2 }, { batchNumber: 3 }]));
+    batchModel.create.mockResolvedValue([{ _id: parentId, batchNumber: 4, version: 1 }]);
+    batchUlbModel.find.mockReturnValue(q([persistedChild({ batchNumber: 4 })]));
+
+    await service.createDraft(baseInput());
+
+    const [createArgs] = batchModel.create.mock.calls[0] as [Array<Record<string, unknown>>];
+    expect(createArgs[0]).toMatchObject({ batchNumber: 4 });
   });
 
   // ─── Idempotent retry (docs/adr/0001-idempotent-retry.md) ───────────────────
@@ -375,7 +409,9 @@ describe('ClaimLetterAssemblyService', () => {
       .mockReturnValue(q([])); // reclaim scan's own slot-occupancy check finds nothing BUILDING
     lockModel.find.mockReturnValue(q([])); // no lock conflict in play for this scenario
 
-    await expect(service.createDraft(baseInput())).rejects.toThrow(ConflictException);
+    await expect(service.createDraft(baseInput())).rejects.toThrow(
+      'All 3 claim letters for this installment are in use. A letter that is discarded or returned frees its place.',
+    );
     expect(session.abortTransaction).toHaveBeenCalled();
     expect(session.commitTransaction).not.toHaveBeenCalled();
     // Nothing reclaimable -> no cleanup, no wasted second attempt.
@@ -772,10 +808,10 @@ describe('ClaimLetterAssemblyService', () => {
     expect(eligibilityService.resolveClaimedUlbBatches).not.toHaveBeenCalled();
   });
 
-  it('fetches the claim-amount config via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
+  it('fetches formjson 26 via ClaimLetterFormJsonService exactly once per prepareChildren invocation', async () => {
     await service.createDraft(baseInput());
-    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledTimes(1);
-    expect(formJsonConfigService.loadClaimAmountConfig).toHaveBeenCalledWith(yearId.toString());
+    expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledTimes(1);
+    expect(formJsonConfigService.loadFormConfig).toHaveBeenCalledWith(yearId.toString());
   });
 
   describe('claim-amount switch off (claim = allocation)', () => {

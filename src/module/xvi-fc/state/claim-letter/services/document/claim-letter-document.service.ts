@@ -74,7 +74,6 @@ import {
 } from '../../helpers/claim-letter-letter.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import type {
   ClaimLetterAnnexure,
   ClaimLetterAnnexureRow,
@@ -140,7 +139,7 @@ const LIST_TEXT: Record<ClaimLetterListKey, Pick<ClaimLetterListMeta, 'heading' 
     heading: '1. List of Eligible ULBs',
     subheading:
       'The table below lists eligible ULBs included in the current claim batch. ' +
-      'Other eligible ULBs may be included in subsequent claims.',
+      'Other eligible ULBs may be included in other claim letters.',
   },
   INELIGIBLE: {
     heading: '2. List of Ineligible ULBs',
@@ -160,7 +159,6 @@ export class ClaimLetterDocumentService {
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
-    private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly redis: RedisService,
     private readonly exemptionResolver: ExemptionResolverService,
     config: ConfigService,
@@ -211,7 +209,6 @@ export class ClaimLetterDocumentService {
     if (!parent) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
     assertStateAccess(user, String(parent.state));
     if (parent.isAbandoned) throw new ConflictException(CLAIM_LETTER_ABANDONED_MESSAGE);
-    await this.activeBatchService.assertActive(parent);
     return parent;
   }
 
@@ -692,7 +689,14 @@ export class ClaimLetterDocumentService {
         'Status of Compliance',
       ],
       compliance: [rowA, rowB, ...annexure.rowsCToK],
-      note: para([b('Note: '), t(`Row J and the List of Ineligible ULBs are as on ${annexure.asOn}.`)]),
+      // Each letter is a snapshot (ADR 0009): the time it was generated, and that eligibility can change after it.
+      note: para([
+        b('Note: '),
+        t(
+          `Row J and the List of Ineligible ULBs were generated on ${annexure.asOn}. ` +
+            "A ULB's eligibility may have changed since.",
+        ),
+      ]),
       closing: [
         para(
           [

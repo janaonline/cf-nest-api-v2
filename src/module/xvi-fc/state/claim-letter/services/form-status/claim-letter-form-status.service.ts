@@ -11,6 +11,7 @@ import {
   ClaimLetterBatchUlb,
   ClaimLetterBatchUlbDocument,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
+import { claimLetterName } from '../../helpers/claim-letter-returned.helpers';
 
 /** Who decided, and why: what each moved document's history row is built from. */
 interface HistoryContext {
@@ -111,7 +112,10 @@ const fcUnspentFormHistory: HistoryWriter = {
       toStatus: ctx.toStatus,
       auditRevision: (doc['auditRevision'] as number | undefined) ?? 0,
       applicableFc: null,
-      data: { claimLetter: ctx.claimLetterId, action: ctx.approve ? FormHistoryAction.SO_APPROVE : FormHistoryAction.SO_RETURN },
+      data: {
+        claimLetter: ctx.claimLetterId,
+        action: ctx.approve ? FormHistoryAction.SO_APPROVE : FormHistoryAction.SO_RETURN,
+      },
       snapshot: [],
       ...(ctx.remark && { remarks: ctx.remark }),
       changedBy: ctx.decision.decidedBy.userId,
@@ -268,11 +272,15 @@ const annualAccountForm = (): FormTarget => ({
 /** formId (the claim-eligibility registry's ids, see master/form-json-config/CLAUDE.md) -> its storage. */
 const FORM_TARGETS: Readonly<Record<number, FormTarget>> = {
   22: stateForm('xvifc_sfc', stateFormHistory('xvifc_sfc_logs', 'sfcStatusForm')),
-  23: stateForm('xvifc_elected_ulb_forms', stateFormHistory('xvifc_elected_ulb_form_logs', 'eulbForm', { snapshot: null }), {
-    rowCollection: 'xvifc_elected_ulb_rows',
-    rowRemarkField: 'rejectionRemark',
-    rowHistory: rowHistory('xvifc_elected_ulb_row_logs'),
-  }),
+  23: stateForm(
+    'xvifc_elected_ulb_forms',
+    stateFormHistory('xvifc_elected_ulb_form_logs', 'eulbForm', { snapshot: null }),
+    {
+      rowCollection: 'xvifc_elected_ulb_rows',
+      rowRemarkField: 'rejectionRemark',
+      rowHistory: rowHistory('xvifc_elected_ulb_row_logs'),
+    },
+  ),
   // Devolution rows have no PMU row review, so a row is still unset (null) when the SO approves its ULB's claim.
   // ponytail: Devolution rows have no history collection; the letter's own history covers which ULBs moved.
   24: stateForm(
@@ -302,6 +310,33 @@ export const CLAIM_LETTER_ROW_FORM_IDS: readonly number[] = [23, 24, 25];
 
 /** Statuses a form or row the letter relied on may hold while the letter waits for the SO (5/7: an earlier letter). */
 const CLAIM_READY_STATUSES = [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA];
+
+/**
+ * SFC and GTC: one document for every letter of the State, so the first approval settles them. Once an approval moved
+ * one to 5 or 7 it can no longer be returned (ADR 0009); its history row names the letter whose approval did.
+ */
+const ACCEPTED_ONCE_FORMS: Readonly<Record<number, { historyCollection: string; formField: string }>> = {
+  22: { historyCollection: 'xvifc_sfc_logs', formField: 'sfcStatusForm' },
+  35: { historyCollection: 'xvifc_gtc_logs', formField: 'gtcForm' },
+};
+
+export const CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS: readonly number[] = Object.keys(ACCEPTED_ONCE_FORMS).map(Number);
+
+/**
+ * Why a State form can't be returned with this letter: an approval moved it to 5 or 7, the letter relied on an
+ * exemption for it, or it is not at 15 for this letter (not one of its conditions, or another status).
+ */
+export type ClaimLetterStateFormLockReason = 'ACCEPTED' | 'EXEMPTED' | 'NOT_IN_REVIEW';
+
+/** A State form the SO may pick in the return dialog, with whether it can still be returned. */
+export interface ClaimLetterReturnableStateForm {
+  formId: number;
+  returnable: boolean;
+  /** Null while returnable. */
+  lockReason: ClaimLetterStateFormLockReason | null;
+  /** "Claim Letter 1": the letter whose approval moved it to 5 or 7; null when not found or not ACCEPTED. */
+  acceptedWithLetter: string | null;
+}
 
 /** Stored when the SO gave no remark: the letter history requires one per returned form. */
 const DEFAULT_RETURN_REMARK = 'Returned for correction';
@@ -517,16 +552,23 @@ export class ClaimLetterFormStatusService {
       this.historyContext(false, toStatus, by, remark, claimLetterId, session);
     const returnStateForm = async (formId: number, formDocumentId: Types.ObjectId, remark: string | null) => {
       const target = FORM_TARGETS[formId];
-      await this.updateStatus(
+      // SFC and GTC only while at 15 (ADR 0009); a row form follows its rows from 15, 5 or 7 (ADR 0007).
+      const acceptedOnce = CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.includes(formId);
+      const moved = await this.updateStatus(
         target.collection,
         target.statusField,
-        [target.fromStatus, ...CLAIM_READY_STATUSES],
+        acceptedOnce ? [target.fromStatus] : [target.fromStatus, ...CLAIM_READY_STATUSES],
         [String(formDocumentId)],
         { ...target.buildSet(toStatus), ...target.buildReturnSet(remark, decision), ...audit },
         session,
         undefined,
         target.history ? { writer: target.history, ctx: ctxFor(remark) } : undefined,
       );
+      if (acceptedOnce && !moved) {
+        throw new ConflictException(
+          'A State form picked for return was accepted with another claim letter meanwhile. Reload and try again.',
+        );
+      }
       returned.push(this.returnedRef(formId, formDocumentId, null, null, remark));
     };
 
@@ -699,6 +741,87 @@ export class ClaimLetterFormStatusService {
     return found;
   }
 
+  /**
+   * The last check of submit and the signed-letter upload, in their transaction after the per-State guard (ADR 0009):
+   * the State forms the draft relied on are still at 15, 5 or 7. Both run their gate check before the transaction, so
+   * an SO return of a State form that commits in between is caught here.
+   */
+  async assertStateFormsStillReady(claimLetterId: Types.ObjectId, session: ClientSession): Promise<void> {
+    const sources = await this.loadStateSources(claimLetterId, session);
+    const idsByCollection = new Map<string, { target: FormTarget; ids: string[] }>();
+    for (const source of sources) {
+      const target = FORM_TARGETS[source.formId];
+      if (!target || source.result !== 'PASSED' || !source.formDocumentId) continue;
+      const entry = idsByCollection.get(target.collection) ?? { target, ids: [] };
+      entry.ids.push(String(source.formDocumentId));
+      idsByCollection.set(target.collection, entry);
+    }
+    for (const { target, ids } of idsByCollection.values()) {
+      if (await this.countChanged(target.collection, target.statusField, [target.fromStatus], ids, session)) {
+        throw new ConflictException(
+          'A State form changed while you were working on this letter. Reload and try again.',
+        );
+      }
+    }
+  }
+
+  /** SFC and GTC as the SO's return dialog shows them: returnable only while at 15 (ADR 0009), else why not. */
+  async describeReturnableStateForms(claimLetterId: Types.ObjectId): Promise<ClaimLetterReturnableStateForm[]> {
+    const sources = await this.loadStateSources(claimLetterId);
+    const locked = (
+      formId: number,
+      lockReason: ClaimLetterStateFormLockReason,
+      acceptedWithLetter: string | null = null,
+    ) => ({ formId, returnable: false, lockReason, acceptedWithLetter }) satisfies ClaimLetterReturnableStateForm;
+    return Promise.all(
+      CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.map(async (formId): Promise<ClaimLetterReturnableStateForm> => {
+        const source = sources.find((s) => s.formId === formId && s.result === 'PASSED' && s.formDocumentId);
+        if (!source?.formDocumentId) {
+          const exempted = sources.some((s) => s.formId === formId && s.result === 'EXEMPTED');
+          return locked(formId, exempted ? 'EXEMPTED' : 'NOT_IN_REVIEW');
+        }
+        const target = FORM_TARGETS[formId];
+        const form = await this.connection
+          .collection(target.collection)
+          .findOne({ _id: source.formDocumentId }, { projection: { [target.statusField]: 1 } });
+        const status = form?.[target.statusField] as number | undefined;
+        if (status === target.fromStatus)
+          return { formId, returnable: true, lockReason: null, acceptedWithLetter: null };
+        if (!(CLAIM_READY_STATUSES as readonly number[]).includes(status ?? -1)) return locked(formId, 'NOT_IN_REVIEW');
+        return locked(formId, 'ACCEPTED', await this.findAcceptingLetter(formId, source.formDocumentId));
+      }),
+    );
+  }
+
+  /** The letter whose SO approval moved SFC or GTC on, from that form's latest `SO_APPROVE` history row. */
+  private async findAcceptingLetter(formId: number, formDocumentId: Types.ObjectId): Promise<string | null> {
+    const { historyCollection, formField } = ACCEPTED_ONCE_FORMS[formId];
+    const row = await this.connection
+      .collection(historyCollection)
+      .findOne(
+        { [formField]: formDocumentId, action: FormHistoryAction.SO_APPROVE },
+        { sort: { changedAt: -1 }, projection: { 'data.claimLetter': 1 } },
+      );
+    const claimLetter = (row?.data as { claimLetter?: Types.ObjectId } | undefined)?.claimLetter;
+    if (!claimLetter) return null;
+    const letter = await this.batchModel
+      .findById(claimLetter)
+      .select('batchNumber resubmissionNumber')
+      .lean<{ batchNumber: number; resubmissionNumber?: number } | null>()
+      .exec();
+    return letter ? claimLetterName(letter.batchNumber, letter.resubmissionNumber ?? 0) : null;
+  }
+
+  private async loadStateSources(claimLetterId: Types.ObjectId, session?: ClientSession): Promise<SourceRef[]> {
+    const query = this.batchModel
+      .findById(claimLetterId)
+      .select('stateEligibilitySources.formId stateEligibilitySources.result stateEligibilitySources.formDocumentId');
+    if (session) query.session(session);
+    const parent = await query.lean<{ stateEligibilitySources?: SourceRef[] } | null>().exec();
+    if (!parent) throw new NotFoundException(`Claim letter ${String(claimLetterId)} not found`);
+    return parent.stateEligibilitySources ?? [];
+  }
+
   /** The letter's State sources and its children (selected ULB plus that ULB's frozen sources), ids only. */
   private async loadLetter(claimLetterId: Types.ObjectId, session: ClientSession): Promise<LoadedLetter> {
     const parent = await this.batchModel
@@ -774,20 +897,31 @@ export class ClaimLetterFormStatusService {
     ids: string[],
     session: ClientSession,
   ): Promise<void> {
+    const changed = await this.countChanged(collection, statusField, fromStatuses, ids, session);
+    if (changed > 0) {
+      throw new ConflictException(
+        `${changed} form(s) in this claim letter changed after it was submitted and are no longer ready. Return the letter to the State instead of approving it.`,
+      );
+    }
+  }
+
+  /** Ids no longer waiting at `fromStatuses` nor already at 5 / 7 (missing ones included). */
+  private async countChanged(
+    collection: string,
+    statusField: string,
+    fromStatuses: (number | null)[],
+    ids: string[],
+    session: ClientSession,
+  ): Promise<number> {
     const target = this.connection.collection(collection);
-    const accepted = [...fromStatuses, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA];
+    const accepted = [...fromStatuses, ...CLAIM_READY_STATUSES];
     const uniqueIds = [...new Set(ids)];
     let ready = 0;
     for (let i = 0; i < uniqueIds.length; i += WRITE_CHUNK_SIZE) {
       const chunk = uniqueIds.slice(i, i + WRITE_CHUNK_SIZE).map((id) => new Types.ObjectId(id));
       ready += await target.countDocuments({ _id: { $in: chunk }, [statusField]: { $in: accepted } }, { session });
     }
-    const changed = uniqueIds.length - ready;
-    if (changed > 0) {
-      throw new ConflictException(
-        `${changed} form(s) in this claim letter changed after it was submitted and are no longer ready. Return the letter to the State instead of approving it.`,
-      );
-    }
+    return uniqueIds.length - ready;
   }
 
   /**

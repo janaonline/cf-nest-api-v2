@@ -7,7 +7,11 @@ import type {
   ClaimLetterFinancialSummaryDisplay,
 } from '../types/claim-letter.types';
 import { buildClaimLetterPermissions } from './claim-letter-permissions.helpers';
-import { isReturnedClaimLetter } from './claim-letter-returned.helpers';
+import {
+  isReturnedClaimLetter,
+  returnedWithMessage,
+  type ClaimLetterStateFormReturnInfo,
+} from './claim-letter-returned.helpers';
 
 /** The one batch-to-summary mapper, so every endpoint returns the same shape. Callers have already
  *  asserted state access. */
@@ -17,7 +21,7 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
   return {
     claimLetterId: String(doc['_id']),
     installment: doc['installment'] as 1 | 2,
-    batchNumber: doc['batchNumber'] as 1 | 2 | 3,
+    batchNumber: doc['batchNumber'] as number,
     resubmissionNumber: (doc['resubmissionNumber'] as number | undefined) ?? 0,
     version: doc['version'] as number,
     currentFormStatus,
@@ -43,7 +47,11 @@ export function mapClaimLetterBatchDocToSummary(doc: Record<string, unknown>, us
     supersedes: toObjectIdString(doc['supersedes']),
     supersededBy: toObjectIdString(doc['supersededBy']),
     createdAt: doc['createdAt'] as Date,
+    updatedAt: doc['updatedAt'] as Date,
     mohuaRemarks: (doc['mohuaRemarks'] as string | null | undefined) ?? null,
+    returnedWithNote: doc['returnedWith']
+      ? returnedWithMessage(doc['returnedWith'] as ClaimLetterStateFormReturnInfo)
+      : null,
     permissions: buildClaimLetterPermissions(user, currentFormStatus, isAbandoned),
   };
 }
