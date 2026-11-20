@@ -255,6 +255,15 @@ export class DocumentItem {
   uploadBlockedUntil!: Date | null;
 
   /**
+   * How many times the ULB has thrown away a PASSED upload of this document (removed it, or uploaded
+   * over it). At MAX_PASSED_REPLACEMENTS a passed document is locked for good (common/utils/
+   * manual-review-cooldown.util.ts). Replacing a document the State or SO returned is always allowed
+   * and resets this to 0. Shared by DUR, which reuses this sub-schema.
+   */
+  @Prop({ default: 0 })
+  passedReplacementsUsed!: number;
+
+  /**
    * Uploads of this document that failed in a row (a real FAIL verdict). Counted once per upload, so retries of the
    * same file don't add; a pass resets it to 0. "Request Manual Review" needs MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW
    * (DUR, which reuses this sub-schema, needs DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW;

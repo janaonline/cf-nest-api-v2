@@ -6,10 +6,36 @@ import {
   computeUploadBlockedUntil,
   isAwaitingManualReviewDecision,
   isUploadBlocked,
+  nextPassedReplacements,
   nextPostRejectionAttempts,
   failedUploadRunUpdate,
   hasEnoughFailedUploads,
 } from './manual-review-cooldown.util';
+
+describe('nextPassedReplacements', () => {
+  it('counts nothing when the current upload had not passed', () => {
+    expect(nextPassedReplacements({ processingStatus: 'FAILED', passedReplacementsUsed: 3 }, false)).toBeNull();
+    expect(nextPassedReplacements(undefined, false)).toBeNull();
+  });
+
+  it('allows up to 3 replacements of a passed document, then refuses the 4th', () => {
+    expect(nextPassedReplacements({ processingStatus: 'PASSED' }, false)).toEqual({ allowed: true, value: 1 });
+    expect(nextPassedReplacements({ processingStatus: 'PASSED', passedReplacementsUsed: 2 }, false)).toEqual({
+      allowed: true,
+      value: 3,
+    });
+    expect(nextPassedReplacements({ processingStatus: 'PASSED', passedReplacementsUsed: 3 }, false)?.allowed).toBe(
+      false,
+    );
+  });
+
+  it('always allows a returned document and resets its count', () => {
+    expect(nextPassedReplacements({ processingStatus: 'PASSED', passedReplacementsUsed: 3 }, true)).toEqual({
+      allowed: true,
+      value: 0,
+    });
+  });
+});
 
 describe('nextPostRejectionAttempts', () => {
   it('increments by one', () => {
