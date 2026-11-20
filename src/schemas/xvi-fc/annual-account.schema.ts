@@ -253,6 +253,15 @@ export class DocumentItem {
    */
   @Prop({ type: Date, default: null })
   uploadBlockedUntil!: Date | null;
+
+  /**
+   * How many times the ULB has thrown away a PASSED upload of this document (removed it, or uploaded
+   * over it). At MAX_PASSED_REPLACEMENTS a passed document is locked for good (common/utils/
+   * manual-review-cooldown.util.ts). Replacing a document the State or SO returned is always allowed
+   * and resets this to 0. Shared by DUR, which reuses this sub-schema.
+   */
+  @Prop({ default: 0 })
+  passedReplacementsUsed!: number;
 }
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);

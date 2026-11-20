@@ -72,7 +72,10 @@ describe('DurService', () => {
       updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
       deleteOne: jest.fn().mockResolvedValue({ deletedCount: 1 }),
     };
-    mockFormLogModel = { create: jest.fn().mockResolvedValue(undefined), find: jest.fn().mockReturnValue(mockQuery([])) };
+    mockFormLogModel = {
+      create: jest.fn().mockResolvedValue(undefined),
+      find: jest.fn().mockReturnValue(mockQuery([])),
+    };
     mockUlbModel = {
       findById: jest.fn().mockReturnValue(mockQuery({ state: stateId })),
       find: jest.fn().mockReturnValue(mockQuery([])),
@@ -84,7 +87,10 @@ describe('DurService', () => {
     mockFormReturnedNotification = { notifyReturned: jest.fn().mockResolvedValue(undefined) };
     mockYearAccessService = { isFormExempt: jest.fn().mockResolvedValue(false) };
     mockExemptionResolverService = { resolveBulk: jest.fn().mockResolvedValue(new Map()) };
-    mockUploadHistoryModel = { create: jest.fn().mockResolvedValue(undefined), updateOne: jest.fn().mockResolvedValue({}) };
+    mockUploadHistoryModel = {
+      create: jest.fn().mockResolvedValue(undefined),
+      updateOne: jest.fn().mockResolvedValue({}),
+    };
     mockS3Service = {
       headObject: jest.fn().mockResolvedValue(undefined),
       getPdfBufferFromS3: jest.fn().mockResolvedValue(Buffer.from('pdf')),
@@ -189,6 +195,57 @@ describe('DurService', () => {
           null,
         ),
       ).rejects.toThrow('Invalid s3Key for this upload');
+    });
+
+    const durWithPassedTied = (extra: Record<string, unknown>, passedReplacementsUsed: number) => ({
+      ...emptyDur,
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      documents: [
+        {
+          docId: 'tiedGrant',
+          processingStatus: 'PASSED',
+          passedReplacementsUsed,
+          currentUpload: { version: 1, uploadedAt: new Date(Date.now() - 60_000) },
+        },
+        { docId: 'untiedGrant', currentUpload: null },
+      ],
+      ...extra,
+    });
+    const savedCount = () =>
+      mockDurModel.updateOne.mock.calls.find(([filter]) => filter['documents.docId'] === 'tiedGrant')?.[1].$set[
+        'documents.$.passedReplacementsUsed'
+      ];
+
+    it('counts uploading over a passed document against its replacement cap', async () => {
+      mockDurModel.findById.mockReturnValue(mockQuery(durWithPassedTied({}, 2)));
+
+      await service.confirmUpload(dto as any, ulbUser, null, null);
+
+      expect(savedCount()).toBe(3);
+    });
+
+    it('refuses to replace a passed document a 4th time', async () => {
+      mockDurModel.findById.mockReturnValue(mockQuery(durWithPassedTied({}, 3)));
+
+      await expect(service.confirmUpload(dto as any, ulbUser, null, null)).rejects.toThrow(/replaced 3 times/);
+    });
+
+    it('lets the ULB replace a passed document once the State returned the DUR, and resets the count', async () => {
+      mockDurModel.findById.mockReturnValue(
+        mockQuery(
+          durWithPassedTied(
+            {
+              currentFormStatus: FORM_STATUS.RETURNED_BY_STATE,
+              stateDecision: { status: 'RETURNED', decidedAt: new Date() },
+            },
+            3,
+          ),
+        ),
+      );
+
+      await service.confirmUpload(dto as any, ulbUser, null, null);
+
+      expect(savedCount()).toBe(0);
     });
   });
 
@@ -337,7 +394,11 @@ describe('DurService', () => {
     it('approves the form, writes stateDecision + log, and sends no return notification', async () => {
       mockDurModel.findById.mockReturnValue(mockQuery(baseDur));
       mockDurModel.findByIdAndUpdate.mockReturnValue(
-        mockQuery({ _id: durId, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE, currentFormStatusLabel: 'Approved By State' }),
+        mockQuery({
+          _id: durId,
+          currentFormStatus: FORM_STATUS.APPROVED_BY_STATE,
+          currentFormStatusLabel: 'Approved By State',
+        }),
       );
 
       const result = await service.decideDur(durId, { decision: 'APPROVED' }, stateUser);
@@ -359,20 +420,29 @@ describe('DurService', () => {
     it('returns the form and fires the return notification', async () => {
       mockDurModel.findById.mockReturnValue(mockQuery(baseDur));
       mockDurModel.findByIdAndUpdate.mockReturnValue(
-        mockQuery({ _id: durId, currentFormStatus: FORM_STATUS.RETURNED_BY_STATE, currentFormStatusLabel: 'Returned By State' }),
+        mockQuery({
+          _id: durId,
+          currentFormStatus: FORM_STATUS.RETURNED_BY_STATE,
+          currentFormStatusLabel: 'Returned By State',
+        }),
       );
 
       await service.decideDur(durId, { decision: 'RETURNED', note: 'Please fix the tied grant document.' }, stateUser);
 
       expect(mockFormReturnedNotification.notifyReturned).toHaveBeenCalledWith(
-        expect.objectContaining({ formName: 'Detailed Utilisation Report', note: 'Please fix the tied grant document.' }),
+        expect.objectContaining({
+          formName: 'Detailed Utilisation Report',
+          note: 'Please fix the tied grant document.',
+        }),
       );
     });
   });
 
   describe('undoDurApproval', () => {
     it('rejects undo when the form is not APPROVED_BY_STATE', async () => {
-      mockDurModel.findById.mockReturnValue(mockQuery({ ...baseDur, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
+      mockDurModel.findById.mockReturnValue(
+        mockQuery({ ...baseDur, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+      );
 
       await expect(service.undoDurApproval(durId, stateUser)).rejects.toThrow(
         "This form's approval cannot be undone while its status is",
@@ -380,31 +450,47 @@ describe('DurService', () => {
     });
 
     it('resets the form to UNDER_REVIEW_BY_STATE, clears stateDecision, and writes two log entries', async () => {
-      mockDurModel.findById.mockReturnValue(mockQuery({ ...baseDur, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }));
+      mockDurModel.findById.mockReturnValue(
+        mockQuery({ ...baseDur, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE }),
+      );
       mockDurModel.findByIdAndUpdate.mockReturnValue(
-        mockQuery({ _id: durId, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE, currentFormStatusLabel: 'Under Review By State' }),
+        mockQuery({
+          _id: durId,
+          currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE,
+          currentFormStatusLabel: 'Under Review By State',
+        }),
       );
 
       await service.undoDurApproval(durId, stateUser);
 
       expect(mockDurModel.findByIdAndUpdate).toHaveBeenCalledWith(
         durId,
-        expect.objectContaining({ $set: expect.objectContaining({ stateDecision: null, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }) }),
+        expect.objectContaining({
+          $set: expect.objectContaining({ stateDecision: null, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+        }),
         { new: true },
       );
       expect(mockFormLogModel.create).toHaveBeenCalledTimes(2);
-      expect(mockFormLogModel.create).toHaveBeenNthCalledWith(1, expect.objectContaining({ toStatus: FORM_STATUS.UNDO }));
-      expect(mockFormLogModel.create).toHaveBeenNthCalledWith(2, expect.objectContaining({ toStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }));
+      expect(mockFormLogModel.create).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ toStatus: FORM_STATUS.UNDO }),
+      );
+      expect(mockFormLogModel.create).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ toStatus: FORM_STATUS.UNDER_REVIEW_BY_STATE }),
+      );
     });
   });
 
   describe('bulkDecideDur', () => {
     it('decides each id independently and tallies success/failure', async () => {
-      mockDurModel.findById
-        .mockReturnValueOnce(mockQuery(baseDur))
-        .mockReturnValueOnce(mockQuery(null));
+      mockDurModel.findById.mockReturnValueOnce(mockQuery(baseDur)).mockReturnValueOnce(mockQuery(null));
       mockDurModel.findByIdAndUpdate.mockReturnValue(
-        mockQuery({ _id: durId, currentFormStatus: FORM_STATUS.APPROVED_BY_STATE, currentFormStatusLabel: 'Approved By State' }),
+        mockQuery({
+          _id: durId,
+          currentFormStatus: FORM_STATUS.APPROVED_BY_STATE,
+          currentFormStatusLabel: 'Approved By State',
+        }),
       );
 
       const idA = '507f1f77bcf86cd799439021';
@@ -525,9 +611,9 @@ describe('DurService', () => {
   describe('listUlbSubmissions', () => {
     it('rejects non-STATE/ADMIN users', async () => {
       const ulbUser = { _id: 'u1', role: 'ULB', scope: Scope.ULB } as AuthUser;
-      await expect(service.listUlbSubmissions({ designYearId: 'year-1', page: 1, pageSize: 20 }, ulbUser)).rejects.toThrow(
-        'Only STATE or ADMIN users may list ULB submissions',
-      );
+      await expect(
+        service.listUlbSubmissions({ designYearId: 'year-1', page: 1, pageSize: 20 }, ulbUser),
+      ).rejects.toThrow('Only STATE or ADMIN users may list ULB submissions');
     });
 
     it('returns rows/total/counts from the aggregation', async () => {
@@ -574,7 +660,7 @@ describe('DurService', () => {
       );
     });
 
-    it('does not trust a stale exemption stub\'s stored status - falls through to the live exemption check', async () => {
+    it("does not trust a stale exemption stub's stored status - falls through to the live exemption check", async () => {
       await service.listUlbSubmissions({ designYearId, page: 1, pageSize: 20 }, stateUser);
 
       const pipeline = mockUlbModel.aggregate.mock.calls[0][0];
@@ -584,10 +670,7 @@ describe('DurService', () => {
       );
       const [condition, trueBranch] = addFieldsStage.$addFields.formStatus.$cond;
       expect(condition).toEqual({
-        $and: [
-          { $ne: [{ $ifNull: ['$dur', null] }, null] },
-          { $ne: ['$dur.isExemptionStub', true] },
-        ],
+        $and: [{ $ne: [{ $ifNull: ['$dur', null] }, null] }, { $ne: ['$dur.isExemptionStub', true] }],
       });
       expect(trueBranch).toBe('$dur.currentFormStatus');
     });
