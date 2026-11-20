@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectQueue } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
 import { createHash } from 'crypto';
@@ -21,13 +21,13 @@ import { Ulb, UlbDocument } from 'src/schemas/ulb.schema';
 import { Year } from 'src/schemas/year.schema';
 import { User, UserDocument } from 'src/schemas/user/user.schema';
 import { YearAccessService, type UlbAccessInput } from 'src/module/xvi-fc/common/services/year-access.service';
-import { ExemptionResolverService, type ExemptionResolution } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
+import {
+  ExemptionResolverService,
+  type ExemptionResolution,
+} from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import { XviFcDur, XviFcDurDocument, DUR_DOC_IDS, type XviFcDurDocId } from 'src/schemas/xvi-fc/dur.schema';
 import { XviFcDurFormLog, XviFcDurFormLogDocument } from 'src/schemas/xvi-fc/dur-form-log.schema';
-import {
-  XviFcDurUploadHistory,
-  XviFcDurUploadHistoryDocument,
-} from 'src/schemas/xvi-fc/dur-upload-history.schema';
+import { XviFcDurUploadHistory, XviFcDurUploadHistoryDocument } from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
 import { CANTONMENT_BOARD_XVIFC_INELIGIBLE_MESSAGE } from 'src/module/ulb-eligibility/ulb-eligibility.constants';
 import { DUR_VALIDATION_QUEUE } from 'src/core/constants/queues';
@@ -48,6 +48,8 @@ import {
 import {
   isAwaitingManualReviewDecision,
   isUploadBlocked,
+  nextPassedReplacements,
+  PASSED_REPLACEMENTS_EXHAUSTED_MESSAGE,
   UPLOAD_BLOCKED_MESSAGE,
 } from 'src/common/utils/manual-review-cooldown.util';
 import { ConfirmDurUploadDto } from './dto/confirm-dur-upload.dto';
@@ -58,6 +60,13 @@ import type { DurUlbSubmissionsQueryDto } from './dto/dur-ulb-submissions-query.
 import type { DurValidationJobData } from './dto/dur-validation-job.dto';
 import type { DurFormLogEntry, DurPermissions } from './dur.types';
 import { DUR_DOC_LABELS, DUR_FORM_ID, DUR_REPORTING_FINANCIAL_YEAR } from './constants/dur-form.constants';
+
+/** A DUR at one of these was sent back to the ULB; files it holds from before that are replaceable without limit. */
+const DUR_RETURNED_STATUSES: number[] = [
+  FORM_STATUS.RETURNED_BY_STATE,
+  FORM_STATUS.RETURNED_BY_SO,
+  FORM_STATUS.RETURNED_BY_MOHUA,
+];
 
 interface DurSubmissionRow {
   ulbId: Types.ObjectId;
@@ -172,24 +181,60 @@ export class DurService {
 
   assertCanUlbUpload(dur: { currentFormStatus: number; documents: XviFcDur['documents'] }, docId: XviFcDurDocId) {
     if (!canUlbEditForm(dur.currentFormStatus)) {
-      throw new ForbiddenException(`This form cannot be edited while its status is ${getFormStatusLabel(dur.currentFormStatus)}.`);
+      throw new ForbiddenException(
+        `This form cannot be edited while its status is ${getFormStatusLabel(dur.currentFormStatus)}.`,
+      );
     }
     const docSlot = dur.documents.find((d) => d.docId === docId);
     if (
-      isAwaitingManualReviewDecision(docSlot?.currentUpload?.ocrInfo?.isManualReviewRequested, docSlot?.manualReviewDecision)
+      isAwaitingManualReviewDecision(
+        docSlot?.currentUpload?.ocrInfo?.isManualReviewRequested,
+        docSlot?.manualReviewDecision,
+      )
     ) {
-      throw new ForbiddenException('This document is awaiting manual review and cannot be re-uploaded until an ADMIN makes a decision.');
+      throw new ForbiddenException(
+        'This document is awaiting manual review and cannot be re-uploaded until an ADMIN makes a decision.',
+      );
     }
     if (isUploadBlocked(docSlot?.uploadBlockedUntil)) {
       throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
   }
 
+  /**
+   * Uploading over this slot's current file: refuses once a PASSED document has used its
+   * MAX_PASSED_REPLACEMENTS, else returns the new `passedReplacementsUsed` (null when the file had not
+   * passed, so nothing is counted). DUR is returned as a whole form (State 4, SO 16, MoHUA 6); a file
+   * uploaded before that return is always replaceable and starts the count again.
+   */
+  passedReplacementsAfterUpload(
+    dur: Pick<XviFcDur, 'currentFormStatus' | 'documents' | 'stateDecision' | 'mohuaDecision'>,
+    docId: XviFcDurDocId,
+  ): number | null {
+    const docSlot = dur.documents.find((d) => d.docId === docId);
+    const returnedAt = Math.max(
+      dur.stateDecision?.decidedAt ? new Date(dur.stateDecision.decidedAt).getTime() : 0,
+      dur.mohuaDecision?.decidedAt ? new Date(dur.mohuaDecision.decidedAt).getTime() : 0,
+    );
+    const uploadedAt = docSlot?.currentUpload?.uploadedAt ? new Date(docSlot.currentUpload.uploadedAt).getTime() : 0;
+    const isReturned = DUR_RETURNED_STATUSES.includes(dur.currentFormStatus) && uploadedAt <= returnedAt;
+
+    const next = nextPassedReplacements(docSlot, isReturned);
+    if (!next) return null;
+    if (!next.allowed) throw new ConflictException(PASSED_REPLACEMENTS_EXHAUSTED_MESSAGE);
+    return next.value;
+  }
+
   // ─── Find-or-create ────────────────────────────────────────────────────────
 
   /** One XviFcDur per {ulb, design_year} — both document slots pre-seeded on creation (unlike
    *  Annual Account's lazily-created sibling, DUR's two docIds are always both present). */
-  private async findOrInitialize(ulbId: string, stateId: string, designYearId: string, user: AuthUser): Promise<string> {
+  private async findOrInitialize(
+    ulbId: string,
+    stateId: string,
+    designYearId: string,
+    user: AuthUser,
+  ): Promise<string> {
     const ulb = await this.ulbModel.findById(new Types.ObjectId(ulbId)).select('state').lean().exec();
     if (!ulb) throw new NotFoundException('ULB not found');
     if (ulb.state?.toString() !== stateId) {
@@ -238,6 +283,7 @@ export class DurService {
     const dur = await this.durModel.findById(new Types.ObjectId(durId)).lean().exec();
     if (!dur) throw new NotFoundException('DUR form not found');
     this.assertCanUlbUpload(dur, dto.docId);
+    const passedReplacementsUsed = this.passedReplacementsAfterUpload(dur, dto.docId);
 
     const expectedKeyPrefix = `xvi-fc/dur/${dto.ulbId}/${dto.designYearId}/${dto.docId}/`;
     if (!dto.s3Key.startsWith(expectedKeyPrefix)) {
@@ -316,6 +362,7 @@ export class DurService {
           'documents.$.currentUpload': currentUpload,
           'documents.$.uploadStatus': 'UPLOADED',
           'documents.$.processingStatus': 'PROCESSING',
+          ...(passedReplacementsUsed !== null ? { 'documents.$.passedReplacementsUsed': passedReplacementsUsed } : {}),
           modifiedBy: new Types.ObjectId(user._id),
         },
       },
@@ -349,7 +396,15 @@ export class DurService {
 
     this.logger.log(`DUR upload confirmed — durId=${durId} docId=${dto.docId} uploadId=${dto.uploadId}`);
 
-    return { durId, uploadId: dto.uploadId, docId: dto.docId, version, versionLabel, processingStatus: 'PROCESSING', uploadedAt: now };
+    return {
+      durId,
+      uploadId: dto.uploadId,
+      docId: dto.docId,
+      version,
+      versionLabel,
+      processingStatus: 'PROCESSING',
+      uploadedAt: now,
+    };
   }
 
   // ─── Retry ─────────────────────────────────────────────────────────────────
@@ -451,6 +506,7 @@ export class DurService {
         stateDecision: d.stateDecision,
         manualReviewDecision: d.manualReviewDecision,
         postRejectionAttemptsUsed: d.postRejectionAttemptsUsed,
+        passedReplacementsUsed: d.passedReplacementsUsed ?? 0,
         manualReviewRejectionCount: d.manualReviewRejectionCount,
         uploadBlockedUntil: d.uploadBlockedUntil,
       })),
@@ -939,8 +995,9 @@ export class DurService {
       },
     ];
 
-    const statusMatch: PipelineStage.FacetPipelineStage[] =
-      dto.status?.length ? [{ $match: { formStatus: { $in: dto.status } } }] : [];
+    const statusMatch: PipelineStage.FacetPipelineStage[] = dto.status?.length
+      ? [{ $match: { formStatus: { $in: dto.status } } }]
+      : [];
 
     pipeline.push({
       $facet: {
