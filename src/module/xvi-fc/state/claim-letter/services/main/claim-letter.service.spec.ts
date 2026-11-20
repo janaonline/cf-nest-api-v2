@@ -7,11 +7,13 @@ import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligi
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
+import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { CLAIM_LETTER_BUSY_MESSAGE } from '../../helpers/claim-letter-concurrency.helpers';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { ClaimLetterBatchUlb } from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { State } from 'src/schemas/state.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -70,6 +72,8 @@ describe('ClaimLetterService', () => {
   let stateModel: { findById: jest.Mock };
   let formStatusService: { assertStateFormsStillReady: jest.Mock };
   let undoEligibility: { touchClaimUndoGuard: jest.Mock };
+  let historyService: { findLatestRejection: jest.Mock };
+  let batchUlbModel: { find: jest.Mock };
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
@@ -145,6 +149,8 @@ describe('ClaimLetterService', () => {
     stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Test State' })) };
     formStatusService = { assertStateFormsStillReady: jest.fn().mockResolvedValue(undefined) };
     undoEligibility = { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) };
+    historyService = { findLatestRejection: jest.fn().mockResolvedValue(null) };
+    batchUlbModel = { find: jest.fn().mockReturnValue(q([])) };
     session = {
       startTransaction: jest.fn(),
       commitTransaction: jest.fn().mockResolvedValue(undefined),
@@ -163,8 +169,10 @@ describe('ClaimLetterService', () => {
         { provide: ClaimLetterLetterDetailsService, useValue: letterDetailsService },
         { provide: ClaimLetterFormStatusService, useValue: formStatusService },
         { provide: PmuUndoEligibilityService, useValue: undoEligibility },
+        { provide: ClaimLetterHistoryService, useValue: historyService },
         { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
+        { provide: getModelToken(ClaimLetterBatchUlb.name), useValue: batchUlbModel },
         { provide: getModelToken(State.name), useValue: stateModel },
       ],
     }).compile();
@@ -1204,6 +1212,108 @@ describe('ClaimLetterService', () => {
       const result = await service.getDetail(claimLetterId.toString(), stateUser);
 
       expect(result.data?.questions).toEqual([]);
+    });
+
+    describe('returnSummary', () => {
+      const claimLetterId = new Types.ObjectId();
+      const agra = new Types.ObjectId();
+      const mathura = new Types.ObjectId();
+      const letter = (overrides: Record<string, unknown>) => ({
+        _id: claimLetterId,
+        state: stateId,
+        year: yearId,
+        installment: 1,
+        batchNumber: 1,
+        version: 1,
+        revision: 1,
+        assemblyStatus: 'READY',
+        ulbCount: 2,
+        isAbandoned: true,
+        financialSummary,
+        createdAt: new Date(),
+        ...overrides,
+      });
+
+      it('lists what the SO returned on a letter it returned itself', async () => {
+        batchModel.findOne.mockReturnValue(q(letter({ currentFormStatus: FORM_STATUS.RETURNED_BY_SO })));
+        historyService.findLatestRejection.mockResolvedValue({
+          rejectedSourceRefs: [
+            { formId: 22, formDocumentId: new Types.ObjectId(), ulbId: null, rowDocumentId: null, remark: 'Fix' },
+            { formId: 30, formDocumentId: new Types.ObjectId(), ulbId: mathura, rowDocumentId: null, remark: 'Audit' },
+            {
+              formId: 23,
+              formDocumentId: new Types.ObjectId(),
+              ulbId: agra,
+              rowDocumentId: new Types.ObjectId(),
+              remark: 'Row',
+            },
+            { formId: 23, formDocumentId: new Types.ObjectId(), ulbId: null, rowDocumentId: null, remark: 'See rows' },
+          ],
+          changedBy: null,
+          changedAt: new Date(),
+        });
+        batchUlbModel.find.mockReturnValue(
+          q([
+            { ulbId: mathura, ulbSnapshot: { name: 'Mathura' }, soDecision: { remark: 'Audit report missing' } },
+            { ulbId: agra, ulbSnapshot: { name: 'Agra' }, soDecision: { remark: null } },
+          ]),
+        );
+
+        const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+        expect(historyService.findLatestRejection).toHaveBeenCalledWith(claimLetterId);
+        expect(batchUlbModel.find).toHaveBeenCalledWith({
+          claimLetter: claimLetterId,
+          'soDecision.status': 'RETURNED',
+        });
+        expect(data!.returnSummary).toEqual({
+          stateForms: [
+            { formId: 22, name: 'SFC Status', ulbCount: 0 },
+            { formId: 23, name: 'Elected Body Status', ulbCount: 1 },
+          ],
+          ulbs: [
+            { ulbId: String(agra), ulbName: 'Agra', items: ['Elected Body Status'], remark: null },
+            {
+              ulbId: String(mathura),
+              ulbName: 'Mathura',
+              items: ['Annual Accounts (Audited)'],
+              remark: 'Audit report missing',
+            },
+          ],
+        });
+      });
+
+      it('has none for a letter returned with another letter, and makes no extra reads', async () => {
+        batchModel.findOne.mockReturnValue(
+          q(
+            letter({
+              currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
+              returnedWith: {
+                claimLetter: new Types.ObjectId(),
+                letterName: 'Claim Letter 2',
+                formNames: ['SFC Status'],
+              },
+            }),
+          ),
+        );
+
+        const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+        expect(data!.returnSummary).toBeNull();
+        expect(historyService.findLatestRejection).not.toHaveBeenCalled();
+        expect(batchUlbModel.find).not.toHaveBeenCalled();
+      });
+
+      it('has none for a draft or a letter under review', async () => {
+        for (const currentFormStatus of [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_SO]) {
+          batchModel.findOne.mockReturnValue(q(letter({ currentFormStatus, isAbandoned: false })));
+
+          const { data } = await service.getDetail(claimLetterId.toString(), stateUser);
+
+          expect(data!.returnSummary).toBeNull();
+        }
+        expect(historyService.findLatestRejection).not.toHaveBeenCalled();
+      });
     });
   });
 

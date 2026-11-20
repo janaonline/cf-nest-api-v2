@@ -107,3 +107,19 @@ export const CLAIM_LETTER_ROW_CRITERIA = {
 
 /** Election Status row value that the row C sentence counts. */
 export const CLAIM_LETTER_SIXTH_SCHEDULE_VALUE = '6th Schedule';
+
+/** What the return emails and the State's returned-letter box call each item the SO can return (formIds as in
+ *  master/form-json-config/CLAUDE.md). */
+export const CLAIM_LETTER_FORM_NAMES: Readonly<Record<number, string>> = {
+  26: 'Claim Letter',
+  22: 'SFC Status',
+  23: 'Elected Body Status',
+  24: 'ULB-wise Allocation',
+  25: 'FC Unspent Declaration',
+  35: 'Grant Transfer Certificate',
+  30: 'Annual Accounts (Audited)',
+  31: 'Annual Accounts (Provisional)',
+  32: 'Service Level Benchmarks',
+  33: 'Bank Account',
+  36: 'Detailed Utilisation Report',
+};

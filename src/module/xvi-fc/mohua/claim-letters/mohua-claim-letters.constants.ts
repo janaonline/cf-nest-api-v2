@@ -35,21 +35,6 @@ export const MOHUA_CLAIM_LETTER_RETURNABLE_ULB_FORM_IDS = [30, 31, 32, 33, 36];
 /** State forms with a row per ULB, returned per ULB: Elected Body, Devolution, FC Unspent. */
 export const MOHUA_CLAIM_LETTER_RETURNABLE_ROW_FORM_IDS = [23, 24, 25];
 
-/** What the return emails call each item the SO can return (formIds as in master/form-json-config/CLAUDE.md). */
-export const MOHUA_CLAIM_LETTER_FORM_NAMES: Readonly<Record<number, string>> = {
-  26: 'Claim Letter',
-  22: 'SFC Status',
-  23: 'Elected Body Status',
-  24: 'ULB-wise Allocation',
-  25: 'FC Unspent Declaration',
-  35: 'Grant Transfer Certificate',
-  30: 'Annual Accounts (Audited)',
-  31: 'Annual Accounts (Provisional)',
-  32: 'Service Level Benchmarks',
-  33: 'Bank Account',
-  36: 'Detailed Utilisation Report',
-};
-
 /** 409 when the State's letters under SO review changed after the return dialog listed the ones it also returns. */
 export const MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE =
   'Another claim letter of this State was submitted or decided while you were reviewing. Reload to see which ' +

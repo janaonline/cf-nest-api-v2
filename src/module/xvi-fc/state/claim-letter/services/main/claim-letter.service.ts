@@ -23,6 +23,10 @@ import {
   ClaimLetterBatchNumber,
   type ClaimLetterStateFormReturn,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import {
+  ClaimLetterBatchUlb,
+  ClaimLetterBatchUlbDocument,
+} from 'src/schemas/xvi-fc/state/claim-letter-batch-ulb.schema';
 import { State, StateDocument } from 'src/schemas/state.schema';
 import {
   CLAIM_LETTER_ABANDONED_MESSAGE,
@@ -36,6 +40,7 @@ import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summ
 import { historySort, historyStatusCondition } from '../../helpers/claim-letter-history.helpers';
 import { toClaimLetterBusyConflict } from '../../helpers/claim-letter-concurrency.helpers';
 import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
+import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
@@ -49,10 +54,13 @@ import {
   type OpenLetterStatus,
 } from '../../helpers/claim-letter-cap.helpers';
 import {
+  buildReturnSummary,
   draftStateFormReturnMessage,
   failingStateFormNames,
+  isReturnedClaimLetter,
   stateConditionsBlockMessage,
   type ClaimLetterStateFormReturnInfo,
+  type ReturnedClaimUlbRow,
 } from '../../helpers/claim-letter-returned.helpers';
 import type { GetClaimLetterHistoryQueryDto } from '../../dto/get-claim-letter-history-query.dto';
 import type {
@@ -60,6 +68,7 @@ import type {
   ClaimLetterClaimContext,
   ClaimLetterEligibilitySummary,
   ClaimLetterFinancialSummaryDisplay,
+  ClaimLetterReturnSummary,
 } from '../../types/claim-letter.types';
 
 type LeanClaimLetterBatch = Record<string, unknown>;
@@ -78,9 +87,12 @@ export class ClaimLetterService {
     private readonly letterDetailsService: ClaimLetterLetterDetailsService,
     private readonly formStatusService: ClaimLetterFormStatusService,
     private readonly undoEligibility: PmuUndoEligibilityService,
+    private readonly historyService: ClaimLetterHistoryService,
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
+    @InjectModel(ClaimLetterBatchUlb.name)
+    private readonly batchUlbModel: Model<ClaimLetterBatchUlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
   ) {}
@@ -337,23 +349,28 @@ export class ClaimLetterService {
     const stateId = toObjectIdString(doc['state']) ?? '';
     const yearId = toObjectIdString(doc['year']) ?? '';
     const installment = doc['installment'] as 1 | 2;
-    const [formConfig, stateName, exemptionUnderReviewUlbCount, sfcExempted, draftState] = await Promise.all([
-      this.formJsonConfigService.loadFormConfig(yearId),
-      this.resolveStateName(stateId),
-      isDraft
-        ? this.eligibilityService.countBatchUlbsWithExemptionUnderReview(
-            doc['_id'] as Types.ObjectId,
-            stateId,
-            yearId,
-            installment,
-          )
-        : Promise.resolve(0),
-      this.letterDetailsService.isSfcExempted({
-        state: doc['state'] as Types.ObjectId,
-        year: doc['year'] as Types.ObjectId,
-      }),
-      isDraft ? this.resolveDraftState(doc, stateId, yearId, installment) : Promise.resolve(null),
-    ]);
+    // Only a letter the SO returned itself; one returned with another letter's State form has its own note.
+    const ownReturn = isReturnedClaimLetter(doc['currentFormStatus'] as number) && !doc['returnedWith'];
+    const [formConfig, stateName, exemptionUnderReviewUlbCount, sfcExempted, draftState, returnSummary] =
+      await Promise.all([
+        this.formJsonConfigService.loadFormConfig(yearId),
+        this.resolveStateName(stateId),
+        isDraft
+          ? this.eligibilityService.countBatchUlbsWithExemptionUnderReview(
+              doc['_id'] as Types.ObjectId,
+              stateId,
+              yearId,
+              installment,
+            )
+          : Promise.resolve(0),
+        this.letterDetailsService.isSfcExempted({
+          state: doc['state'] as Types.ObjectId,
+          year: doc['year'] as Types.ObjectId,
+        }),
+        isDraft ? this.resolveDraftState(doc, stateId, yearId, installment) : Promise.resolve(null),
+        ownReturn ? this.resolveReturnSummary(doc['_id'] as Types.ObjectId) : Promise.resolve(null),
+      ]);
+    summary.returnSummary = returnSummary;
     summary.exemptionUnderReviewUlbCount = exemptionUnderReviewUlbCount;
     summary.stateExemptionsUnderReview = draftState?.stateExemptionsUnderReview ?? [];
     summary.blockedReason = draftState?.blockedReason ?? null;
@@ -387,6 +404,19 @@ export class ClaimLetterService {
     this.applySignedFileSupportingContent(summary.questions, doc, summary.permissions, summary.blockedReason);
 
     return xviFcSuccess('Claim letter fetched.', summary);
+  }
+
+  /** What the SO's return reopened (its history row) with each returned ULB's name and remark (2 reads). */
+  private async resolveReturnSummary(claimLetter: Types.ObjectId): Promise<ClaimLetterReturnSummary | null> {
+    const [rejection, returnedRows] = await Promise.all([
+      this.historyService.findLatestRejection(claimLetter),
+      this.batchUlbModel
+        .find({ claimLetter, 'soDecision.status': 'RETURNED' })
+        .select('ulbId ulbSnapshot.name soDecision.remark soDecision.rejectExemptionFormIds')
+        .lean<ReturnedClaimUlbRow[]>()
+        .exec(),
+    ]);
+    return rejection ? buildReturnSummary(rejection.rejectedSourceRefs ?? [], returnedRows) : null;
   }
 
   /**

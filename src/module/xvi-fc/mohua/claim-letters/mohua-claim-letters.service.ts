@@ -12,7 +12,10 @@ import { toClaimLetterBusyConflict } from 'src/module/xvi-fc/state/claim-letter/
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { assertValidFormStatusTransition } from 'src/common/utils/form-status-transitions';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { CLAIM_LETTER_APPROVED_STATUSES } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
+import {
+  CLAIM_LETTER_APPROVED_STATUSES,
+  CLAIM_LETTER_FORM_NAMES,
+} from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import type { ClaimLetterStateFormReturn } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
   CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS,
@@ -48,7 +51,6 @@ import { buildClaimLetterRefNo } from 'src/module/xvi-fc/state/claim-letter/help
 import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import {
   MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE,
-  MOHUA_CLAIM_LETTER_FORM_NAMES,
   MOHUA_CLAIM_LETTERS_FIRST_CLAIM_STATUS,
   MOHUA_CLAIM_LETTERS_INSTALLMENT,
   MOHUA_CLAIM_LETTERS_INSTALLMENTS_PER_YEAR,
@@ -124,7 +126,7 @@ type LeanBatch = {
 /** A letter returned with another letter's State form, as the return email names it. */
 type CascadedLetter = Pick<LeanBatch, '_id' | 'batchNumber' | 'resubmissionNumber' | 'version'>;
 
-const formName = (formId: number) => MOHUA_CLAIM_LETTER_FORM_NAMES[formId] ?? `Form ${formId}`;
+const formName = (formId: number) => CLAIM_LETTER_FORM_NAMES[formId] ?? `Form ${formId}`;
 
 function toReturnedWith(info: ClaimLetterStateFormReturn | null | undefined): MohuaClaimLetterReturnedWith | null {
   return info ? { letterId: String(info.claimLetter), number: info.letterRef, formNames: info.formNames } : null;

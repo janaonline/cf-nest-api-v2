@@ -189,5 +189,23 @@ export interface ClaimLetterBatchSummary {
   isLastPlace?: boolean;
   /** getDetail only, the last draft: expected ULBs in no letter, read with `isLastPlace`; null otherwise. */
   remainingUlbCount?: number | null;
+  /** getDetail only, a letter the SO returned itself: what went back. null otherwise, also for a letter returned
+   *  with another letter's State form (`returnedWithNote` explains that one). */
+  returnSummary?: ClaimLetterReturnSummary | null;
   permissions: ClaimLetterPermissions;
+}
+
+/** What a return reopened, for the State's returned-letter box and red ULB rows. */
+export interface ClaimLetterReturnSummary {
+  /** State forms reopened; `ulbCount` > 0 when the form went back through its ULB rows. */
+  stateForms: { formId: number; name: string; ulbCount: number }[];
+  /** Returned ULBs, by name: the forms (or exemptions) reopened and the SO's remark. */
+  ulbs: ClaimLetterReturnedUlb[];
+}
+
+export interface ClaimLetterReturnedUlb {
+  ulbId: string;
+  ulbName: string;
+  items: string[];
+  remark: string | null;
 }

@@ -1,5 +1,9 @@
+import type { Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { EligibilityEvaluationResult } from 'src/module/xvi-fc/common/types/claim-eligibility.type';
+import type { ClaimLetterRejectedSourceRef } from 'src/schemas/xvi-fc/state/claim-letter-batch-history.schema';
+import { CLAIM_LETTER_FORM_NAMES } from '../constants/claim-letter.constants';
+import type { ClaimLetterReturnSummary } from '../types/claim-letter.types';
 
 /**
  * A claim letter sent back for correction: by the SO (16) or, once that step exists, by MoHUA (6).
@@ -73,4 +77,57 @@ export function stateConditionsBlockMessage(failingForms: readonly string[]): st
 /** The State forms a failed gate names, as the checklist does. */
 export function failingStateFormNames(sources: readonly EligibilityEvaluationResult[]): string[] {
   return sources.filter((s) => s.result === 'FAILED').map((s) => s.displayLabel ?? s.formType);
+}
+
+/** A returned claim ULB row, as `getDetail` reads it for the return summary. */
+export interface ReturnedClaimUlbRow {
+  ulbId: Types.ObjectId;
+  ulbSnapshot?: { name?: string | null } | null;
+  soDecision?: { remark?: string | null; rejectExemptionFormIds?: number[] } | null;
+}
+
+const formLabel = (formId: number) => CLAIM_LETTER_FORM_NAMES[formId] ?? `Form ${formId}`;
+
+/**
+ * What a return reopened, from its history refs: a ref without a ULB is a State form, one with a row is that State
+ * form's row for one ULB, and one with a ULB but no row is the ULB's own form, or its exemption when the SO rejected
+ * that exemption. Each ULB's name and remark come from its claim row.
+ */
+export function buildReturnSummary(
+  refs: readonly Pick<ClaimLetterRejectedSourceRef, 'formId' | 'ulbId' | 'rowDocumentId'>[],
+  returnedRows: readonly ReturnedClaimUlbRow[],
+): ClaimLetterReturnSummary {
+  const rowByUlb = new Map(returnedRows.map((row) => [String(row.ulbId), row]));
+  const rowCountByForm = new Map<number, number>();
+  const itemsByUlb = new Map<string, string[]>();
+  const stateFormIds = new Set<number>();
+
+  for (const ref of refs) {
+    if (!ref.ulbId) {
+      stateFormIds.add(ref.formId);
+      continue;
+    }
+    if (ref.rowDocumentId) rowCountByForm.set(ref.formId, (rowCountByForm.get(ref.formId) ?? 0) + 1);
+    const ulbId = String(ref.ulbId);
+    const exemption =
+      !ref.rowDocumentId && !!rowByUlb.get(ulbId)?.soDecision?.rejectExemptionFormIds?.includes(ref.formId);
+    const item = `${formLabel(ref.formId)}${exemption ? ' exemption' : ''}`;
+    const items = itemsByUlb.get(ulbId) ?? [];
+    if (!items.includes(item)) items.push(item);
+    itemsByUlb.set(ulbId, items);
+  }
+
+  return {
+    stateForms: [...stateFormIds].map((formId) => ({
+      formId,
+      name: formLabel(formId),
+      ulbCount: rowCountByForm.get(formId) ?? 0,
+    })),
+    ulbs: [...itemsByUlb]
+      .map(([ulbId, items]) => {
+        const row = rowByUlb.get(ulbId);
+        return { ulbId, ulbName: row?.ulbSnapshot?.name ?? 'ULB', items, remark: row?.soDecision?.remark ?? null };
+      })
+      .sort((a, b) => a.ulbName.localeCompare(b.ulbName)),
+  };
 }

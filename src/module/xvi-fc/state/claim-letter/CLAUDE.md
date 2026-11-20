@@ -76,7 +76,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
   rows' 16 back to null (no PMU row review there). The returned letter itself is closed: status 16 plus
   `isAbandoned: true`, so its batch slot and ULB locks are free and the State builds a new letter; MoHUA still lists
   it, and the State summary labels it by status, not "Abandoned". Each reopened form or row is in the history row's
-  `rejectedSourceRefs`.
+  `rejectedSourceRefs`. The State's `getDetail` turns them into `returnSummary` (State forms, returned ULBs with
+  their forms and remark; `buildReturnSummary`) for a letter the SO returned itself, never for one returned with
+  another letter (`returnedWith`). Form names: `CLAIM_LETTER_FORM_NAMES`, shared with the MoHUA return emails.
 - `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
 - `services/recovery/` - the hourly stale-`BUILDING` cleanup (cron) and `detectAnomalies`, a
   read-only report.
