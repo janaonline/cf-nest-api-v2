@@ -50,6 +50,11 @@ export const MOHUA_CLAIM_LETTER_FORM_NAMES: Readonly<Record<number, string>> = {
   36: 'Detailed Utilisation Report',
 };
 
+/** 409 when the State's letters under SO review changed after the return dialog listed the ones it also returns. */
+export const MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE =
+  'Another claim letter of this State was submitted or decided while you were reviewing. Reload to see which ' +
+  'letters this return affects.';
+
 /** State-wide items the SO can return with the letter: the claim letter itself (26, a remark only), SFC and GTC. */
 export const MOHUA_CLAIM_LETTER_RETURNABLE_STATE_FORM_IDS = [26, 22, 35];
 
@@ -58,6 +63,39 @@ export const MOHUA_CLAIM_LETTER_ULB_EXEMPTION_KIND = 'DISCRETIONARY_ULB';
 
 export const MOHUA_CLAIM_LETTER_ULB_RETURNED_MESSAGE =
   'Some ULBs are marked for return. Return the claim letter for correction, or clear those marks to approve it.';
+
+/** 400 when a return picks SFC or GTC the dialog shows as not returnable, with the same reason. */
+export function stateFormNotReturnableMessage(
+  name: string,
+  form: { lockReason: 'ACCEPTED' | 'EXEMPTED' | 'NOT_IN_REVIEW' | null; acceptedWithLetter: string | null },
+): string {
+  switch (form.lockReason) {
+    case 'ACCEPTED':
+      return form.acceptedWithLetter
+        ? `${name} was accepted with ${form.acceptedWithLetter} and can no longer be returned.`
+        : `${name} was already accepted and can no longer be returned.`;
+    case 'EXEMPTED':
+      return `This letter relies on the State's exemption for ${name}, so there is no form to return.`;
+    default:
+      return `${name} is not under review with this letter, so it can't be returned with it.`;
+  }
+}
+
+/**
+ * 409 on approve when a ULB of the letter already has an OM row from another letter (`xvifc_om_ulbs`' unique index).
+ * Names at most 5 ULBs; `letterNames` empty means the holding letter was not found.
+ */
+export function omUlbsHeldMessage(ulbNames: readonly string[], letterNames: readonly string[]): string {
+  const shown = ulbNames.slice(0, 5);
+  const more = ulbNames.length - shown.length;
+  const ulbs = `${shown.join(', ')}${more > 0 ? ` and ${more} more` : ''}`;
+  const verb = ulbNames.length === 1 ? 'is' : 'are';
+  const letters = letterNames.length ? letterNames.join(' and ') : 'another claim letter';
+  return (
+    `${ulbs} ${verb} already in the OM list of ${letters} for this installment, so this letter can't be approved. ` +
+    'Please contact the CityFinance team.'
+  );
+}
 
 /** Longest remark MoHUA can attach to an approval. */
 export const MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH = 1000;

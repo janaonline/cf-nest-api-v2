@@ -9,8 +9,11 @@ export const CLAIM_LETTER_SUPPORTED_INSTALLMENT = 1;
 /** Claim Letter's own formjsons document (registry: master/form-json-config/CLAUDE.md). */
 export const CLAIM_LETTER_FORM_ID = 26;
 
-/** Logical batch slots per State/year/installment (docs/adr/0002-batching-and-locks.md). */
-export const CLAIM_LETTER_MAX_BATCH_NUMBER = 3;
+/** Claim letters per State/year/installment when formjson 26 `meta.maxClaimLetters` is unset or invalid (ADR 0009). */
+export const CLAIM_LETTER_DEFAULT_MAX_LETTERS = 3;
+
+/** Highest `meta.maxClaimLetters`; also the schema's upper bound on `batchNumber`. */
+export const CLAIM_LETTER_MAX_LETTERS_LIMIT = 10;
 
 export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;

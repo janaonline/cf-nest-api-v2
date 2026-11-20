@@ -133,7 +133,7 @@ src/
 │   │                    # state's first-claim status, installment allocation (half of basic + performance from grantAllocation) and amount claimed, plus a national `overview` (total allocation; claims submitted / under SO review / approved = 5+7 / returned, each with claims, states and amount — released isn't tracked yet); .../state/:stateId/:yearId/:installment — one
 │   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs. Lists letters at status 15 (under SO review), 16 (returned by the SO),
 │   │                    # 5 (under MoHUA review), 6 (returned by MoHUA) and 7 (acknowledged, read-only) that are READY, not abandoned and not superseded — MOHUA_CLAIM_LETTERS_LISTED_STATUSES;
-│   │                    # each letter row carries its `batchNumber` (1 to 3, CLAIM_LETTER_MAX_BATCH_NUMBER). A state's letters response also carries a
+│   │                    # each letter row carries its `batchNumber` (1 to formjson 26 `meta.maxClaimLetters`, default 3) and `returnedWith` (the letter whose State-form return also returned it, ADR 0009). A state's letters response also carries a
 │   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
 │   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/PMU (read-only, for the national dashboard)/ADMIN only; the State-side
 │   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a
@@ -152,7 +152,10 @@ src/
 │   │                    # through `rejectExemptionFormIds`, its own discretionary exemptions still at 5), saved as
 │   │                    # `soDecision` on the claim ULB row; approve is refused while any ULB is RETURNED, and the return body carries
 │   │                    # only the State-wide items (claim letter, SFC, GTC) (see state/claim-letter/CLAUDE.md). MoHUA's final 5 -> 7 and its return (6) are not built yet. The State's claim-letter submit now lands on 15. Status 16 is
-│   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7))
+│   │                    # RETURNED_BY_SO (shown as "Returned for Correction"); see CLAIM_LETTER_APPROVED_STATUSES (7)). A State may have several letters under
+│   │                    # SO review at once (state/claim-letter ADR 0009): SFC/GTC are returnable only at 15 (the detail's `stateForms` names the letter that
+│   │                    # accepted them), and a return that reopens a State form also returns the State's other letters at 15 (`otherLettersUnderReview`,
+│   │                    # sent back as `affectedLetterIds`; a changed set is a 409) and clears its drafts' signed letters, all in one transaction.
 │   │                    # om (Office Memorandum, one per claim letter the SO verified: GET xvi-fc/mohua/om/:yearId/:installment lists
 │   │                    # States and their verified letters; .../letter/:id/document + PATCH .../draft (the "No." and "Dated" boxes);
 │   │                    # POST .../letter/:id/generate numbers it OM/<STATE>/<FY>/<n>, freezes its content and returns one PDF: the OM, the claim letter's ULB lists (frozen with the OM), then the

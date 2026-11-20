@@ -1,17 +1,24 @@
 import { randomUUID } from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, FilterQuery, Model, Types } from 'mongoose';
+import { ClientSession, Connection, FilterQuery, Model, Types } from 'mongoose';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import {
+  claimLetterName,
   isReturnedClaimLetter,
   RETURNED_CLAIM_LETTER_STATUSES,
 } from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-returned.helpers';
+import { toClaimLetterBusyConflict } from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-concurrency.helpers';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { assertValidFormStatusTransition } from 'src/common/utils/form-status-transitions';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { CLAIM_LETTER_APPROVED_STATUSES } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
-import type { ClaimLetterBatchNumber } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
-import { ClaimLetterFormStatusService } from 'src/module/xvi-fc/state/claim-letter/services/form-status/claim-letter-form-status.service';
+import type { ClaimLetterStateFormReturn } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import {
+  CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS,
+  CLAIM_LETTER_ROW_FORM_IDS,
+  ClaimLetterFormStatusService,
+} from 'src/module/xvi-fc/state/claim-letter/services/form-status/claim-letter-form-status.service';
 import {
   ClaimLetterHistoryService,
   type ClaimLetterRejection,
@@ -28,7 +35,8 @@ import { XviFcEligibilityExemption } from 'src/schemas/xvi-fc/state/xvi-fc-eligi
 import type { ClaimLetterReturnedSource } from 'src/module/xvi-fc/state/claim-letter/services/form-status/claim-letter-form-status.service';
 import { RequestExemptionMohuaService } from '../request-exemption/request-exemption-mohua.service';
 import { OmUlb } from 'src/schemas/xvi-fc/mohua/om-ulb.schema';
-import { copyClaimLetterUlbsToOm } from '../om/om-ulbs.helper';
+import { copyClaimLetterUlbsToOm, findOmUlbsHeldElsewhere } from '../om/om-ulbs.helper';
+import { isMongoDuplicateKeyError } from 'src/module/xvi-fc/common/utils/xvi-fc-concurrent-write.util';
 import type { ReturnMohuaClaimLetterDto } from './mohua-claim-letters-return.dto';
 import type { DecideMohuaClaimLetterUlbDto } from './mohua-claim-letters-ulb-decision.dto';
 import { GrantAllocation } from 'src/schemas/xvi-fc/grant-allocation.schema';
@@ -39,6 +47,7 @@ import { allocationRupees } from '../overview/mohua-overview.util';
 import { buildClaimLetterRefNo } from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-financial.helpers';
 import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import {
+  MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE,
   MOHUA_CLAIM_LETTER_FORM_NAMES,
   MOHUA_CLAIM_LETTERS_FIRST_CLAIM_STATUS,
   MOHUA_CLAIM_LETTERS_INSTALLMENT,
@@ -50,12 +59,15 @@ import {
   MOHUA_CLAIM_LETTER_ULB_EXEMPTION_KIND,
   MOHUA_CLAIM_LETTER_ULB_RETURNED_MESSAGE,
   MOHUA_CLAIM_LETTER_ULBS_DEFAULT_LIMIT,
+  omUlbsHeldMessage,
+  stateFormNotReturnableMessage,
 } from './mohua-claim-letters.constants';
 import type { GetMohuaClaimLetterUlbsQueryDto } from './mohua-claim-letters-query.dto';
 import type {
   MohuaClaimLetterDetail,
   MohuaClaimLetterListItem,
   MohuaClaimLetterReturnDetails,
+  MohuaClaimLetterReturnedWith,
   MohuaClaimLetterSoDecision,
   MohuaClaimLetterUlbs,
   MohuaClaimLettersOverview,
@@ -65,6 +77,12 @@ import type {
   MohuaStateClaimLetters,
   MohuaStateClaimLettersSummary,
 } from './mohua-claim-letters.types';
+
+/**
+ * State forms every letter of a State relies on: SFC and GTC, plus the row forms (Elected Body, Devolution, FC Unspent).
+ * A return that reopens one also returns the State's other letters under SO review (ADR 0009).
+ */
+const SHARED_STATE_FORM_IDS: readonly number[] = [...CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS, ...CLAIM_LETTER_ROW_FORM_IDS];
 
 /** The parts of a claim ULB row's eligibility source that say which discretionary exemption it relied on. */
 type ExemptionSourceLean = {
@@ -100,7 +118,22 @@ type LeanBatch = {
   financialSummary?: { currentSelectedClaim?: number };
   signedClaimFile?: { originalName?: string; name?: string; path?: string; sizeKb?: number } | null;
   finalClaimPdf?: { file?: { originalName?: string; name?: string; path?: string; sizeKb?: number } | null } | null;
+  returnedWith?: ClaimLetterStateFormReturn | null;
 };
+
+/** A letter returned with another letter's State form, as the return email names it. */
+type CascadedLetter = Pick<LeanBatch, '_id' | 'batchNumber' | 'resubmissionNumber' | 'version'>;
+
+const formName = (formId: number) => MOHUA_CLAIM_LETTER_FORM_NAMES[formId] ?? `Form ${formId}`;
+
+function toReturnedWith(info: ClaimLetterStateFormReturn | null | undefined): MohuaClaimLetterReturnedWith | null {
+  return info ? { letterId: String(info.claimLetter), number: info.letterRef, formNames: info.formNames } : null;
+}
+
+function sameIds(a: readonly string[], b: readonly string[]): boolean {
+  const set = new Set(a);
+  return set.size === new Set(b).size && b.every((id) => set.has(id));
+}
 
 /**
  * Read-only data behind MoHUA's Claims & Submissions screens. Only claim letters that the State submitted are listed,
@@ -135,6 +168,7 @@ export class MohuaClaimLettersService {
     private readonly exemptionService: RequestExemptionMohuaService,
     @InjectModel(OmUlb.name) private readonly omUlbModel: Model<OmUlb>,
     private readonly returnNotifications: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /**
@@ -249,7 +283,9 @@ export class MohuaClaimLettersService {
 
     const batches = await this.batchModel
       .find(this.listedFilter({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment }))
-      .select('fileBaseName batchNumber submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim')
+      .select(
+        'fileBaseName batchNumber submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim returnedWith',
+      )
       .sort({ submittedAt: -1, _id: -1 })
       .lean<LeanBatch[]>()
       .exec();
@@ -268,6 +304,7 @@ export class MohuaClaimLettersService {
           amount: batch.financialSummary?.currentSelectedClaim ?? 0,
           status: batch.currentFormStatus,
           statusLabel: getFormStatusLabel(batch.currentFormStatus),
+          returnedWith: toReturnedWith(batch.returnedWith),
         }),
       ),
     };
@@ -369,6 +406,8 @@ export class MohuaClaimLettersService {
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
+      // One State's submits and SO decisions run one at a time (ADR 0009).
+      await this.undoEligibility.touchClaimUndoGuard(batch.state, batch.year, session);
 
       const updated = await this.batchModel
         .findOneAndUpdate(
@@ -418,7 +457,7 @@ export class MohuaClaimLettersService {
           state: batch.state,
           year: batch.year,
           installment: batch.installment as 1 | 2,
-          batchNumber: batch.batchNumber as ClaimLetterBatchNumber,
+          batchNumber: batch.batchNumber,
           version: batch.version,
           fromStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
@@ -437,7 +476,7 @@ export class MohuaClaimLettersService {
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
-      throw err;
+      throw (await this.omUlbsHeldConflict(err, claimLetterOid)) ?? toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();
     }
@@ -446,12 +485,40 @@ export class MohuaClaimLettersService {
   }
 
   /**
+   * A duplicate key on the OM rows: names the ULBs another letter's OM rows already hold, instead of the generic 409.
+   * Null for any other error, or when the lookup finds nothing or fails, so the original error stays.
+   */
+  private async omUlbsHeldConflict(err: unknown, claimLetter: Types.ObjectId): Promise<ConflictException | null> {
+    if (!isMongoDuplicateKeyError(err)) return null;
+    try {
+      const held = await findOmUlbsHeldElsewhere(this.batchUlbModel, this.omUlbModel, claimLetter);
+      if (!held.length) return null;
+      const holderIds = [...new Set(held.map((h) => String(h.heldBy)))].map((id) => new Types.ObjectId(id));
+      const holders = await this.batchModel
+        .find({ _id: { $in: holderIds } })
+        .select('batchNumber resubmissionNumber')
+        .lean<{ batchNumber: number; resubmissionNumber?: number }[]>()
+        .exec();
+      const letterNames = holders.map((h) => claimLetterName(h.batchNumber, h.resubmissionNumber ?? 0));
+      return new ConflictException(
+        omUlbsHeldMessage(
+          held.map((h) => h.ulbName),
+          letterNames,
+        ),
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * The SO returns a claim letter under SO review for correction (15 -> 16), in one transaction:
    * - the letter is closed: flagged abandoned too, so its batch slot is free and the State builds a new letter, and its
    *   ULB locks are released so those ULBs can go into that new letter;
    * - exactly what the SO picked goes to 16 (ClaimLetterFormStatusService): each ULB marked RETURNED (decideUlb) with
    *   its own forms, rows and remark, plus the State-wide items in the request; every other form keeps its status;
-   * - the transition is logged with each reopened form or row.
+   * - the transition is logged with each reopened form or row;
+   * - a reopened State form reaches the State's other letters (`returnWithStateForms`, ADR 0009).
    * Pinned on the status and the revision the page showed, like approve. A letter already returned is a no-op.
    */
   async returnForCorrection(
@@ -464,7 +531,7 @@ export class MohuaClaimLettersService {
     const claimLetterOid = new Types.ObjectId(claimLetterId);
     const batch = await this.batchModel
       .findOne(this.listedFilter({ _id: claimLetterOid }))
-      .select('state year installment batchNumber resubmissionNumber version currentFormStatus')
+      .select('state year installment fileBaseName batchNumber resubmissionNumber version currentFormStatus')
       .lean<LeanBatch>()
       .exec();
     if (!batch) throw new NotFoundException(`Claim letter ${claimLetterId} not found`);
@@ -487,6 +554,7 @@ export class MohuaClaimLettersService {
       );
     }
     assertValidFormStatusTransition(FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_SO);
+    await this.assertStateFormsReturnable(claimLetterOid, dto.stateFormIds);
 
     // Checked here, decided inside the transaction below, so a failed return leaves every exemption at 5.
     const exemptionRejections = await this.planExemptionRejections(returnedUlbs);
@@ -503,9 +571,13 @@ export class MohuaClaimLettersService {
       decision: buildDecisionRecord('RETURNED', soDecision.remark ?? null, user, ip ?? null, userAgent ?? null),
     }));
 
+    let cascaded: CascadedLetter[] = [];
+    let reopenedStateFormIds: number[] = [];
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
+      // One State's submits and SO decisions run one at a time (ADR 0009).
+      await this.undoEligibility.touchClaimUndoGuard(batch.state, batch.year, session);
 
       const updated = await this.batchModel
         .findOneAndUpdate(
@@ -559,7 +631,7 @@ export class MohuaClaimLettersService {
           state: batch.state,
           year: batch.year,
           installment: batch.installment as 1 | 2,
-          batchNumber: batch.batchNumber as ClaimLetterBatchNumber,
+          batchNumber: batch.batchNumber,
           version: batch.version,
           fromStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           toStatus: FORM_STATUS.RETURNED_BY_SO,
@@ -574,17 +646,172 @@ export class MohuaClaimLettersService {
         session,
       );
 
+      const reopenedStateForms = returned.filter(
+        (ref) => !ref.rowDocumentId && SHARED_STATE_FORM_IDS.includes(ref.formId),
+      );
+      if (reopenedStateForms.length) {
+        reopenedStateFormIds = [...new Set(reopenedStateForms.map((ref) => ref.formId))];
+        cascaded = await this.returnWithStateForms(
+          batch,
+          reopenedStateForms,
+          dto.affectedLetterIds ?? [],
+          { stateRemark, userOid, now, ip: ip ?? null, userAgent: userAgent ?? null },
+          session,
+        );
+      }
+
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
-      throw err;
+      throw toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();
     }
 
     // After commit only: an email never decides whether the return happened.
-    await this.notifyReturned(batch, stateRemark, dto.stateFormIds, returnedUlbs);
+    await this.notifyReturned(batch, stateRemark, dto.stateFormIds, returnedUlbs, {
+      letters: cascaded,
+      formNames: reopenedStateFormIds.map(formName),
+    });
     return this.getClaimLetter(claimLetterId);
+  }
+
+  /**
+   * SFC and GTC are returnable only while at 15: once an approval moved one on, it is settled (ADR 0009). The same
+   * reasons the return dialog shows refuse it here, as a 409: the pick is stale, and the page reloads on a conflict.
+   */
+  private async assertStateFormsReturnable(claimLetterOid: Types.ObjectId, stateFormIds: number[]): Promise<void> {
+    if (!stateFormIds.some((id) => CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.includes(id))) return;
+    const forms = await this.formStatusService.describeReturnableStateForms(claimLetterOid);
+    const refused = forms.find((form) => stateFormIds.includes(form.formId) && !form.returnable);
+    if (refused) throw new ConflictException(stateFormNotReturnableMessage(formName(refused.formId), refused));
+  }
+
+  /**
+   * A return that reopened a State form reaches the State's other letters, in the same transaction (ADR 0009):
+   * - every other letter under SO review (15) is returned too (16, closed like this one: slot and ULB locks freed),
+   *   with `returnedWith` naming this letter and the forms; it must be the set the SO's dialog listed;
+   * - every draft (2) gets `stateFormReturnNotice`; one with a signed letter loses it and its merged final PDF, since
+   *   the State must sign again once the form is corrected.
+   * Letters at 5 or 7 are untouched: SFC and GTC can't be reopened under them, and their rows stay frozen.
+   */
+  private async returnWithStateForms(
+    batch: LeanBatch,
+    reopened: ClaimLetterReturnedSource[],
+    expectedAffectedIds: readonly string[],
+    decision: {
+      stateRemark: string | null;
+      userOid: Types.ObjectId;
+      now: Date;
+      ip: string | null;
+      userAgent: string | null;
+    },
+    session: ClientSession,
+  ): Promise<CascadedLetter[]> {
+    const formIds = [...new Set(reopened.map((ref) => ref.formId))];
+    const info: ClaimLetterStateFormReturn = {
+      claimLetter: batch._id,
+      letterName: claimLetterName(batch.batchNumber, batch.resubmissionNumber ?? 0),
+      letterRef: batch.fileBaseName,
+      formIds,
+      formNames: formIds.map(formName),
+      signedFileRemoved: false,
+      at: decision.now,
+    };
+    const scope = { state: batch.state, year: batch.year, installment: batch.installment };
+
+    const siblings = await this.batchModel
+      .find({
+        ...scope,
+        _id: { $ne: batch._id },
+        currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+        isAbandoned: false,
+        assemblyStatus: 'READY',
+        supersededBy: null,
+      })
+      .select('batchNumber resubmissionNumber version')
+      .session(session)
+      .lean<CascadedLetter[]>()
+      .exec();
+    if (
+      !sameIds(
+        siblings.map((s) => String(s._id)),
+        expectedAffectedIds,
+      )
+    ) {
+      throw new ConflictException(MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE);
+    }
+
+    if (siblings.length) {
+      const ids = siblings.map((s) => s._id);
+      const { modifiedCount } = await this.batchModel.updateMany(
+        { _id: { $in: ids }, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, isAbandoned: false },
+        {
+          $set: {
+            currentFormStatus: FORM_STATUS.RETURNED_BY_SO,
+            mohuaRemarks: decision.stateRemark,
+            returnedWith: info,
+            isAbandoned: true,
+            abandonedAt: decision.now,
+            abandonedBy: decision.userOid,
+            resolvedAt: decision.now,
+            resolvedBy: decision.userOid,
+            updatedBy: decision.userOid,
+          },
+          $inc: { revision: 1 },
+        },
+        { session },
+      );
+      if (modifiedCount !== ids.length) throw new ConflictException(MOHUA_CLAIM_LETTER_AFFECTED_CHANGED_MESSAGE);
+      await this.lockModel.deleteMany({ claimLetter: { $in: ids }, lockState: 'ACTIVE' }, { session });
+      await this.historyService.recordTransitions(
+        siblings.map((sibling) => ({
+          claimLetter: sibling._id,
+          state: batch.state,
+          year: batch.year,
+          installment: batch.installment as 1 | 2,
+          batchNumber: sibling.batchNumber,
+          version: sibling.version,
+          fromStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+          toStatus: FORM_STATUS.RETURNED_BY_SO,
+          actionSource: 'DEPENDENCY_INVALIDATION',
+          reason: decision.stateRemark,
+          rejectedSourceRefs: reopened,
+          changedBy: decision.userOid,
+          requestId: randomUUID(),
+          ipAddress: decision.ip,
+          userAgent: decision.userAgent,
+        })),
+        session,
+      );
+    }
+
+    // Unsigned drafts first, so the signed ones (cleared next) keep `signedFileRemoved: true`. A draft whose signed
+    // letter an earlier return removed keeps that notice until its next upload; the banner names any other failing form.
+    const drafts = {
+      ...scope,
+      currentFormStatus: FORM_STATUS.IN_PROGRESS,
+      isAbandoned: false,
+      assemblyStatus: 'READY',
+    };
+    await this.batchModel.updateMany(
+      { ...drafts, signedClaimFile: null, 'stateFormReturnNotice.signedFileRemoved': { $ne: true } },
+      { $set: { stateFormReturnNotice: info } },
+      { session },
+    );
+    await this.batchModel.updateMany(
+      { ...drafts, signedClaimFile: { $ne: null } },
+      {
+        $set: {
+          signedClaimFile: null,
+          finalClaimPdf: null,
+          stateFormReturnNotice: { ...info, signedFileRemoved: true },
+          updatedBy: decision.userOid,
+        },
+      },
+      { session },
+    );
+    return siblings;
   }
 
   /** Emails the State users and each ULB whose own forms were reopened. Never throws. */
@@ -593,22 +820,28 @@ export class MohuaClaimLettersService {
     stateRemark: string | null,
     stateFormIds: number[],
     returnedUlbs: { ulbId: Types.ObjectId; soDecision: ClaimLetterSoDecision }[],
+    cascade: { letters: CascadedLetter[]; formNames: string[] },
   ): Promise<void> {
-    const name = (formId: number) => MOHUA_CLAIM_LETTER_FORM_NAMES[formId] ?? `Form ${formId}`;
+    const name = formName;
     try {
       const [state, year] = await Promise.all([
         this.stateModel.findById(batch.state).select('code').lean<{ code?: string }>().exec(),
         this.yearModel.findById(batch.year).select('year').lean<{ year?: string }>().exec(),
       ]);
-      await this.returnNotifications.notifyClaimLetterReturned({
-        stateId: batch.state,
-        refNo: buildClaimLetterRefNo({
+      const refNoOf = (letter: Pick<LeanBatch, 'batchNumber' | 'resubmissionNumber'>) =>
+        buildClaimLetterRefNo({
           stateCode: state?.code ?? '',
           designYearLabel: year?.year ?? '',
           installment: batch.installment as 1 | 2,
-          batchNumber: batch.batchNumber,
-          resubmissionNumber: batch.resubmissionNumber ?? 0,
-        }),
+          batchNumber: letter.batchNumber,
+          resubmissionNumber: letter.resubmissionNumber ?? 0,
+        });
+      await this.returnNotifications.notifyClaimLetterReturned({
+        stateId: batch.state,
+        refNo: refNoOf(batch),
+        alsoReturned: cascade.letters.length
+          ? { refNos: cascade.letters.map(refNoOf), formNames: cascade.formNames }
+          : null,
         stateRemark,
         stateItems: stateFormIds.map(name),
         ulbs: returnedUlbs.map(({ ulbId, soDecision }) => ({
@@ -679,7 +912,18 @@ export class MohuaClaimLettersService {
   /** One claim letter: its State-signed file and the headline numbers. */
   async getClaimLetter(claimLetterId: string): Promise<MohuaClaimLetterDetail> {
     const batch = await this.findListedBatch(claimLetterId);
-    const [state, [exemptions], [submitted], rejection, returnedUlbs, pendingExemptions] = await Promise.all([
+    const underSoReview = batch.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_SO;
+    const [
+      state,
+      [exemptions],
+      [submitted],
+      rejection,
+      returnedUlbs,
+      pendingExemptions,
+      stateForms,
+      others,
+      rowReturns,
+    ] = await Promise.all([
       this.stateModel.findById(batch.state).select('name').lean<{ name: string }>().exec(),
       this.batchUlbModel
         .aggregate<{
@@ -710,9 +954,34 @@ export class MohuaClaimLettersService {
       this.findRejection(batch),
       this.batchUlbModel.countDocuments({ claimLetter: batch._id, 'soDecision.status': 'RETURNED' }),
       // Only the SO's decision acts on them, so only a letter under SO review needs the lookup.
-      batch.currentFormStatus === FORM_STATUS.UNDER_REVIEW_BY_SO
-        ? this.findPendingExemptions(batch._id)
+      underSoReview ? this.findPendingExemptions(batch._id) : Promise.resolve([]),
+      // The return dialog's State items and the letters a State form return would also return (ADR 0009).
+      underSoReview ? this.formStatusService.describeReturnableStateForms(batch._id) : Promise.resolve([]),
+      underSoReview
+        ? this.batchModel
+            .find({
+              state: batch.state,
+              year: batch.year,
+              installment: batch.installment,
+              _id: { $ne: batch._id },
+              currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
+              isAbandoned: false,
+              assemblyStatus: 'READY',
+              supersededBy: null,
+            })
+            .select('fileBaseName')
+            .sort({ submittedAt: 1 })
+            .lean<{ _id: Types.ObjectId; fileBaseName: string }[]>()
+            .exec()
         : Promise.resolve([]),
+      // A marked row reopens its whole State form, so the dialog warns about the other letters for it too.
+      underSoReview
+        ? this.batchUlbModel.countDocuments({
+            claimLetter: batch._id,
+            'soDecision.status': 'RETURNED',
+            'soDecision.rowFormIds.0': { $exists: true },
+          })
+        : Promise.resolve(0),
     ]);
 
     // The final claim letter PDF (the letter with its annexures merged); older letters fall back to the uploaded signed copy.
@@ -745,6 +1014,10 @@ export class MohuaClaimLettersService {
       returnDetails: rejection && toReturnDetails(rejection),
       returnedUlbCount: returnedUlbs,
       pendingExemptionCount: pendingExemptions.length,
+      stateForms: stateForms.map((form) => ({ ...form, name: formName(form.formId) })),
+      otherLettersUnderReview: others.map((other) => ({ id: String(other._id), number: other.fileBaseName })),
+      returnedRowUlbCount: rowReturns,
+      returnedWith: toReturnedWith(batch.returnedWith),
     };
   }
 
@@ -1018,7 +1291,7 @@ export class MohuaClaimLettersService {
     const batch = await this.batchModel
       .findOne(this.listedFilter({ _id: new Types.ObjectId(claimLetterId) }))
       .select(
-        'state year installment fileBaseName batchNumber revision submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim signedClaimFile finalClaimPdf.file',
+        'state year installment fileBaseName batchNumber revision submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim signedClaimFile finalClaimPdf.file returnedWith',
       )
       .lean<LeanBatch>()
       .exec();

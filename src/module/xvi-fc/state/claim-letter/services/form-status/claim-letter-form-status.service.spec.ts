@@ -63,7 +63,9 @@ describe('ClaimLetterFormStatusService', () => {
                       .filter(
                         (id) =>
                           !honourStatusFilter ||
-                          Object.entries(storedDocs[String(id)] ?? {}).some(([field, value]) => filter[field] === value),
+                          Object.entries(storedDocs[String(id)] ?? {}).some(
+                            ([field, value]) => filter[field] === value,
+                          ),
                       )
                       .map((id) => ({ _id: id, ...(storedDocs[String(id)] ?? {}) }))
                   : (findDocs[name] ?? []),
@@ -561,5 +563,145 @@ describe('ClaimLetterFormStatusService', () => {
       ).rejects.toThrow(BadRequestException);
       expect(updateMany).not.toHaveBeenCalled();
     });
+
+    it("refuses SFC an approval of another letter moved on after the dialog loaded (ADR 0009's 409)", async () => {
+      const sfc = oid();
+      parentSources = [{ formId: 22, result: 'PASSED', formDocumentId: sfc }];
+      withChildren([]);
+      // Another letter's approval already moved SFC to 5: SFC is returnable only from 15.
+      honourStatusFilter = true;
+      storedDocs[String(sfc)] = { currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA };
+
+      const err = await service
+        .returnFormsForCorrection(claimLetterId, selection({ stateFormIds: [22] }), decision, session)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).message).toBe(
+        'A State form picked for return was accepted with another claim letter meanwhile. Reload and try again.',
+      );
+      expect(inserted).toEqual([]);
+    });
+  });
+});
+
+describe('ClaimLetterFormStatusService.assertStateFormsStillReady (submit, ADR 0009)', () => {
+  const letterId = oid();
+  const session = { id: 'session' } as never;
+
+  /** `readyCount`: how many of the asked ids are still at 15, 5 or 7. */
+  const assertWith = (sources: unknown[], readyCount?: number) => {
+    const countDocuments = jest.fn((filter: { _id: { $in: unknown[] } }) =>
+      Promise.resolve(readyCount ?? filter._id.$in.length),
+    );
+    const query = {
+      select: () => query,
+      session: () => query,
+      lean: () => ({ exec: () => Promise.resolve({ stateEligibilitySources: sources }) }),
+    };
+    const service = new ClaimLetterFormStatusService(
+      { collection: () => ({ countDocuments }) } as never,
+      { findById: () => query } as never,
+      {} as never,
+      {} as never,
+    );
+    return { run: () => service.assertStateFormsStillReady(letterId, session), countDocuments };
+  };
+
+  it('passes while the State forms the draft relied on are still at 15, 5 or 7, skipping exempted ones', async () => {
+    const { run, countDocuments } = assertWith([
+      { formId: 22, result: 'PASSED', formDocumentId: oid() },
+      { formId: 35, result: 'PASSED', formDocumentId: oid() },
+      { formId: 24, result: 'EXEMPTED', formDocumentId: null },
+    ]);
+
+    await expect(run()).resolves.toBeUndefined();
+    expect(countDocuments).toHaveBeenCalledTimes(2);
+    expect(countDocuments).toHaveBeenCalledWith(expect.objectContaining({ currentFormStatus: { $in: [15, 5, 7] } }), {
+      session,
+    });
+  });
+
+  it('refuses with a 409 once one was returned or deleted since the gate check', async () => {
+    const { run } = assertWith([{ formId: 22, result: 'PASSED', formDocumentId: oid() }], 0);
+
+    const err = await run().catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(ConflictException);
+    expect((err as ConflictException).message).toBe(
+      'A State form changed while this letter was being submitted. Reload and try again.',
+    );
+  });
+});
+
+describe('ClaimLetterFormStatusService.describeReturnableStateForms (ADR 0009)', () => {
+  const letterId = oid();
+  const sfcId = oid();
+  const gtcId = oid();
+  const acceptingLetterId = oid();
+
+  /** `statuses`: each State form's live status by collection; `approveRow`: an `SO_APPROVE` row names a letter. */
+  const describeWith = (sources: unknown[], statuses: Record<string, number>, approveRow = false) => {
+    const leanOf = (value: unknown) => ({ lean: () => ({ exec: () => Promise.resolve(value) }) });
+    const connection = {
+      collection: (name: string) => ({
+        findOne: () =>
+          Promise.resolve(
+            name in statuses
+              ? { currentFormStatus: statuses[name] }
+              : approveRow
+                ? { data: { claimLetter: acceptingLetterId } }
+                : null,
+          ),
+      }),
+    };
+    const batchModel = {
+      findById: (id: Types.ObjectId) => ({
+        select: () =>
+          String(id) === String(letterId)
+            ? leanOf({ stateEligibilitySources: sources })
+            : leanOf({ batchNumber: 1, resubmissionNumber: 0 }),
+      }),
+    };
+    const service = new ClaimLetterFormStatusService(
+      connection as never,
+      batchModel as never,
+      {} as never,
+      {} as never,
+    );
+    return service.describeReturnableStateForms(letterId);
+  };
+  const passed = (formId: number, formDocumentId: Types.ObjectId) => ({ formId, result: 'PASSED', formDocumentId });
+
+  it('offers a form still at 15, and names the letter whose approval accepted one at 5', async () => {
+    const forms = await describeWith(
+      [passed(22, sfcId), passed(35, gtcId)],
+      { xvifc_sfc: FORM_STATUS.UNDER_REVIEW_BY_SO, xvifc_gtc: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+      true,
+    );
+
+    expect(forms).toEqual([
+      { formId: 22, returnable: true, lockReason: null, acceptedWithLetter: null },
+      { formId: 35, returnable: false, lockReason: 'ACCEPTED', acceptedWithLetter: 'Claim Letter 1' },
+    ]);
+  });
+
+  it('still says ACCEPTED at 5 when no approval row names the letter', async () => {
+    const forms = await describeWith([passed(22, sfcId)], { xvifc_sfc: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+
+    expect(forms[0]).toEqual({ formId: 22, returnable: false, lockReason: 'ACCEPTED', acceptedWithLetter: null });
+  });
+
+  it('says EXEMPTED only for an exempted source, and NOT_IN_REVIEW for another status or no source', async () => {
+    const forms = await describeWith([{ formId: 22, result: 'EXEMPTED', formDocumentId: null }, passed(35, gtcId)], {
+      xvifc_gtc: FORM_STATUS.UNDER_REVIEW_BY_PMU,
+    });
+    const noSources = await describeWith([], {});
+
+    expect(forms).toEqual([
+      { formId: 22, returnable: false, lockReason: 'EXEMPTED', acceptedWithLetter: null },
+      { formId: 35, returnable: false, lockReason: 'NOT_IN_REVIEW', acceptedWithLetter: null },
+    ]);
+    expect(noSources.map((f) => f.lockReason)).toEqual(['NOT_IN_REVIEW', 'NOT_IN_REVIEW']);
   });
 });

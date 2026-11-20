@@ -98,10 +98,9 @@ export interface ClaimLetterEligibilitySummary {
     eligible: number;
     total: number;
   };
-  /** Expected ULBs in no batch, eligible or not; the final batch cannot be submitted while any remain. */
+  /** Expected ULBs in no letter, eligible or not; once every place is taken, no letter can be submitted while any
+   *  remain (ADR 0009). */
   remainingUlbCount: number;
-  /** The one active batch (ADR 0004); null when a new claim can start. */
-  activeBatchNumber: number | null;
   /** formjson 26 `meta.claimAmountEditable`; off means each ULB's claim is its allocation (ADR 0006). */
   claimAmountEditable: boolean;
 }
@@ -112,6 +111,8 @@ export interface ClaimLetterClaimContext {
   expectedUlbCount: number;
   batchSlotsUsed: number;
   batchSlotsMax: number;
+  /** Open drafts now; a new letter that takes the last place with none open is the last draft (ADR 0009). */
+  openDraftCount: number;
   nextBatchNumber: ClaimLetterBatchNumber | null;
   financialOverview: ClaimLetterFinancialOverview;
   remainingUlbCount: number;
@@ -121,9 +122,10 @@ export interface ClaimLetterClaimContext {
    *  applies only while claimAmountEditable is on. */
   varianceLowerPercent: number;
   varianceUpperPercent: number;
-  /** PREPARE_GRANT_LETTERS and no active batch; stands in for permissions.canEdit before a batch exists. */
+  /** PREPARE_GRANT_LETTERS and a free place under the letter cap; stands in for permissions.canEdit before a
+   *  letter exists. */
   canCreate: boolean;
-  /** Set when an active batch is what makes canCreate false. */
+  /** Set when every place is taken (formjson 26 `meta.maxClaimLetters`). */
   createBlockedReason: string | null;
 }
 
@@ -143,7 +145,7 @@ export interface ClaimLetterBatchSummary {
   ulbCount: number;
   isAbandoned: boolean;
   hasSignedFile: boolean;
-  /** null: no final claim letter to show (no signed letter yet, abandoned, or blocked by another batch). */
+  /** null: no final claim letter to show (no signed letter yet, abandoned, or a State-level condition fails). */
   finalClaimLetterStage: ClaimLetterFinalStage | null;
   financialSummary: ClaimLetterFinancialSummaryDisplay;
   /** Sent back as `expectedRevision` on `PATCH .../draft`. */
@@ -153,8 +155,12 @@ export interface ClaimLetterBatchSummary {
   supersedes: string | null;
   supersededBy: string | null;
   createdAt: Date;
+  /** Mongo's last write to the letter; History sorts by it and shows it as "Last activity". */
+  updatedAt: Date;
   /** The SO's (or MoHUA's) remark when the letter was returned; null otherwise. */
   mohuaRemarks: string | null;
+  /** Set when the letter was returned because another letter's State form was returned (ADR 0009). */
+  returnedWithNote: string | null;
   /** getDetail only: formjson 26 fields except the letter details (GET .../letter-details has those). */
   questions?: FieldConfig[];
   /** getDetail only. */
@@ -173,9 +179,15 @@ export interface ClaimLetterBatchSummary {
   /** getDetail only: State forms whose Entire State exemption request is still under MoHUA review
    *  (Submit confirm); empty once it is no longer a draft. */
   stateExemptionsUnderReview?: string[];
-  /** Another batch is active (ADR 0004): preview, download, letter details and submit are blocked.
-   *  Populated by `getDetail` and `listHistory`. */
-  blockedByBatchNumber?: number | null;
+  /** getDetail only, drafts: a State-level condition fails, so letter details and preview, the signed-letter
+   *  upload, the final claim letter and submit are unavailable (ADR 0009). */
   blockedReason?: string | null;
+  /** getDetail only, drafts: banner after another letter's State form return, or while State conditions fail. */
+  stateFormNotice?: string | null;
+  /** getDetail only, drafts: every place is taken and no other draft is open, so every ULB must be in a letter
+   *  before this one can be submitted (the last-draft rule, ADR 0009). */
+  isLastPlace?: boolean;
+  /** getDetail only, the last draft: expected ULBs in no letter, read with `isLastPlace`; null otherwise. */
+  remainingUlbCount?: number | null;
   permissions: ClaimLetterPermissions;
 }
