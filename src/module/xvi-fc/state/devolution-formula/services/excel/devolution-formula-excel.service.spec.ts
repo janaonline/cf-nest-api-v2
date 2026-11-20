@@ -10,6 +10,7 @@ import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formu
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
 import { DevolutionFormulaFormHistory } from 'src/schemas/xvi-fc/state/devolution-formula-form-history.schema';
 import { Ulb } from 'src/schemas/ulb.schema';
+import { ClaimLetterUlbLock } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { S3Service } from 'src/core/s3/s3.service';
 import { ExcelService } from 'src/services/excel/excel.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
@@ -36,6 +37,9 @@ function q<T>(value: T) {
   chain['finally'] = (onFinally: () => void) => Promise.resolve(value).finally(onFinally);
   return chain;
 }
+
+/** No ULB of the installment is in a claim letter unless a test says so (claim-letter ADR 0009). */
+const mockClaimLetterUlbLockModel = { countDocuments: jest.fn(() => q(0)) };
 
 const EXCEL_HEADERS = [
   'Census Code',
@@ -241,6 +245,7 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
@@ -636,6 +641,7 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
@@ -648,6 +654,21 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     }).compile();
 
     service = module.get<DevolutionFormulaExcelService>(DevolutionFormulaExcelService);
+  });
+
+  it('refuses while any ULB of the installment is in a claim letter, drafts included (claim-letter ADR 0009)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockClaimLetterUlbLockModel.countDocuments.mockReturnValueOnce(q(2));
+
+    await expect(service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser)).rejects.toMatchObject({
+      response: expect.objectContaining({
+        errors: { excelFile: [expect.objectContaining({ code: 'ulbsInClaimLetters' })] },
+      }) as unknown,
+    });
+    expect(mockClaimLetterUlbLockModel.countDocuments).toHaveBeenCalledWith(
+      expect.objectContaining({ installment: 1, lockState: { $in: ['ACTIVE', 'ACKNOWLEDGED'] } }),
+    );
+    expect(mockFormModel.findByIdAndUpdate).not.toHaveBeenCalled();
   });
 
   it('does NOT increment activeDatasetVersion when revalidating active rows (Case A)', async () => {
@@ -920,6 +941,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
@@ -1066,6 +1088,7 @@ describe('DevolutionFormulaExcelService — validateExcel ULB identity guard', (
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
@@ -1247,6 +1270,7 @@ describe('DevolutionFormulaExcelService — validateExcel new/extra ULB detectio
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },
@@ -1544,6 +1568,7 @@ describe('DevolutionFormulaExcelService — atomic version allocation & write-co
         { provide: getModelToken(DevolutionFormulaRow.name), useValue: mockRowModel },
         { provide: getModelToken(DevolutionFormulaFormHistory.name), useValue: mockHistoryModel },
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         { provide: UlbEligibilityService, useValue: mockUlbEligibilityService },
         { provide: S3Service, useValue: mockS3Service },
         { provide: ExcelService, useValue: mockExcelService },

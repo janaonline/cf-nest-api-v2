@@ -6,14 +6,14 @@ Accepted
 
 ## Context
 
-A State may have at most `CLAIM_LETTER_MAX_BATCH_NUMBER` (3) logical claim batches per
-(state, year, installment), and each ULB may only be locked into one active claim at a time. Both
+A State may have at most formjson 26 `meta.maxClaimLetters` (default 3, at most 10; ADR 0009) logical claim
+batches per (state, year, installment), and each ULB may only be locked into one active claim at a time. Both
 are contended resources - concurrent requests from the same state must never both succeed at
 claiming the same slot or the same ULB.
 
 ## Decision
 
-**Batch slot allocation.** `allocateBatchNumber` scans currently-used slots (1, 2, or 3) inside a
+**Batch slot allocation.** `allocateBatchNumber` scans currently-used slots (1 up to the cap) inside a
 transaction and picks the first free one. This scan-then-write has a race window between two
 concurrent transactions; it's closed by a DB-level unique index on the batch document, so a
 duplicate-key error on `batchModel.create()` is always a **fresh, live conflict** between two
@@ -77,7 +77,7 @@ next acts on that draft.
 
 ## Consequences
 
-- Raising `CLAIM_LETTER_MAX_BATCH_NUMBER`, changing the stale-build threshold, or editing the
+- Changing the cap's limit (`CLAIM_LETTER_MAX_LETTERS_LIMIT`), the stale-build threshold, or editing the
   shared delete helper without updating *both* reclaim paths (inline + cron) are all changes that
   need re-review against this design, not just a local edit.
 - A frozen claim version is immutable once `READY` - `createNewVersion` (mechanism-only in V1, no

@@ -29,7 +29,6 @@ import {
 import { State, StateDocument } from 'src/schemas/state.schema';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import { buildClaimLetterBatchLabel } from '../../helpers/claim-letter-financial.helpers';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterFormJsonService, type ClaimLetterMergeDocument } from '../form-json/claim-letter-form-json.service';
 
 export const FINAL_PDF_OUTDATED = 'FINAL_PDF_OUTDATED';
@@ -115,7 +114,6 @@ export class ClaimLetterFinalPdfService {
   constructor(
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
     private readonly formJsonService: FormJsonService,
-    private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly s3Service: S3Service,
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name) private readonly batchModel: Model<ClaimLetterBatchDocument>,
@@ -179,7 +177,6 @@ export class ClaimLetterFinalPdfService {
           : `The final claim letter is not available (status is ${getFormStatusLabel(parent.currentFormStatus)}).`,
       );
     }
-    await this.activeBatchService.assertActive(parent);
     if (!parent.signedClaimFile?.path) {
       throw new BadRequestException('Upload the signed claim letter first.');
     }

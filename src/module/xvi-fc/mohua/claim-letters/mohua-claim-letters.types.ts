@@ -65,6 +65,34 @@ export interface MohuaClaimLetterListItem {
   amount: number;
   status: number;
   statusLabel: string;
+  /** Set when the letter was returned because another letter's State form was returned (ADR 0009). */
+  returnedWith: MohuaClaimLetterReturnedWith | null;
+}
+
+/** The letter whose return reopened a State form this letter relied on, and those forms. */
+export interface MohuaClaimLetterReturnedWith {
+  letterId: string;
+  /** That letter's reference, e.g. CF_TR_2026-27_1-1. */
+  number: string;
+  formNames: string[];
+}
+
+/** SFC or GTC as the return dialog offers them: returnable only while at 15 (ADR 0009). */
+export interface MohuaClaimLetterReturnableStateForm {
+  formId: number;
+  name: string;
+  returnable: boolean;
+  /** Why it can't be returned: ACCEPTED (an approval moved it to 5/7), EXEMPTED, NOT_IN_REVIEW; null while returnable. */
+  lockReason: 'ACCEPTED' | 'EXEMPTED' | 'NOT_IN_REVIEW' | null;
+  /** The letter whose approval moved it on, e.g. "Claim Letter 1"; null unless ACCEPTED and found. */
+  acceptedWithLetter: string | null;
+  /**
+   * The letter relied on the State's own exemption request for this form, still under review (5): ticking the form
+   * rejects that request instead of reopening a form (there is none).
+   */
+  rejectsExemption: boolean;
+  /** Live status of that State exemption request (5, 6 or 7); null when the letter relied on none. */
+  exemptionStatus: number | null;
 }
 
 /** The band under a state's claim letters. Money is whole Rupees. */
@@ -130,6 +158,15 @@ export interface MohuaClaimLetterDetail {
   returnedUlbCount: number;
   /** ULB exemptions the letter relied on that are still under MoHUA review; approving the letter approves them. */
   pendingExemptionCount: number;
+  /** Under SO review only: SFC and GTC as the return dialog offers them. */
+  stateForms: MohuaClaimLetterReturnableStateForm[];
+  /** Under SO review only: the State's other letters under SO review. A return that reopens a State form returns
+   *  them too; the dialog lists them and sends their ids back as `affectedLetterIds`. */
+  otherLettersUnderReview: { id: string; number: string }[];
+  /** Under SO review only: ULBs marked returned with a State-form row picked; each reopens that whole form. */
+  returnedRowUlbCount: number;
+  /** As on the list item. */
+  returnedWith: MohuaClaimLetterReturnedWith | null;
 }
 
 /** A form the return reopened; `ulbCount` is how many ULBs' forms/rows it covers (0 for a State form with no rows). */

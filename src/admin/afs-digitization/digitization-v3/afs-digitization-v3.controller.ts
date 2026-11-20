@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  InternalServerErrorException,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -32,6 +43,19 @@ export class AfsDigitizationV3Controller {
     return { success: true, data: await this.digitizationV3Service.getMetrics() };
   }
 
+  /**
+   * Recounts the score and run snapshot now (the "Refresh" button) and returns the fresh overall metrics.
+   * The snapshot is also refreshed a few minutes after a job finishes, so this is only needed to see it sooner.
+   */
+  @Post('metrics/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refreshMetrics() {
+    if (!(await this.digitizationV3Service.refreshScoreMetrics())) {
+      throw new InternalServerErrorException('Could not refresh the metrics');
+    }
+    return { success: true, data: await this.digitizationV3Service.getMetrics() };
+  }
+
   /** Unique files / pages per year, doc type, state and audit type (all optional filters), from the uniqueness baseline. */
   @Get('metrics/breakdown')
   async breakdown(
@@ -46,40 +70,11 @@ export class AfsDigitizationV3Controller {
     };
   }
 
-  /** Recounts the overall cards from the records. Only needed to fix drift; the cards are kept up to date by the jobs. */
-  @Post('metrics/rebuild')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildMetrics() {
-    return { success: true, data: await this.digitizationV3Service.rebuildMetrics() };
-  }
-
-  /** Recounts the unique files / pages to digitize (the `total` card) from the annual accounts. Reads every account, so it takes a while. */
-  @Post('metrics/rebuild-uniqueness')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildUniqueness() {
-    return { success: true, data: await this.digitizationV3Service.rebuildUniqueness() };
-  }
-
   /** FastAPI's log for one job: status, progress step, error and warnings, timestamps. */
   @Get('jobs/:afsDigitizationJobId/log')
   async jobLog(@Param('afsDigitizationJobId') afsDigitizationJobId: string) {
     // `success` keeps the global response interceptor from wrapping the reply a second time
     return { success: true, data: await this.queueService.getJobLog(afsDigitizationJobId) };
-  }
-
-  /**
-   * to be removed once the FastAPI backfill is complete and the scores are stored in the DB.
-   * One-off backfill: copies scores from FastAPI for files digitized before scores were stored.
-   * Handles up to `limit` files per call (default 500); call again until `candidates` is 0.
-   */
-  @Post('scores/backfill')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async backfillScores(@Query('limit') limit?: string) {
-    const n = Math.min(Math.max(Number(limit) || 500, 1), 2000);
-    return { success: true, data: await this.queueService.backfillScores(n) };
   }
 
   /** Filter once, queue every matching file. Skips files with no PDF or already queued / digitized. */

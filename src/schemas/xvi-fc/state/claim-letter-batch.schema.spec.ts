@@ -1,3 +1,4 @@
+import { CLAIM_LETTER_MAX_LETTERS_LIMIT } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import mongoose, { Types } from 'mongoose';
 import { ClaimLetterBatch, ClaimLetterBatchSchema } from './claim-letter-batch.schema';
 
@@ -56,17 +57,19 @@ describe('ClaimLetterBatchSchema — defaults', () => {
     expect((ClaimLetterBatchSchema.path('revision') as unknown as { defaultValue: unknown }).defaultValue).toBe(0);
   });
 
-  it('restricts installment to [1, 2] and batchNumber to [1, 2, 3]', () => {
+  it('restricts installment to [1, 2] and batchNumber to 1..CLAIM_LETTER_MAX_LETTERS_LIMIT (ADR 0009)', () => {
     // Number-typed enum paths expose their allowed values via options.enum, not the
     // .enumValues getter (that getter only exists on String-typed schema paths).
     const installmentPath = ClaimLetterBatchSchema.path('installment') as unknown as {
       options: { enum: number[] };
     };
     const batchNumberPath = ClaimLetterBatchSchema.path('batchNumber') as unknown as {
-      options: { enum: number[] };
+      options: { enum?: number[]; min: number; max: number };
     };
     expect(installmentPath.options.enum).toEqual([1, 2]);
-    expect(batchNumberPath.options.enum).toEqual([1, 2, 3]);
+    expect(batchNumberPath.options.enum).toBeUndefined();
+    expect(batchNumberPath.options.min).toBe(1);
+    expect(batchNumberPath.options.max).toBe(CLAIM_LETTER_MAX_LETTERS_LIMIT);
   });
 
   it('requires buildRequestId', () => {
@@ -91,6 +94,11 @@ describe('ClaimLetterBatchSchema — a minimal valid document passes validation'
   it('rejects installment 3 (not a legal value)', () => {
     const error = buildValidDoc({ installment: 3 }).validateSync();
     expect(error).toBeDefined();
+  });
+
+  it('rejects a batch number that is not a whole place', () => {
+    expect(buildValidDoc({ batchNumber: 2.5 }).validateSync()?.errors['batchNumber']).toBeDefined();
+    expect(buildValidDoc({ batchNumber: 10 }).validateSync()).toBeUndefined();
   });
 });
 

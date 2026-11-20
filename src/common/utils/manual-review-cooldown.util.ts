@@ -31,6 +31,29 @@ export function isPastFirstAttempt(upload: { retryValidationCount?: number | nul
 
 export const FIRST_ATTEMPT_MESSAGE = 'Please retry or re-upload the document before requesting a manual review.';
 
+/** A ULB may throw away a document that already PASSED validation (remove it or upload over it) at most
+ *  this many times; after that the passed document is locked. A State/SO return lifts the lock. */
+export const MAX_PASSED_REPLACEMENTS = 3;
+
+export const PASSED_REPLACEMENTS_EXHAUSTED_MESSAGE =
+  `This document has already passed validation and has been replaced ${MAX_PASSED_REPLACEMENTS} times, the maximum allowed. ` +
+  `For further changes, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
+
+/**
+ * Discarding the current upload of a slot: is it allowed, and what should `passedReplacementsUsed` become?
+ * Only a PASSED upload counts. A returned document is always replaceable and starts the count again.
+ * Returns `null` when nothing changes (the upload had not passed).
+ */
+export function nextPassedReplacements(
+  slot: { processingStatus?: string | null; passedReplacementsUsed?: number | null } | null | undefined,
+  isReturned: boolean,
+): { allowed: boolean; value: number } | null {
+  if (slot?.processingStatus !== 'PASSED') return null;
+  if (isReturned) return { allowed: true, value: 0 };
+  const used = slot.passedReplacementsUsed ?? 0;
+  return { allowed: used < MAX_PASSED_REPLACEMENTS, value: used + 1 };
+}
+
 /** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
 export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {
   return !!uploadBlockedUntil && uploadBlockedUntil.getTime() > Date.now();

@@ -53,7 +53,8 @@ import type {
   DfValidateExcelResponseData,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
-import { assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
+import { assertNoClaimLockedUlbs, assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
+import { ClaimLetterUlbLock, ClaimLetterUlbLockDocument } from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
 import { amountsAreEqual, snapToWholeRupee } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
@@ -133,6 +134,8 @@ export class DevolutionFormulaExcelService {
     private readonly historyModel: Model<DevolutionFormulaFormHistoryDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(ClaimLetterUlbLock.name)
+    private readonly claimLetterUlbLockModel: Model<ClaimLetterUlbLockDocument>,
     private readonly s3Service: S3Service,
     private readonly excelService: ExcelService,
     private readonly dfValidator: DevolutionFormulaValidator,
@@ -204,6 +207,7 @@ export class DevolutionFormulaExcelService {
     if (existingDoc) {
       assertCanStateEditForm(fromStatus);
       await assertNoFrozenDfRows(this.rowModel, existingDoc._id as Types.ObjectId, existingDoc.activeDatasetVersion ?? 0);
+      await assertNoClaimLockedUlbs(this.claimLetterUlbLockModel, formFilter);
     }
 
     // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
@@ -599,6 +603,7 @@ export class DevolutionFormulaExcelService {
 
     assertCanStateEditForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
     await assertNoFrozenDfRows(this.rowModel, form._id as Types.ObjectId, form.activeDatasetVersion ?? 0);
+    await assertNoClaimLockedUlbs(this.claimLetterUlbLockModel, { state: stateOid, year: yearOid, installment });
 
     const grantAlloc = await this.dfService.resolveGrantAllocation(stateOid, yearOid);
     // Defensive rounding — see the matching comment in validateExcel above.

@@ -111,10 +111,12 @@ both land in `totalAllocatedSum` the same way they always did — the lock only 
 itself, not the reconciliation read.
 
 The whole-dataset paths (`validateExcel` re-upload, `revalidateExcel`, `deleteUploadedExcel`) have their
-own guard, `assertNoFrozenDfRows` (`helpers/devolution-formula-frozen-rows.helpers.ts`): refused while any
+own guards in `helpers/devolution-formula-frozen-rows.helpers.ts`: `assertNoFrozenDfRows` refuses while any
 active row is at 5 or 7, i.e. part of a claim letter the SO approved. While a letter is only under SO review
 the form itself is at 15, which `assertCanStateEditForm` already refuses; a later letter's return reopens the
 form (16), and this guard is what keeps the earlier letter's rows from being replaced (claim-letter ADR 0007).
+`assertNoClaimLockedUlbs` also refuses while any ULB of the installment holds a claim lock, drafts included: a
+draft keeps the row and amount it was saved with, and claim letters now run in parallel (claim-letter ADR 0009).
 
 ## Known gaps (tracked as TODOs in code, not implemented here)
 
