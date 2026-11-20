@@ -17,6 +17,7 @@ import {
 import { deleteBuildingParentArtifacts } from '../../helpers/claim-letter-build-cleanup.helpers';
 import { amountsAreEqual } from '../../helpers/claim-letter-financial.helpers';
 import type { ClaimLetterFinancialSummaryDisplay } from '../../types/claim-letter.types';
+import { abortIfActive } from '../../helpers/claim-letter-concurrency.helpers';
 
 export interface StaleBuildCleanupResult {
   cleanedCount: number;
@@ -113,7 +114,7 @@ export class ClaimLetterRecoveryService {
       );
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();

@@ -38,7 +38,7 @@ import {
 import { assertInstallmentSupported } from '../../helpers/claim-letter-installment.helpers';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import { historySort, historyStatusCondition } from '../../helpers/claim-letter-history.helpers';
-import { toClaimLetterBusyConflict } from '../../helpers/claim-letter-concurrency.helpers';
+import { abortIfActive, toClaimLetterBusyConflict } from '../../helpers/claim-letter-concurrency.helpers';
 import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
@@ -328,7 +328,7 @@ export class ClaimLetterService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();

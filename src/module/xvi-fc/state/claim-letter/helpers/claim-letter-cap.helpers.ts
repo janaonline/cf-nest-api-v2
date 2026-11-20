@@ -25,8 +25,10 @@ export function openLettersFilter<Id>(scope: { state: Id; year: Id; installment:
   return { state: scope.state, year: scope.year, installment: scope.installment, isAbandoned: false };
 }
 
-/** The lowest place no open letter holds, up to the cap; null when every place is taken. */
+/** The lowest place no open letter holds, up to the cap; null when every place is taken. Counts the places held, not
+ *  only their numbers: after the cap is lowered, letters above it still use it up (ADR 0009). */
 export function firstFreeBatchNumber(used: ReadonlySet<number>, maxClaimLetters: number): number | null {
+  if (used.size >= maxClaimLetters) return null;
   for (let n = 1; n <= maxClaimLetters; n++) if (!used.has(n)) return n;
   return null;
 }

@@ -20,7 +20,9 @@ lock, ADR 0002), so ULB-level events stay with that letter.
 `meta.maxClaimLetters` (a whole number 1-10; missing or invalid means 3; read by `ClaimLetterFormJsonService`). A letter
 holds a place while it is a draft, under review (15, 5) or approved (7); a discarded or returned letter frees it
 (`allocateBatchNumber` counts letters that are not `isAbandoned`). Lowering the cap never touches existing letters; it
-only stops new ones until a place is free. `batchNumber` is 1 to `CLAIM_LETTER_MAX_LETTERS_LIMIT` (10) in the schemas.
+only stops new ones until open letters drop below it (`firstFreeBatchNumber` counts the places held, so letters
+numbered above a lowered cap still use it up). `batchNumber` is a whole number from 1 to
+`CLAIM_LETTER_MAX_LETTERS_LIMIT` (10) in the schemas.
 
 **The SO's approve affects no other letter.** The first approval moves SFC and GTC to 5. From then on they are
 settled: the return refuses them ("SFC Status was accepted with Claim Letter 1 and can no longer be returned"), and
@@ -63,8 +65,9 @@ can only go into a draft. So the last draft (every place taken, no other draft o
 expected ULB is in no letter (`ClaimLetterSubmitService.assertNoUlbLeftOut`; the detail's `isLastPlace`, read with
 `remainingUlbCount` so the page never pairs a fresh flag with an old count). Other drafts
 submit freely: the last one can still take the ULBs. A ULB a draft holds counts as in a letter; if that draft later
-drops it, its own submit is refused. When another draft let a submit pass, the check runs again inside the
-transaction after the per-State guard, so two drafts submitted one after the other cannot each count the other.
+drops it, its own submit is refused. Every submit runs the check again inside the transaction after the per-State
+guard, so another draft that dropped a ULB or was submitted in between is seen; two drafts submitted one after the
+other cannot each count the other.
 This replaces the slot-3-only check, which missed a letter that took a lower slot freed by a return, and a first
 version that refused every draft once all places were taken (all-draft States could submit nothing).
 Known gap: if the cap is lowered below the open letters and the State then discards the last draft, the ULBs left out

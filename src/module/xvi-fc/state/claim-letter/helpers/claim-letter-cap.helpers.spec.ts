@@ -23,6 +23,11 @@ describe('claim letter cap helpers (ADR 0009)', () => {
     expect(firstFreeBatchNumber(new Set([1, 2, 3]), 4)).toBe(4);
   });
 
+  it('gives no place once open letters fill the cap, even after it is lowered below their numbers', () => {
+    expect(firstFreeBatchNumber(new Set([2, 3, 4]), 3)).toBeNull();
+    expect(firstFreeBatchNumber(new Set([3, 4]), 3)).toBe(1);
+  });
+
   describe('countOpenLetters', () => {
     it('counts every open letter, and the drafts other than this one', () => {
       const letters = [
