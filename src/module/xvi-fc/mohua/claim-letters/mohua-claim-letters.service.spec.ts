@@ -26,6 +26,7 @@ describe('MohuaClaimLettersService', () => {
   let batchModel: {
     find: jest.Mock;
     findOne: jest.Mock;
+    findById: jest.Mock;
     findOneAndUpdate: jest.Mock<unknown, WriteCall>;
     aggregate: jest.Mock;
     updateMany: jest.Mock<Promise<{ modifiedCount: number }>, WriteCall>;
@@ -94,6 +95,8 @@ describe('MohuaClaimLettersService', () => {
     batchModel = {
       find: jest.fn().mockReturnValue(q([])),
       findOne: jest.fn().mockReturnValue(q(batch())),
+      // The letter's State sources: none relied on the State's own exemption unless a test says so.
+      findById: jest.fn().mockReturnValue(q(null)),
       findOneAndUpdate: jest.fn<unknown, WriteCall>().mockReturnValue(q({ _id: batchId })),
       aggregate: jest.fn().mockReturnValue(q([])),
       updateMany: jest.fn<Promise<{ modifiedCount: number }>, WriteCall>().mockResolvedValue({ modifiedCount: 0 }),
@@ -478,6 +481,8 @@ describe('MohuaClaimLettersService', () => {
           returnable: false,
           lockReason: 'ACCEPTED',
           acceptedWithLetter: 'Claim Letter 1',
+          rejectsExemption: false,
+          exemptionStatus: null,
         },
         {
           formId: 35,
@@ -485,6 +490,8 @@ describe('MohuaClaimLettersService', () => {
           returnable: true,
           lockReason: null,
           acceptedWithLetter: null,
+          rejectsExemption: false,
+          exemptionStatus: null,
         },
       ]);
       expect(detail.otherLettersUnderReview).toEqual([{ id: String(otherId), number: 'CF_TR_2026-27_1-2' }]);
@@ -1416,6 +1423,93 @@ describe('MohuaClaimLettersService', () => {
         await expect(service.returnForCorrection(String(batchId), dto, so)).rejects.toThrow(ConflictException);
         expect(connection.startSession).not.toHaveBeenCalled();
       });
+    });
+  });
+
+  describe("the State's own exemption (SFC for the Entire State)", () => {
+    const so = { _id: new Types.ObjectId().toString(), role: 'MoHUA', scope: 'MOHUA', accessLevel: null } as never;
+    const exemptionId = new Types.ObjectId();
+    const exemptedSfc = { formId: 22, returnable: false, lockReason: 'EXEMPTED', acceptedWithLetter: null };
+    const gtc = { formId: 35, returnable: true, lockReason: null, acceptedWithLetter: null };
+    const exemptionAt = (currentFormStatus: number) =>
+      exemptionModel.find.mockReturnValue(q([{ _id: exemptionId, data: [{ formId: 22, currentFormStatus }] }]));
+    const dto = { expectedRevision: 3, stateFormIds: [22, 35], stateRemark: 'SFC was never constituted' } as never;
+
+    beforeEach(() => {
+      batchModel.findOne.mockReturnValue(q(batch({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })));
+      formStatus.describeReturnableStateForms.mockResolvedValue([
+        { ...exemptedSfc, stateExemptionId: exemptionId },
+        { ...gtc, stateExemptionId: null },
+      ]);
+    });
+
+    it('offers SFC to the SO while the request is under review, and says how it was decided once it is not', async () => {
+      exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      const pending = await service.getClaimLetter(String(batchId));
+      expect(pending.stateForms[0]).toEqual({
+        formId: 22,
+        name: 'SFC Status',
+        returnable: true,
+        lockReason: null,
+        acceptedWithLetter: null,
+        rejectsExemption: true,
+        exemptionStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      });
+
+      exemptionAt(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
+      const decided = await service.getClaimLetter(String(batchId));
+      expect(decided.stateForms[0]).toMatchObject({
+        returnable: false,
+        lockReason: 'EXEMPTED',
+        rejectsExemption: false,
+        exemptionStatus: FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+      });
+    });
+
+    it('a return with SFC picked rejects the request in the transaction and reopens only the real forms', async () => {
+      exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+
+      await service.returnForCorrection(String(batchId), dto, so, '1.2.3.4', 'jest');
+
+      expect(exemptionService.reject).toHaveBeenCalledWith(
+        String(exemptionId),
+        22,
+        'SFC was never constituted',
+        so,
+        '1.2.3.4',
+        'jest',
+        session,
+      );
+      expect(formStatus.returnFormsForCorrection).toHaveBeenCalledWith(
+        batchId,
+        expect.objectContaining({ stateFormIds: [35] }),
+        expect.anything(),
+        session,
+      );
+      expect(history.recordTransition.mock.calls[0][0].rejectedSourceRefs).toContainEqual(
+        expect.objectContaining({ formId: 22, formDocumentId: exemptionId, rowDocumentId: null }),
+      );
+      expect(session.commitTransaction).toHaveBeenCalled();
+    });
+
+    it('refuses SFC once the request was decided, before anything is written', async () => {
+      exemptionAt(FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA);
+
+      await expect(service.returnForCorrection(String(batchId), dto, so)).rejects.toThrow(ConflictException);
+      expect(connection.startSession).not.toHaveBeenCalled();
+      expect(exemptionService.reject).not.toHaveBeenCalled();
+    });
+
+    it("approving the letter approves the State's request still under review, inside the letter's transaction", async () => {
+      batchModel.findById.mockReturnValue(
+        q({ stateEligibilitySources: [{ formId: 22, exemptionId, exemptionKind: 'DISCRETIONARY_STATE' }] }),
+      );
+      exemptionAt(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+
+      await service.approve(String(batchId), 3, undefined, so, '1.2.3.4', 'jest');
+
+      expect(exemptionService.approve).toHaveBeenCalledWith(String(exemptionId), 22, so, '1.2.3.4', 'jest', session);
+      expect(session.commitTransaction).toHaveBeenCalled();
     });
   });
 });

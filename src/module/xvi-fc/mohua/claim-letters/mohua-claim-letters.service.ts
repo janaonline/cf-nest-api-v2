@@ -24,6 +24,7 @@ import {
   CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS,
   CLAIM_LETTER_ROW_FORM_IDS,
   ClaimLetterFormStatusService,
+  type ClaimLetterReturnableStateForm,
 } from 'src/module/xvi-fc/state/claim-letter/services/form-status/claim-letter-form-status.service';
 import {
   ClaimLetterHistoryService,
@@ -99,13 +100,23 @@ type ExemptionSourceLean = {
 
 type ChildWithSources = { ulbId: Types.ObjectId; eligibilitySources?: ExemptionSourceLean[] };
 
-/** One ULB's own discretionary exemption the letter relied on, with its live status. */
+/** One discretionary exemption the letter relied on (a ULB's own, or the State's), with its live status. */
 interface UlbExemption {
   formId: number;
   exemptionId: Types.ObjectId;
   formDocumentId: Types.ObjectId | null;
   status: number;
 }
+
+/** The State's own exemption request (e.g. SFC for the Entire State) as the letter's State sources record it. */
+const STATE_EXEMPTION_KIND = 'DISCRETIONARY_STATE';
+
+/**
+ * SFC or GTC as the SO's return dialog offers them. A form the letter took as exempted through the State's own request
+ * is the SO's to decide: while that request is under review (5) it can be ticked, which rejects the request
+ * (`rejectsExemption`); once decided it stays locked and says how (`exemptionStatus`).
+ */
+type StateFormChoice = ClaimLetterReturnableStateForm & { rejectsExemption: boolean; exemptionStatus: number | null };
 
 type LeanBatch = {
   _id: Types.ObjectId;
@@ -559,13 +570,26 @@ export class MohuaClaimLettersService {
       );
     }
     assertValidFormStatusTransition(FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_SO);
-    await this.assertStateFormsReturnable(claimLetterOid, dto.stateFormIds);
+    // A picked State form the letter took as exempted through the State's own request has no form to reopen: the
+    // return rejects that request instead (5 -> 6), and the State must then file the form.
+    const stateExemptionForms = (await this.assertStateFormsReturnable(claimLetterOid, dto.stateFormIds)).filter(
+      (form) => form.rejectsExemption && form.stateExemptionId,
+    );
+    const reopenStateFormIds = dto.stateFormIds.filter((id) => !stateExemptionForms.some((f) => f.formId === id));
 
     // Checked here, decided inside the transaction below, so a failed return leaves every exemption at 5.
     const exemptionRejections = await this.planExemptionRejections(returnedUlbs);
 
     const userOid = new Types.ObjectId(user._id);
     const stateRemark = dto.stateRemark?.trim() || null;
+    const stateExemptionRemark = stateRemark ?? 'Exemption rejected with the claim letter.';
+    const stateExemptionRefs: ClaimLetterReturnedSource[] = stateExemptionForms.map((form) => ({
+      formId: form.formId,
+      formDocumentId: form.stateExemptionId!,
+      rowDocumentId: null,
+      ulbId: null,
+      remark: stateExemptionRemark,
+    }));
     const decision = buildDecisionRecord('RETURNED', stateRemark, user, ip ?? null, userAgent ?? null);
     const now = decision.decidedAt;
     const ulbReturns = returnedUlbs.map(({ ulbId, soDecision }) => ({
@@ -620,13 +644,24 @@ export class MohuaClaimLettersService {
         if (alreadyRejected) continue;
         await this.exemptionService.reject(exemptionId, formId, remark, user, ip ?? '', userAgent ?? '', session);
       }
+      for (const ref of stateExemptionRefs) {
+        await this.exemptionService.reject(
+          String(ref.formDocumentId),
+          ref.formId,
+          stateExemptionRemark,
+          user,
+          ip ?? '',
+          userAgent ?? '',
+          session,
+        );
+      }
 
       // Deleted, not flagged, so each ULB is immediately selectable in the State's new letter (same as abandon).
       await this.lockModel.deleteMany({ claimLetter: claimLetterOid, lockState: 'ACTIVE' }, { session });
 
       const returned = await this.formStatusService.returnFormsForCorrection(
         claimLetterOid,
-        { ulbReturns, stateFormIds: dto.stateFormIds, stateRemark },
+        { ulbReturns, stateFormIds: reopenStateFormIds, stateRemark },
         decision,
         session,
       );
@@ -642,7 +677,7 @@ export class MohuaClaimLettersService {
           toStatus: FORM_STATUS.RETURNED_BY_SO,
           actionSource: 'CLAIM_LETTER_REJECTION',
           reason: stateRemark,
-          rejectedSourceRefs: [...returned, ...exemptionRejections.map((r) => r.ref)],
+          rejectedSourceRefs: [...returned, ...exemptionRejections.map((r) => r.ref), ...stateExemptionRefs],
           changedBy: userOid,
           requestId: randomUUID(),
           ipAddress: ip ?? null,
@@ -651,9 +686,11 @@ export class MohuaClaimLettersService {
         session,
       );
 
-      const reopenedStateForms = returned.filter(
-        (ref) => !ref.rowDocumentId && SHARED_STATE_FORM_IDS.includes(ref.formId),
-      );
+      // A rejected State exemption fails the State's other letters exactly as a reopened State form does.
+      const reopenedStateForms = [
+        ...returned.filter((ref) => !ref.rowDocumentId && SHARED_STATE_FORM_IDS.includes(ref.formId)),
+        ...stateExemptionRefs,
+      ];
       if (reopenedStateForms.length) {
         reopenedStateFormIds = [...new Set(reopenedStateForms.map((ref) => ref.formId))];
         cascaded = await this.returnWithStateForms(
@@ -686,11 +723,15 @@ export class MohuaClaimLettersService {
    * SFC and GTC are returnable only while at 15: once an approval moved one on, it is settled (ADR 0009). The same
    * reasons the return dialog shows refuse it here, as a 409: the pick is stale, and the page reloads on a conflict.
    */
-  private async assertStateFormsReturnable(claimLetterOid: Types.ObjectId, stateFormIds: number[]): Promise<void> {
-    if (!stateFormIds.some((id) => CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.includes(id))) return;
-    const forms = await this.formStatusService.describeReturnableStateForms(claimLetterOid);
+  private async assertStateFormsReturnable(
+    claimLetterOid: Types.ObjectId,
+    stateFormIds: number[],
+  ): Promise<StateFormChoice[]> {
+    if (!stateFormIds.some((id) => CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.includes(id))) return [];
+    const forms = await this.describeStateForms(claimLetterOid);
     const refused = forms.find((form) => stateFormIds.includes(form.formId) && !form.returnable);
     if (refused) throw new ConflictException(stateFormNotReturnableMessage(formName(refused.formId), refused));
+    return forms.filter((form) => stateFormIds.includes(form.formId));
   }
 
   /**
@@ -962,7 +1003,7 @@ export class MohuaClaimLettersService {
       // Only the SO's decision acts on them, so only a letter under SO review needs the lookup.
       underSoReview ? this.findPendingExemptions(batch._id) : Promise.resolve([]),
       // The return dialog's State items and the letters a State form return would also return (ADR 0009).
-      underSoReview ? this.formStatusService.describeReturnableStateForms(batch._id) : Promise.resolve([]),
+      underSoReview ? this.describeStateForms(batch._id) : Promise.resolve([]),
       underSoReview
         ? this.batchModel
             .find({
@@ -1020,7 +1061,16 @@ export class MohuaClaimLettersService {
       returnDetails: rejection && toReturnDetails(rejection),
       returnedUlbCount: returnedUlbs,
       pendingExemptionCount: pendingExemptions.length,
-      stateForms: stateForms.map((form) => ({ ...form, name: formName(form.formId) })),
+      // The exemption request's id stays server-side: the SO decides it by ticking the form.
+      stateForms: stateForms.map((form) => ({
+        formId: form.formId,
+        name: formName(form.formId),
+        returnable: form.returnable,
+        lockReason: form.lockReason,
+        acceptedWithLetter: form.acceptedWithLetter,
+        rejectsExemption: form.rejectsExemption,
+        exemptionStatus: form.exemptionStatus,
+      })),
       otherLettersUnderReview: others.map((other) => ({ id: String(other._id), number: other.fileBaseName })),
       returnedRowUlbCount: rowReturns,
       returnedWith: toReturnedWith(batch.returnedWith),
@@ -1218,16 +1268,67 @@ export class MohuaClaimLettersService {
     }
   }
 
-  /** Every ULB exemption the letter relied on that MoHUA has not decided yet (still 5). */
+  /**
+   * Every discretionary exemption the letter relied on that MoHUA has not decided yet (still 5): its ULBs' own, and the
+   * State's own (e.g. SFC for the Entire State), which the SO's approve decides with the letter just the same.
+   */
   private async findPendingExemptions(claimLetter: Types.ObjectId): Promise<UlbExemption[]> {
-    const children = await this.batchUlbModel
-      .find({ claimLetter, 'appliedExemptionIds.0': { $exists: true } })
-      .select('ulbId eligibilitySources')
-      .lean<ChildWithSources[]>()
+    const [children, parent] = await Promise.all([
+      this.batchUlbModel
+        .find({ claimLetter, 'appliedExemptionIds.0': { $exists: true } })
+        .select('ulbId eligibilitySources')
+        .lean<ChildWithSources[]>()
+        .exec(),
+      this.batchModel
+        .findById(claimLetter)
+        .select('stateEligibilitySources')
+        .lean<{ stateEligibilitySources?: ExemptionSourceLean[] } | null>()
+        .exec(),
+    ]);
+    const stateRefs = (parent?.stateEligibilitySources ?? [])
+      .filter((s) => s.exemptionId && s.exemptionKind === STATE_EXEMPTION_KIND)
+      .map((s) => ({ formId: s.formId, exemptionId: s.exemptionId!, formDocumentId: s.formDocumentId ?? null }));
+    const stateStatus = await this.readExemptionStatuses(stateRefs);
+    const stateExemptions = stateRefs.flatMap((ref) => {
+      const status = stateStatus.get(`${String(ref.exemptionId)}:${ref.formId}`);
+      return status === undefined ? [] : [{ ...ref, status }];
+    });
+    return [...[...(await this.loadUlbExemptions(children)).values()].flat(), ...stateExemptions].filter(
+      (e) => e.status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+    );
+  }
+
+  /** `<exemptionId>:<formId>` -> that request entry's live status, in one query. */
+  private async readExemptionStatuses(
+    refs: readonly { exemptionId: Types.ObjectId; formId: number }[],
+  ): Promise<Map<string, number>> {
+    if (!refs.length) return new Map();
+    const ids = [...new Set(refs.map((r) => String(r.exemptionId)))].map((id) => new Types.ObjectId(id));
+    const docs = await this.exemptionModel
+      .find({ _id: { $in: ids } })
+      .select('data.formId data.currentFormStatus')
+      .lean<{ _id: Types.ObjectId; data: { formId: number; currentFormStatus: number }[] }[]>()
       .exec();
-    return [...(await this.loadUlbExemptions(children)).values()]
-      .flat()
-      .filter((e) => e.status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+    return new Map(
+      docs.flatMap((doc) => doc.data.map((entry) => [`${String(doc._id)}:${entry.formId}`, entry.currentFormStatus])),
+    );
+  }
+
+  /** SFC and GTC for the return dialog, with the State's own exemption request (if the letter relied on one) read live. */
+  private async describeStateForms(claimLetter: Types.ObjectId): Promise<StateFormChoice[]> {
+    const forms = await this.formStatusService.describeReturnableStateForms(claimLetter);
+    const statuses = await this.readExemptionStatuses(
+      forms.flatMap((f) => (f.stateExemptionId ? [{ exemptionId: f.stateExemptionId, formId: f.formId }] : [])),
+    );
+    return forms.map((form) => {
+      const status = form.stateExemptionId
+        ? statuses.get(`${String(form.stateExemptionId)}:${form.formId}`)
+        : undefined;
+      if (status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) {
+        return { ...form, returnable: true, lockReason: null, rejectsExemption: true, exemptionStatus: status };
+      }
+      return { ...form, rejectsExemption: false, exemptionStatus: status ?? null };
+    });
   }
 
   /**
@@ -1249,16 +1350,7 @@ export class MohuaClaimLettersService {
     const byUlb = new Map<string, UlbExemption[]>();
     if (!refs.length) return byUlb;
 
-    const ids = [...new Set(refs.map((r) => String(r.exemptionId)))].map((id) => new Types.ObjectId(id));
-    const docs = await this.exemptionModel
-      .find({ _id: { $in: ids } })
-      .select('data.formId data.currentFormStatus')
-      .lean<{ _id: Types.ObjectId; data: { formId: number; currentFormStatus: number }[] }[]>()
-      .exec();
-    const liveStatus = new Map(
-      docs.flatMap((doc) => doc.data.map((entry) => [`${String(doc._id)}:${entry.formId}`, entry.currentFormStatus])),
-    );
-
+    const liveStatus = await this.readExemptionStatuses(refs);
     for (const { ulbId, ...ref } of refs) {
       const status = liveStatus.get(`${String(ref.exemptionId)}:${ref.formId}`);
       if (status === undefined) continue;
