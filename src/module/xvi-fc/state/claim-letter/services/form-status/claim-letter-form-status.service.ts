@@ -336,6 +336,8 @@ export interface ClaimLetterReturnableStateForm {
   lockReason: ClaimLetterStateFormLockReason | null;
   /** "Claim Letter 1": the letter whose approval moved it to 5 or 7; null when not found or not ACCEPTED. */
   acceptedWithLetter: string | null;
+  /** EXEMPTED through the State's own request (`DISCRETIONARY_STATE`): that request's id, for the SO to decide it. */
+  stateExemptionId?: Types.ObjectId | null;
 }
 
 /** Stored when the SO gave no remark: the letter history requires one per returned form. */
@@ -389,6 +391,8 @@ interface SourceRef {
   result: string;
   formDocumentId?: Types.ObjectId | null;
   rowDocumentId?: Types.ObjectId | null;
+  exemptionId?: Types.ObjectId | null;
+  exemptionKind?: string | null;
 }
 
 interface CollectionIds {
@@ -777,8 +781,12 @@ export class ClaimLetterFormStatusService {
       CLAIM_LETTER_ACCEPTED_ONCE_FORM_IDS.map(async (formId): Promise<ClaimLetterReturnableStateForm> => {
         const source = sources.find((s) => s.formId === formId && s.result === 'PASSED' && s.formDocumentId);
         if (!source?.formDocumentId) {
-          const exempted = sources.some((s) => s.formId === formId && s.result === 'EXEMPTED');
-          return locked(formId, exempted ? 'EXEMPTED' : 'NOT_IN_REVIEW');
+          const exempted = sources.find((s) => s.formId === formId && s.result === 'EXEMPTED');
+          if (!exempted) return locked(formId, 'NOT_IN_REVIEW');
+          // The State's own request is the SO's to decide (mohua/claim-letters reads its live status).
+          const stateExemptionId =
+            exempted.exemptionKind === 'DISCRETIONARY_STATE' ? (exempted.exemptionId ?? null) : null;
+          return { ...locked(formId, 'EXEMPTED'), stateExemptionId };
         }
         const target = FORM_TARGETS[formId];
         const form = await this.connection
@@ -815,7 +823,10 @@ export class ClaimLetterFormStatusService {
   private async loadStateSources(claimLetterId: Types.ObjectId, session?: ClientSession): Promise<SourceRef[]> {
     const query = this.batchModel
       .findById(claimLetterId)
-      .select('stateEligibilitySources.formId stateEligibilitySources.result stateEligibilitySources.formDocumentId');
+      .select(
+        'stateEligibilitySources.formId stateEligibilitySources.result stateEligibilitySources.formDocumentId ' +
+          'stateEligibilitySources.exemptionId stateEligibilitySources.exemptionKind',
+      );
     if (session) query.session(session);
     const parent = await query.lean<{ stateEligibilitySources?: SourceRef[] } | null>().exec();
     if (!parent) throw new NotFoundException(`Claim letter ${String(claimLetterId)} not found`);
