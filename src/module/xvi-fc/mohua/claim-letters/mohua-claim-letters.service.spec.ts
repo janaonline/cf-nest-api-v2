@@ -61,6 +61,7 @@ describe('MohuaClaimLettersService', () => {
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
+    inTransaction: jest.Mock;
     abortTransaction: jest.Mock;
     endSession: jest.Mock;
   };
@@ -138,6 +139,7 @@ describe('MohuaClaimLettersService', () => {
     session = {
       startTransaction: jest.fn(),
       commitTransaction: jest.fn().mockResolvedValue(undefined),
+      inTransaction: jest.fn().mockReturnValue(true),
       abortTransaction: jest.fn().mockResolvedValue(undefined),
       endSession: jest.fn().mockResolvedValue(undefined),
     };
@@ -718,12 +720,27 @@ describe('MohuaClaimLettersService', () => {
     });
 
     it('turns a write conflict with another decision on the same State into a 409 to retry', async () => {
-      session.commitTransaction.mockRejectedValue(Object.assign(new Error('WriteConflict'), { code: 112 }));
+      undoEligibility.touchClaimUndoGuard.mockRejectedValue(Object.assign(new Error('WriteConflict'), { code: 112 }));
 
       await expect(service.approve(String(batchId), 3, undefined, approver)).rejects.toThrow(
         "Another action on this State's claim letters is in progress. Please try again.",
       );
       expect(session.abortTransaction).toHaveBeenCalled();
+    });
+
+    it('keeps a failed commit retryable: no abort after the commit, still the 409', async () => {
+      // As the driver does: a commit that fails still leaves no transaction to abort.
+      session.commitTransaction.mockImplementation(() => {
+        session.inTransaction.mockReturnValue(false);
+        return Promise.reject(
+          Object.assign(new Error('commit failed'), { errorLabels: ['TransientTransactionError'] }),
+        );
+      });
+
+      await expect(service.approve(String(batchId), 3, undefined, approver)).rejects.toThrow(
+        "Another action on this State's claim letters is in progress. Please try again.",
+      );
+      expect(session.abortTransaction).not.toHaveBeenCalled();
     });
 
     it("copies the verified letter's ULBs into the OM rows, in the approval's transaction", async () => {
@@ -1034,6 +1051,17 @@ describe('MohuaClaimLettersService', () => {
         batchModel.find.mockReturnValue(q([sibling]));
         batchModel.updateMany.mockResolvedValue({ modifiedCount: 1 });
         stateModel.findById.mockReturnValue(q({ code: 'TR' }));
+      });
+
+      it('accepts the affected letter ids in upper-case hex', async () => {
+        await expect(
+          service.returnForCorrection(
+            String(batchId),
+            dto({ affectedLetterIds: [String(sibling._id).toUpperCase()] }),
+            so,
+          ),
+        ).resolves.toBeDefined();
+        expect(batchModel.updateMany).toHaveBeenCalled();
       });
 
       it("returns every other letter under SO review with it, and removes the drafts' signed letters", async () => {

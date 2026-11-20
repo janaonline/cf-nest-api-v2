@@ -26,6 +26,10 @@ describe('ClaimLetterBatchHistorySchema', () => {
     expect(buildValidDoc().validateSync()).toBeUndefined();
   });
 
+  it('rejects a batch number that is not a whole place', () => {
+    expect(buildValidDoc({ batchNumber: 2.5 }).validateSync()?.errors['batchNumber']).toBeDefined();
+  });
+
   it('defaults fromStatus to null', () => {
     expect(buildValidDoc().fromStatus).toBe(null);
   });

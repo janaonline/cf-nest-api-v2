@@ -8,7 +8,10 @@ import {
   isReturnedClaimLetter,
   RETURNED_CLAIM_LETTER_STATUSES,
 } from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-returned.helpers';
-import { toClaimLetterBusyConflict } from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-concurrency.helpers';
+import {
+  abortIfActive,
+  toClaimLetterBusyConflict,
+} from 'src/module/xvi-fc/state/claim-letter/helpers/claim-letter-concurrency.helpers';
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { assertValidFormStatusTransition } from 'src/common/utils/form-status-transitions';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
@@ -477,7 +480,7 @@ export class MohuaClaimLettersService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw (await this.omUlbsHeldConflict(err, claimLetterOid)) ?? toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();
@@ -656,7 +659,8 @@ export class MohuaClaimLettersService {
         cascaded = await this.returnWithStateForms(
           batch,
           reopenedStateForms,
-          dto.affectedLetterIds ?? [],
+          // Stored ids are lower-case hex; the DTO also accepts upper-case.
+          (dto.affectedLetterIds ?? []).map((id) => id.toLowerCase()),
           { stateRemark, userOid, now, ip: ip ?? null, userAgent: userAgent ?? null },
           session,
         );
@@ -664,7 +668,7 @@ export class MohuaClaimLettersService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();

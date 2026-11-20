@@ -98,8 +98,8 @@ export interface ClaimLetterEligibilitySummary {
     eligible: number;
     total: number;
   };
-  /** Expected ULBs in no letter, eligible or not; once every place is taken, no letter can be submitted while any
-   *  remain (ADR 0009). */
+  /** Expected ULBs in no letter, eligible or not; once every place is taken, the last draft (no other draft open)
+   *  can't be submitted while any remain (ADR 0009). */
   remainingUlbCount: number;
   /** formjson 26 `meta.claimAmountEditable`; off means each ULB's claim is its allocation (ADR 0006). */
   claimAmountEditable: boolean;
@@ -145,7 +145,8 @@ export interface ClaimLetterBatchSummary {
   ulbCount: number;
   isAbandoned: boolean;
   hasSignedFile: boolean;
-  /** null: no final claim letter to show (no signed letter yet, abandoned, or a State-level condition fails). */
+  /** null: no final claim letter to show (no signed letter yet, or abandoned). Only getDetail also clears it while a
+   *  State-level condition fails; history doesn't read the State gate and can still show DRAFT. */
   finalClaimLetterStage: ClaimLetterFinalStage | null;
   financialSummary: ClaimLetterFinancialSummaryDisplay;
   /** Sent back as `expectedRevision` on `PATCH .../draft`. */

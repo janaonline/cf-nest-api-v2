@@ -2,7 +2,10 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
-import { CLAIM_LETTER_MAX_LETTERS_LIMIT } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
+import {
+  CLAIM_LETTER_BATCH_NUMBER_VALIDATE,
+  CLAIM_LETTER_MAX_LETTERS_LIMIT,
+} from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import {
   ClaimLetterEligibilitySourceSnapshot,
   ClaimLetterEligibilitySourceSnapshotSchema,
@@ -137,7 +140,13 @@ export class ClaimLetterBatch {
   @Prop({ type: Number, enum: [1, 2], required: true })
   installment!: ClaimLetterInstallment;
 
-  @Prop({ type: Number, min: 1, max: CLAIM_LETTER_MAX_LETTERS_LIMIT, required: true })
+  @Prop({
+    type: Number,
+    min: 1,
+    max: CLAIM_LETTER_MAX_LETTERS_LIMIT,
+    validate: CLAIM_LETTER_BATCH_NUMBER_VALIDATE,
+    required: true,
+  })
   batchNumber!: ClaimLetterBatchNumber;
 
   /** Returned letters (16 or 6) that held this slot before, counted at create: above 0 adds `-R<n>` to the Ref No

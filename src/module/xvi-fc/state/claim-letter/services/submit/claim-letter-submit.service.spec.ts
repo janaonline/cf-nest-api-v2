@@ -56,6 +56,7 @@ describe('ClaimLetterSubmitService', () => {
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
+    inTransaction: jest.Mock;
     abortTransaction: jest.Mock;
     endSession: jest.Mock;
   };
@@ -88,6 +89,7 @@ describe('ClaimLetterSubmitService', () => {
     session = {
       startTransaction: jest.fn(),
       commitTransaction: jest.fn().mockResolvedValue(undefined),
+      inTransaction: jest.fn().mockReturnValue(true),
       abortTransaction: jest.fn().mockResolvedValue(undefined),
       endSession: jest.fn().mockResolvedValue(undefined),
     };
@@ -427,6 +429,25 @@ describe('ClaimLetterSubmitService', () => {
         expect(historyService.recordTransition).not.toHaveBeenCalled();
       });
 
+      it('refuses inside the transaction when the other draft dropped a ULB and was submitted after the first check', async () => {
+        // First check: another draft is open and holds Beta. Before this transaction, it drops Beta and goes to the SO.
+        let otherDraftSubmitted = false;
+        batchModel.find.mockReturnValueOnce(q(openLetters(2, 15))).mockImplementationOnce(() => {
+          otherDraftSubmitted = true;
+          return q(openLetters(15, 15));
+        });
+        eligibilityService.resolveRemainingUlbIds.mockImplementation(() =>
+          Promise.resolve(otherDraftSubmitted ? ['ulb-2'] : []),
+        );
+        batchModel.findOne.mockReturnValue(q(readyParent));
+
+        const err = await service.submit('x', stateUser, 'reviewed-key').catch((e: unknown) => e);
+
+        expect(err).toBeInstanceOf(BadRequestException);
+        expect((err as BadRequestException).message).toBe(leftOutMessage);
+        expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
+      });
+
       it('submits when the other draft was discarded meanwhile, since that frees a place', async () => {
         batchModel.find.mockReturnValueOnce(q(openLetters(2, 15))).mockReturnValueOnce(q(openLetters(15)));
         batchModel.findOne.mockReturnValue(q(readyParent));
@@ -459,7 +480,8 @@ describe('ClaimLetterSubmitService', () => {
         expect(formJsonService.loadMaxClaimLetters).toHaveBeenCalledWith(String(yearId));
         expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
         expect(eligibilityService.resolveRemainingUlbIds).not.toHaveBeenCalled();
-        expect(batchModel.find).toHaveBeenCalledTimes(1);
+        // Open letters are counted twice: the quick check, and again inside the transaction.
+        expect(batchModel.find).toHaveBeenCalledTimes(2);
       });
     });
   });
