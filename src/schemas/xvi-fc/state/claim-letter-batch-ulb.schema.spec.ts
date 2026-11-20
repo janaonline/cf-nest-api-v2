@@ -37,6 +37,10 @@ describe('ClaimLetterBatchUlbSchema — a minimal valid document passes validati
     expect(buildValidDoc().validateSync()).toBeUndefined();
   });
 
+  it('rejects a batch number that is not a whole place', () => {
+    expect(buildValidDoc({ batchNumber: 2.5 }).validateSync()?.errors['batchNumber']).toBeDefined();
+  });
+
   it('defaults eligibilitySources and appliedExemptionIds to empty arrays', () => {
     const doc = buildValidDoc();
     expect(doc.eligibilitySources).toEqual([]);

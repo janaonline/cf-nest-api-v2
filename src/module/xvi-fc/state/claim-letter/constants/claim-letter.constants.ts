@@ -15,6 +15,12 @@ export const CLAIM_LETTER_DEFAULT_MAX_LETTERS = 3;
 /** Highest `meta.maxClaimLetters`; also the schema's upper bound on `batchNumber`. */
 export const CLAIM_LETTER_MAX_LETTERS_LIMIT = 10;
 
+/** `batchNumber` is a place under the cap, so a whole number; the old 1 | 2 | 3 enum enforced that too. */
+export const CLAIM_LETTER_BATCH_NUMBER_VALIDATE = {
+  validator: Number.isInteger,
+  message: 'batchNumber must be a whole number',
+};
+
 export const CLAIM_LETTER_PAGINATION_DEFAULT_PAGE = 1;
 export const CLAIM_LETTER_PAGINATION_DEFAULT_LIMIT = 20;
 export const CLAIM_LETTER_PAGINATION_MAX_LIMIT = 100;

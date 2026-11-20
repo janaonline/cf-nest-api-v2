@@ -95,6 +95,11 @@ describe('ClaimLetterBatchSchema — a minimal valid document passes validation'
     const error = buildValidDoc({ installment: 3 }).validateSync();
     expect(error).toBeDefined();
   });
+
+  it('rejects a batch number that is not a whole place', () => {
+    expect(buildValidDoc({ batchNumber: 2.5 }).validateSync()?.errors['batchNumber']).toBeDefined();
+    expect(buildValidDoc({ batchNumber: 10 }).validateSync()).toBeUndefined();
+  });
 });
 
 describe('ClaimLetterBatchSchema indexes', () => {

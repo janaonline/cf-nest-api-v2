@@ -77,6 +77,7 @@ describe('ClaimLetterService', () => {
   let session: {
     startTransaction: jest.Mock;
     commitTransaction: jest.Mock;
+    inTransaction: jest.Mock;
     abortTransaction: jest.Mock;
     endSession: jest.Mock;
   };
@@ -154,6 +155,7 @@ describe('ClaimLetterService', () => {
     session = {
       startTransaction: jest.fn(),
       commitTransaction: jest.fn().mockResolvedValue(undefined),
+      inTransaction: jest.fn().mockReturnValue(true),
       abortTransaction: jest.fn().mockResolvedValue(undefined),
       endSession: jest.fn().mockResolvedValue(undefined),
     };

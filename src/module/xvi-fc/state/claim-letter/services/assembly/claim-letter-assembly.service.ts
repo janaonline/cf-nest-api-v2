@@ -61,6 +61,7 @@ import {
   lockedUlbsMessage,
 } from '../../helpers/claim-letter-rejected-ulbs.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
+import { abortIfActive } from '../../helpers/claim-letter-concurrency.helpers';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
@@ -432,7 +433,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return parent;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -542,7 +543,7 @@ export class ClaimLetterAssemblyService {
       );
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1048,7 +1049,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return finalized;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1413,7 +1414,7 @@ export class ClaimLetterAssemblyService {
       }
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1491,7 +1492,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1563,7 +1564,7 @@ export class ClaimLetterAssemblyService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1751,7 +1752,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return parent;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1828,7 +1829,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return finalized;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1864,7 +1865,7 @@ export class ClaimLetterAssemblyService {
       );
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
