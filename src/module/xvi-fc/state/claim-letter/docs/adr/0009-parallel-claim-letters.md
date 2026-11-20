@@ -32,6 +32,7 @@ an approved letter's rows stay frozen.
 **A return that reopens a State form reaches the State's other letters, in the same transaction**
 (`MohuaClaimLettersService.returnWithStateForms`). It applies when the return moved SFC or GTC, or a ULB's row in
 Elected Body, FC Unspent or Devolution (a row return reopens the whole form):
+
 - every other letter under SO review (15) is returned too: 16 plus `isAbandoned` (slot and ULB locks freed),
   `returnedWith` naming the letter and the forms, the SO's remark, and a `DEPENDENCY_INVALIDATION` history row;
 - the dialog lists those letters (`otherLettersUnderReview` on the detail) and the request sends their ids as
@@ -39,10 +40,10 @@ Elected Body, FC Unspent or Devolution (a row return reopens the whole form):
   refused (409), so nothing is returned unseen;
 - every draft gets `stateFormReturnNotice`; a draft with a signed letter loses it and its merged final PDF, since
   what it signed may change. The notice is cleared by the next signed upload, and a notice that says the signed letter
-  was removed is kept by later returns until then. The upload is pinned on the notice it read, so a return in between
-  makes it a 409 instead of clearing the new notice;
+  was removed is kept by later returns until then. The upload is also pinned on the notice it read, so it never clears
+  a newer notice;
 - one email to the State names the letters also returned.
-Letters at 5 or 7 are never touched.
+  Letters at 5 or 7 are never touched.
 
 **Every other return touches no other letter.** Returning only the claim letter, a ULB's own form or a ULB's
 exemption leaves the other letters as they are. A letter's "List of Ineligible ULBs" and row J are a snapshot: the
@@ -50,7 +51,10 @@ note under the table says when they were generated and that eligibility may have
 OM (built at Generate), list a returned ULB while it is not eligible.
 
 **Nothing is signed while a State form is being corrected.** A draft's .docx download and signed upload are refused
-while the fresh State gate fails (`ClaimLetterEligibilityService.assertStateConditionsMet`). The detail hides the
+while the fresh State gate fails (`ClaimLetterEligibilityService.assertStateConditionsMet`). The upload then writes in
+a transaction after the per-State guard (`touchClaimUndoGuard`) and re-checks the State forms there
+(`assertStateFormsStillReady`), as submit does, so an SO return that commits after the gate check is a 409. The notice
+pin alone is not enough: a second return keeps a "signed letter removed" notice as it was, so the pin still matches. The detail hides the
 letter sections with that reason (`blockedReason`) and shows one banner (`stateFormNotice`): the notice, followed by
 the block reason when another State form fails too, or the block reason alone when there is no notice.
 

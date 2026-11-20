@@ -1,11 +1,14 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Types } from 'mongoose';
 import { ClaimLetterService } from './claim-letter.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
+import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+import { CLAIM_LETTER_BUSY_MESSAGE } from '../../helpers/claim-letter-concurrency.helpers';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ClaimLetterBatch } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
@@ -65,6 +68,15 @@ describe('ClaimLetterService', () => {
     findById: jest.Mock;
   };
   let stateModel: { findById: jest.Mock };
+  let formStatusService: { assertStateFormsStillReady: jest.Mock };
+  let undoEligibility: { touchClaimUndoGuard: jest.Mock };
+  let session: {
+    startTransaction: jest.Mock;
+    commitTransaction: jest.Mock;
+    abortTransaction: jest.Mock;
+    endSession: jest.Mock;
+  };
+  let connection: { startSession: jest.Mock };
 
   const stateId = new Types.ObjectId();
   const yearId = new Types.ObjectId();
@@ -131,6 +143,15 @@ describe('ClaimLetterService', () => {
       findById: jest.fn(),
     };
     stateModel = { findById: jest.fn().mockReturnValue(q({ name: 'Test State' })) };
+    formStatusService = { assertStateFormsStillReady: jest.fn().mockResolvedValue(undefined) };
+    undoEligibility = { touchClaimUndoGuard: jest.fn().mockResolvedValue(undefined) };
+    session = {
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn().mockResolvedValue(undefined),
+      abortTransaction: jest.fn().mockResolvedValue(undefined),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+    connection = { startSession: jest.fn().mockResolvedValue(session) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -140,6 +161,9 @@ describe('ClaimLetterService', () => {
         { provide: FileInfoNormalizerService, useValue: fileInfoNormalizer },
         { provide: ClaimLetterFormJsonService, useValue: formJsonConfigService },
         { provide: ClaimLetterLetterDetailsService, useValue: letterDetailsService },
+        { provide: ClaimLetterFormStatusService, useValue: formStatusService },
+        { provide: PmuUndoEligibilityService, useValue: undoEligibility },
+        { provide: getConnectionToken(), useValue: connection },
         { provide: getModelToken(ClaimLetterBatch.name), useValue: batchModel },
         { provide: getModelToken(State.name), useValue: stateModel },
       ],
@@ -1422,6 +1446,73 @@ describe('ClaimLetterService', () => {
       );
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
       expect(filter['stateFormReturnNotice.at']).toBe(at);
+    });
+
+    it('takes the per-State guard and re-checks its State forms inside the transaction, before the write', async () => {
+      const order: string[] = [];
+      const parentId = new Types.ObjectId();
+      batchModel.findOne.mockReturnValue(q({ _id: parentId, state: stateId, year: yearId, currentFormStatus: 2 }));
+      undoEligibility.touchClaimUndoGuard.mockImplementation(() => order.push('guard'));
+      formStatusService.assertStateFormsStillReady.mockImplementation(() => order.push('state forms'));
+      batchModel.findOneAndUpdate.mockImplementation(() => {
+        order.push('write');
+        return q({ _id: parentId, state: stateId, currentFormStatus: 2, financialSummary, createdAt: new Date() });
+      });
+
+      await service.uploadSignedFile(String(parentId), fileRef, stateUser);
+
+      expect(order).toEqual(['guard', 'state forms', 'write']);
+      expect(undoEligibility.touchClaimUndoGuard).toHaveBeenCalledWith(stateId, yearId, session);
+      expect(formStatusService.assertStateFormsStillReady).toHaveBeenCalledWith(parentId, session);
+      const [, , options] = batchModel.findOneAndUpdate.mock.calls[0] as [unknown, unknown, { session: unknown }];
+      expect(options.session).toBe(session);
+      expect(session.commitTransaction).toHaveBeenCalled();
+      expect(session.endSession).toHaveBeenCalled();
+    });
+
+    it('writes nothing when an SO return reopened a State form after the gate check, even if the notice still matches', async () => {
+      // A second return leaves a "signed letter removed" notice as it was, so only this re-check catches it.
+      batchModel.findOne.mockReturnValue(
+        q({
+          _id: 'x',
+          state: stateId,
+          year: yearId,
+          currentFormStatus: 2,
+          stateFormReturnNotice: { at: new Date('2026-11-19T10:00:00Z'), signedFileRemoved: true },
+        }),
+      );
+      formStatusService.assertStateFormsStillReady.mockRejectedValue(
+        new ConflictException('A State form changed while you were working on this letter. Reload and try again.'),
+      );
+
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow('A State form changed');
+      expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(session.abortTransaction).toHaveBeenCalled();
+      expect(session.endSession).toHaveBeenCalled();
+    });
+
+    it('turns a write conflict with an SO decision on the same State into a 409 to retry', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, year: yearId, currentFormStatus: 2 }));
+      batchModel.findOneAndUpdate.mockReturnValue(
+        q({ _id: 'x', state: stateId, currentFormStatus: 2, financialSummary, createdAt: new Date() }),
+      );
+      session.commitTransaction.mockRejectedValue(Object.assign(new Error('WriteConflict'), { code: 112 }));
+
+      const err = await service.uploadSignedFile('x', fileRef, stateUser).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).message).toBe(CLAIM_LETTER_BUSY_MESSAGE);
+    });
+
+    it('starts no transaction when the gate check or the same-file check ends the upload first', async () => {
+      batchModel.findOne.mockReturnValue(q({ _id: 'x', state: stateId, currentFormStatus: 2 }));
+      eligibilityService.assertStateConditionsMet.mockRejectedValueOnce(new ConflictException('blocked'));
+      await expect(service.uploadSignedFile('x', fileRef, stateUser)).rejects.toThrow('blocked');
+
+      fileInfoNormalizer.normalizeInboundFileInfo.mockReturnValue({ file: undefined, errors: [] });
+      await service.uploadSignedFile('x', fileRef, stateUser);
+
+      expect(connection.startSession).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when the guarded update matches nothing (concurrent status change)', async () => {

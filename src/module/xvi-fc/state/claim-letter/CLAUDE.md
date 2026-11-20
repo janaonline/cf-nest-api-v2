@@ -212,6 +212,8 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read. Inside the
   transaction it writes the per-State guard (`touchClaimUndoGuard`, as the SO's approve and return do) and
   re-checks its State forms (`assertStateFormsStillReady`); a lost race is a 409 (`toClaimLetterBusyConflict`).
+  The signed-letter upload writes the same way (guard, State-form re-check, then the write), so an SO return
+  never slips between its gate check and its write (ADR 0009).
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
   path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
   reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and an abandoned batch frees its place under the cap.

@@ -629,7 +629,7 @@ describe('ClaimLetterFormStatusService.assertStateFormsStillReady (submit, ADR 0
 
     expect(err).toBeInstanceOf(ConflictException);
     expect((err as ConflictException).message).toBe(
-      'A State form changed while this letter was being submitted. Reload and try again.',
+      'A State form changed while you were working on this letter. Reload and try again.',
     );
   });
 });

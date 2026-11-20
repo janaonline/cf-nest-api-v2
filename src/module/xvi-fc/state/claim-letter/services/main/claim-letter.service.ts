@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { FilterQuery, Model, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Connection, FilterQuery, Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Permission } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { getEffectivePermissions } from 'src/module/auth/permissions.map';
@@ -12,6 +12,7 @@ import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-
 import { XviFcFileRefDto } from 'src/module/xvi-fc/common/dto/xvi-fc-file-ref.dto';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import type { FieldConfig, FieldSupportingContent } from 'src/module/xvi-fc/common/types/field-config.type';
 import { YearIdToLabel } from 'src/core/constants/years';
 import { resolvePriorFcCycleLabel } from 'src/module/xvi-fc/state/fc-unspent-declaration/helpers/fc-unspent-declaration-cycle.helpers';
@@ -33,6 +34,8 @@ import {
 import { assertInstallmentSupported } from '../../helpers/claim-letter-installment.helpers';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import { historySort, historyStatusCondition } from '../../helpers/claim-letter-history.helpers';
+import { toClaimLetterBusyConflict } from '../../helpers/claim-letter-concurrency.helpers';
+import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
 import type { ClaimLetterPermissions } from '../../helpers/claim-letter-permissions.helpers';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
@@ -73,6 +76,9 @@ export class ClaimLetterService {
     private readonly fileInfoNormalizer: FileInfoNormalizerService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
     private readonly letterDetailsService: ClaimLetterLetterDetailsService,
+    private readonly formStatusService: ClaimLetterFormStatusService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
+    @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
     @InjectModel(State.name)
@@ -272,24 +278,46 @@ export class ClaimLetterService {
       parent['installment'] as 1 | 2,
     );
 
-    // Pinned on the notice as read: another letter's State form return after the gate check above sets a new notice
-    // (and may need this letter signed again), so it makes this write a conflict instead of being cleared (ADR 0009).
     const notice = parent['stateFormReturnNotice'] as Pick<ClaimLetterStateFormReturn, 'at'> | null | undefined;
-    const updated = await this.batchModel
-      .findOneAndUpdate(
-        {
-          _id: claimLetterId,
-          currentFormStatus: FORM_STATUS.IN_PROGRESS,
-          isAbandoned: false,
-          ...(notice ? { 'stateFormReturnNotice.at': notice.at ?? null } : { stateFormReturnNotice: null }),
-        },
-        {
-          $set: { signedClaimFile: file, stateFormReturnNotice: null, updatedBy: new Types.ObjectId(user._id) },
-        },
-        { new: true },
-      )
-      .lean<LeanClaimLetterBatch | null>()
-      .exec();
+    const session = await this.connection.startSession();
+    let updated: LeanClaimLetterBatch | null = null;
+    try {
+      session.startTransaction();
+
+      // Serialized with the SO's approve and return through the per-State guard, as submit is: a State form returned
+      // after the gate check above refuses the upload here. The notice pin alone misses a second return, which leaves
+      // a "signed letter removed" notice as it was (ADR 0009).
+      await this.undoEligibility.touchClaimUndoGuard(
+        parent['state'] as Types.ObjectId,
+        parent['year'] as Types.ObjectId,
+        session,
+      );
+      await this.formStatusService.assertStateFormsStillReady(parent['_id'] as Types.ObjectId, session);
+
+      updated = await this.batchModel
+        .findOneAndUpdate(
+          {
+            _id: claimLetterId,
+            currentFormStatus: FORM_STATUS.IN_PROGRESS,
+            isAbandoned: false,
+            // Pinned on the notice as read, so a newer notice is never cleared by this upload.
+            ...(notice ? { 'stateFormReturnNotice.at': notice.at ?? null } : { stateFormReturnNotice: null }),
+          },
+          {
+            $set: { signedClaimFile: file, stateFormReturnNotice: null, updatedBy: new Types.ObjectId(user._id) },
+          },
+          { new: true, session },
+        )
+        .lean<LeanClaimLetterBatch | null>()
+        .exec();
+
+      await session.commitTransaction();
+    } catch (err) {
+      await session.abortTransaction();
+      throw toClaimLetterBusyConflict(err);
+    } finally {
+      await session.endSession();
+    }
     if (!updated) throw new ConflictException('The claim letter changed while uploading. Reload and try again.');
 
     return xviFcSuccess('Signed claim letter uploaded.', mapClaimLetterBatchDocToSummary(updated, user));

@@ -742,9 +742,9 @@ export class ClaimLetterFormStatusService {
   }
 
   /**
-   * Submit's last check, in its transaction after the per-State guard (ADR 0009): the State forms the draft relied on
-   * are still at 15, 5 or 7. Submit's gate check runs before its transaction, so an SO return of a State form that
-   * commits in between is caught here.
+   * The last check of submit and the signed-letter upload, in their transaction after the per-State guard (ADR 0009):
+   * the State forms the draft relied on are still at 15, 5 or 7. Both run their gate check before the transaction, so
+   * an SO return of a State form that commits in between is caught here.
    */
   async assertStateFormsStillReady(claimLetterId: Types.ObjectId, session: ClientSession): Promise<void> {
     const sources = await this.loadStateSources(claimLetterId, session);
@@ -759,7 +759,7 @@ export class ClaimLetterFormStatusService {
     for (const { target, ids } of idsByCollection.values()) {
       if (await this.countChanged(target.collection, target.statusField, [target.fromStatus], ids, session)) {
         throw new ConflictException(
-          'A State form changed while this letter was being submitted. Reload and try again.',
+          'A State form changed while you were working on this letter. Reload and try again.',
         );
       }
     }

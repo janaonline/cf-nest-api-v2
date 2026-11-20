@@ -258,7 +258,7 @@ describe('ClaimLetterSubmitService', () => {
     it('writes nothing when an SO return reopened a State form after the gate check', async () => {
       batchModel.findOne.mockReturnValue(q(readyParent));
       formStatusService.assertStateFormsStillReady.mockRejectedValue(
-        new ConflictException('A State form changed while this letter was being submitted. Reload and try again.'),
+        new ConflictException('A State form changed while you were working on this letter. Reload and try again.'),
       );
 
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow('A State form changed');
