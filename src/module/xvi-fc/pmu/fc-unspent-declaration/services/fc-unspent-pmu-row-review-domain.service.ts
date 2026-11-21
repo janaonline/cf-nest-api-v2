@@ -61,7 +61,7 @@ export function buildFcUnspentRowSnapshot(
  * Shared PMU-review domain primitives used by both the row-level and complete-form approve/reject
  * flows so the two never diverge. See CLAUDE.md's "PMU vs MoHUA" and "Dependencies" sections for
  * why this operates on the same State-owned collections and hands off to the untouched MoHUA
- * module at UNDER_REVIEW_BY_MOHUA.
+ * module at UNDER_REVIEW_BY_SO.
  */
 @Injectable()
 export class FcUnspentPmuRowReviewDomainService {
@@ -204,12 +204,12 @@ export class FcUnspentPmuRowReviewDomainService {
     });
   }
 
-  /** Sets the parent's status (+ optional `pmuRemarks`) via the shared `StateFormPmuReviewHelper`
+  /** Sets the parent's status (+ optional `rejectionRemarks`) via the shared `StateFormPmuReviewHelper`
    *  — see that class's own docblock for the migration history. */
   async transitionParent(
     formId: Types.ObjectId,
     toStatus: number,
-    pmuRemarks: string | null | undefined,
+    rejectionRemarks: string | null | undefined,
     newAuditRevision: number,
     userOid: Types.ObjectId,
     session: ClientSession,
@@ -219,7 +219,7 @@ export class FcUnspentPmuRowReviewDomainService {
       auditRevision: newAuditRevision,
       updatedBy: userOid,
     };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     return this.pmuReviewHelper.transitionForm<XviFcUnspentStateFormDocument>({
       formModel: this.formModel,
@@ -281,7 +281,7 @@ export class FcUnspentPmuRowReviewDomainService {
 
   /** Atomic with the session — settles the parent the instant every active row has a PMU decision,
    *  whether that decision was reached via a bulk-approve or a bulk-reject call.
-   *  `UNDER_REVIEW_BY_MOHUA` when every row was approved; `RETURNED_BY_PMU` when at least one row was
+   *  `UNDER_REVIEW_BY_SO` when every row was approved; `RETURNED_BY_PMU` when at least one row was
    *  rejected (fully-rejected and mixed outcomes both resolve here — see `resolveSettledFormStatus`).
    *  Mirrors `ElectedUrbanLocalBodiesPmuRowReviewDomainService.maybeSettleAfterBulkAction`; see also
    *  CLAUDE.md's "Row-level bulk review and the auto-approve rule" section. */

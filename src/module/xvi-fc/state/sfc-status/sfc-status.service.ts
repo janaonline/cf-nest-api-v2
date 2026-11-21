@@ -82,7 +82,7 @@ type SfcStatusLeanDoc = {
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 const SFC_DUMP_HEADERS: RowHeader[] = [
@@ -206,7 +206,7 @@ export class SfcStatusService {
       actors,
       instructions: [],
       meta: { version: 1 },
-      pmuRemarks: doc?.pmuRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
       ...exemption,
     };
 
@@ -322,7 +322,7 @@ export class SfcStatusService {
       updatedBy: _updatedBy,
       updatedAt: _updatedAt,
       ...createdWithoutAuditFields
-    } = created.toObject() as Record<string, unknown>;
+    } = created.toObject() as unknown as Record<string, unknown>;
     return xviFcSuccess('SFC Status form saved as draft.', {
       ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),

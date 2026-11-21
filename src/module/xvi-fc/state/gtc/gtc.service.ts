@@ -66,7 +66,7 @@ type GtcLeanDoc = {
   submittedAt?: Date;
   currentFormStatus?: number;
   data?: unknown;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /** Static template asset resolved off a field's `download-template` supporting action `meta`. */
@@ -157,7 +157,7 @@ export class GtcService {
       actors,
       instructions: [],
       installmentAccess: this.buildInstallmentAccess(),
-      pmuRemarks: doc?.pmuRemarks ?? null,
+      rejectionRemarks: doc?.rejectionRemarks ?? null,
     };
 
     return xviFcSuccess('GTC form fetched.', responseData);
@@ -273,7 +273,7 @@ export class GtcService {
       updatedBy: _updatedBy,
       updatedAt: _updatedAt,
       ...createdWithoutAuditFields
-    } = created.toObject() as Record<string, unknown>;
+    } = created.toObject() as unknown as Record<string, unknown>;
     return xviFcSuccess('GTC form saved as draft.', {
       ...createdWithoutAuditFields,
       currentFormStatusLabel: getFormStatusLabel(FORM_STATUS.IN_PROGRESS),

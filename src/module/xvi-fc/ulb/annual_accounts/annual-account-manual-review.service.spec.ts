@@ -1,3 +1,4 @@
+import { ConflictException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getModelToken } from '@nestjs/mongoose';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -72,7 +73,7 @@ describe('AnnualAccountManualReviewService', () => {
       findById: jest.fn(),
       findOne: jest.fn().mockReturnValue(mockQuery(null)),
       findOneAndUpdate: jest.fn(),
-      updateOne: jest.fn().mockResolvedValue({ modifiedCount: 1 }),
+      updateOne: jest.fn().mockResolvedValue({ matchedCount: 1, modifiedCount: 1 }),
       aggregate: jest.fn().mockReturnValue(mockQuery([{ data: [], totalCount: [] }])),
     };
     mockUploadHistoryModel = {
@@ -196,17 +197,21 @@ describe('AnnualAccountManualReviewService', () => {
       ulb: ULB_ID,
     } as AuthUser;
 
-    const docWithOcr = (ocrInfo: Record<string, unknown>) =>
+    const YEAR_ID = '507f1f77bcf86cd799439012';
+
+    // version 2: past the first attempt, so the "second try" rule lets it through by default.
+    const docWithOcr = (ocrInfo: Record<string, unknown>, upload: Record<string, unknown> = { version: 2 }) =>
       mockQuery({
         _id: ACCOUNT_ID,
         ulb: ULB_ID,
+        design_year: YEAR_ID,
         sectionType: 'audited',
         form_status: 'IN_PROGRESS',
         documents: [
           {
             docId: 'auditors-report',
             processingStatus: 'FAILED',
-            currentUpload: { uploadId: 'upload-1', ocrInfo },
+            currentUpload: { uploadId: 'upload-1', ocrInfo, ...upload },
             stateDecision: null,
           },
         ],
@@ -237,6 +242,23 @@ describe('AnnualAccountManualReviewService', () => {
       );
     });
 
+    it('rejects a technical failure (the OCR job crashed, so no validationStatus)', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: null }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review can only be requested for a failed OCR validation.',
+      );
+    });
+
+    it('treats a lowercase "fail" as a failed validation', async () => {
+      // Already requested, so it stops at the next check: proof the FAIL check let it through.
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'fail', isManualReviewRequested: true }));
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Manual review has already been requested for this document.',
+      );
+    });
+
     it('rejects when manual review was already requested', async () => {
       mockAnnualAccountModel.findById.mockReturnValue(
         docWithOcr({ validationStatus: 'FAIL', isManualReviewRequested: true }),
@@ -245,6 +267,40 @@ describe('AnnualAccountManualReviewService', () => {
       await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
         'Manual review has already been requested for this document.',
       );
+    });
+
+    it('rejects a first-attempt FAIL (v1, retried at most once), same rule as the UI', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL' }, { version: 1, retryValidationCount: 1 }),
+      );
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Please retry or re-upload the document before requesting a manual review.',
+      );
+      expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
+    });
+
+    it('accepts a v1 FAIL once it has been retried twice', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'FAIL' }, { version: 1, retryValidationCount: 2 }),
+      );
+
+      await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
+
+      expect(mockManualReviewRequestModel.create).toHaveBeenCalled();
+    });
+
+    it('rejects when the section is no longer ULB-editable', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }));
+      // assertCanUlbUpload's own section lookup: already approved by the State (8).
+      mockAnnualAccountModel.findOne.mockReturnValue(
+        mockQuery({ form_status_id: 8, form_status: 'APPROVED_BY_STATE', documents: [] }),
+      );
+
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'This section cannot be edited',
+      );
+      expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
     });
 
     it('sets isManualReviewRequested on both the account and upload-history records', async () => {
@@ -281,13 +337,14 @@ describe('AnnualAccountManualReviewService', () => {
       mockQuery({
         _id: ACCOUNT_ID,
         ulb: ULB_ID,
+        design_year: YEAR_ID,
         sectionType: 'audited',
         form_status: 'IN_PROGRESS',
         documents: [
           {
             docId: 'auditors-report',
             processingStatus: 'FAILED',
-            currentUpload: { uploadId: 'upload-1', ocrInfo: { validationStatus: 'FAIL' } },
+            currentUpload: { uploadId: 'upload-1', version: 4, ocrInfo: { validationStatus: 'FAIL' } },
             manualReviewDecision: { status: 'RETURNED', note: 'Wrong document' },
             postRejectionAttemptsUsed,
             uploadBlockedUntil,
@@ -383,14 +440,46 @@ describe('AnnualAccountManualReviewService', () => {
         Record<string, unknown>,
         MongoUpdateCall,
       ];
-      expect(filter).toMatchObject({ 'documents.docId': 'auditors-report' });
+      expect(filter).toMatchObject({
+        documents: { $elemMatch: { docId: 'auditors-report', manualReviewDecision: null } },
+      });
       expect(update.$set?.['documents.$.processingStatus']).toBe('PASSED');
       expect(update.$set?.['documents.$.manualReviewDecision']).toMatchObject({ status: 'APPROVED' });
+      // Same clean-up an OCR PASS does; validationStatus keeps the OCR's own FAIL.
+      expect(update.$set?.['documents.$.postRejectionAttemptsUsed']).toBe(0);
+      expect(update.$set?.['documents.$.uploadBlockedUntil']).toBeNull();
+      expect(update.$set).not.toHaveProperty(['documents.$.currentUpload.ocrInfo.validationStatus']);
+      expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+        { uploadId: 'upload-1' },
+        { $set: { processingStatus: 'PASSED' } },
+      );
       expect(mockManualReviewRequestModel.findOneAndUpdate).toHaveBeenCalledWith(
         expect.objectContaining({ docId: 'auditors-report', uploadId: 'upload-1', status: 'PENDING' }),
         expect.objectContaining({ $set: expect.objectContaining({ status: 'APPROVED' }) }),
         expect.objectContaining({ sort: { requestedAt: -1 } }),
       );
+    });
+
+    it('rejects a request that is already decided', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docAwaitingReview({ manualReviewDecision: { status: 'APPROVED' } }),
+      );
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'RETURNED', note: 'x' }, adminUser),
+      ).rejects.toThrow('This manual review request has already been decided.');
+      expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
+    });
+
+    it('409s when a concurrent decision landed first, and closes no request row', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docAwaitingReview());
+      mockAnnualAccountModel.updateOne.mockResolvedValueOnce({ matchedCount: 0, modifiedCount: 0 });
+
+      await expect(
+        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'APPROVED' }, adminUser),
+      ).rejects.toThrow(ConflictException);
+      expect(mockManualReviewRequestModel.findOneAndUpdate).not.toHaveBeenCalled();
+      expect(mockUploadHistoryModel.updateOne).not.toHaveBeenCalled();
     });
 
     it('falls back to synthesizing a manual-review record when no PENDING row is found (legacy request)', async () => {
@@ -549,6 +638,34 @@ describe('AnnualAccountManualReviewService', () => {
       const result = await service.listManualReviewRequestHistory({ page: 1, pageSize: 20 }, adminUser);
 
       expect(result).toEqual({ total: 0, page: 1, pageSize: 20, rows: [] });
+    });
+
+    it('joins ULB/State/Year/upload history only for the page, after skip and limit', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      await service.listManualReviewRequestHistory({ page: 2, pageSize: 20 }, adminUser);
+
+      const pipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0] as Record<string, any>[];
+      const facet = pipeline.find((stage) => stage.$facet).$facet;
+      expect(pipeline.some((stage) => stage.$lookup)).toBe(false);
+      expect(facet.data.slice(0, 2)).toEqual([{ $skip: 20 }, { $limit: 20 }]);
+      expect(facet.data.some((stage: Record<string, any>) => stage.$lookup?.from === 'ulbs')).toBe(true);
+    });
+
+    it('joins ULBs before paging only to filter by State or search', async () => {
+      mockManualReviewRequestModel.aggregate.mockReturnValue(mockQuery([{ data: [], totalCount: [] }]));
+
+      await service.listManualReviewRequestHistory(
+        { page: 1, pageSize: 20, stateId: '5dcf9d7416a06aed41c748f0', search: 'nagar' },
+        adminUser,
+      );
+
+      const pipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0] as Record<string, any>[];
+      const before = pipeline.slice(0, pipeline.findIndex((stage) => stage.$facet));
+      expect(before.filter((stage) => stage.$lookup).map((stage) => stage.$lookup.from)).toEqual(['ulbs']);
+      expect(String(before.find((stage) => stage.$match?.['ulbDoc.state'])?.$match['ulbDoc.state'])).toBe(
+        '5dcf9d7416a06aed41c748f0',
+      );
     });
   });
 

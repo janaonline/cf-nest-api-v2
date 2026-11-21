@@ -166,7 +166,7 @@ const MOHUA_MATRIX: PermissionMatrixRow[] = [
   },
   {
     label: 'Issue Office Memorandum (OM)',
-    permissionKey: Permission.PREPARE_GRANT_LETTERS,
+    permissionKey: Permission.ISSUE_OFFICE_MEMORANDUM,
     admin: true,
     reviewer: false,
     viewer: false,

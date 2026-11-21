@@ -7,7 +7,7 @@ import { getEffectivePermissions } from 'src/module/auth/permissions.map';
 import { FORM_STATUS, getFormStatusLabel, type FormStatusType } from 'src/common/constants/form-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { resolveStateScopeFilter } from 'src/module/xvi-fc/common/utils/xvi-fc-scope-filter.util';
-import { isMohuaViewScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
+import { isNationalDashboardScope } from 'src/module/xvi-fc/common/utils/xvi-fc-scope.util';
 import {
   assertCanUlbEditForm,
   assertCanUlbSubmitForm,
@@ -128,10 +128,10 @@ export class SlbService {
 
     // xvi-fc dynamic year access: no record yet - if this ULB is exempted, materialize a stub
     // instead of showing a blank form. Never touches an existing record (see `if (!doc)` above).
-    // MoHUA and DoE only view: both of these can write (create or delete a stub), so they never run for them.
+    // MoHUA, DoE and PMU only view: both of these can write (create or delete a stub), so they never run for them.
     if (!doc) {
-      if (!isMohuaViewScope(user)) doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
-    } else if (doc.isExemptionStub && !isMohuaViewScope(user)) {
+      if (!isNationalDashboardScope(user)) doc = await this.materializeExemptionStubIfNeeded(ulbOid, yearOid, user);
+    } else if (doc.isExemptionStub && !isNationalDashboardScope(user)) {
       // Existing doc is a stub - an admin may have since undone the exemption. Re-check live state.
       doc = await this.revalidateExemptionStubIfNeeded(doc, ulbOid, yearOid);
     }
@@ -664,7 +664,7 @@ export class SlbService {
       return userUlbId;
     }
 
-    if (user.scope === Scope.STATE || user.scope === Scope.ADMIN || isMohuaViewScope(user)) {
+    if (user.scope === Scope.STATE || user.scope === Scope.ADMIN || isNationalDashboardScope(user)) {
       if (!normalizedRequestedUlbId) {
         throw new BadRequestException('ulbId is required.');
       }
@@ -678,7 +678,7 @@ export class SlbService {
     if (user.scope === Scope.ADMIN) return true;
     if (user.scope === Scope.ULB) return this.isOwnUlb(user, ulbId);
     // STATE access is verified asynchronously in assertCanReadSlb; assume checked by caller.
-    return user.scope === Scope.STATE || isMohuaViewScope(user);
+    return user.scope === Scope.STATE || isNationalDashboardScope(user);
   }
 
   async assertCanReadSlb(user: AuthUser, ulbId: string): Promise<void> {
@@ -686,8 +686,9 @@ export class SlbService {
 
     if (user.scope === Scope.ADMIN) return;
 
-    // MoHUA and DoE are central roles (not scoped to a state) and only ever view the SLB form.
-    if (isMohuaViewScope(user)) {
+    // MoHUA, DoE and PMU are central roles (not scoped to a state) and only ever view the SLB form
+    // (PMU from its Overview, which is the MoHUA dashboard).
+    if (isNationalDashboardScope(user)) {
       if (!getEffectivePermissions(user).includes(Permission.VIEW_STATUS_REPORTS)) {
         throw new ForbiddenException('You do not have permission to view SLB forms.');
       }

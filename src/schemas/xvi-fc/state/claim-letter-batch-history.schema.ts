@@ -22,7 +22,7 @@ export type ClaimLetterHistoryActionSource =
 
 export type ClaimLetterBatchHistoryDocument = HydratedDocument<ClaimLetterBatchHistory>;
 
-/** Brain §17.3's rejectedSourceRefs shape — always [] in V1 (no rejection path exists yet). */
+/** Brain §17.3's rejectedSourceRefs shape — filled only by the SO return (each form or row it reopened). */
 @Schema({ _id: false })
 export class ClaimLetterRejectedSourceRef {
   @Prop({ type: MongooseSchema.Types.ObjectId, default: null })

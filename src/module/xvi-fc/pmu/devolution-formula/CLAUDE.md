@@ -31,7 +31,7 @@ see that module's
 **that principle does not apply here**. This module has no collections of its own at all: the module
 only registers `DevolutionFormulaForm`/`DevolutionFormulaFormHistory`/`DevolutionFormulaRow` — the
 exact same Mongoose models `state/devolution-formula` uses — and `approve`/`reject` write
-`currentFormStatus`/`pmuRemarks`/`updatedBy` straight onto the State's own form document via
+`currentFormStatus`/`rejectionRemarks`/`updatedBy` straight onto the State's own form document via
 `StateFormPmuReviewHelper.transitionForm`, then append to the State's own history collection via
 `writeHistoryIfChanged` (`src/module/xvi-fc/common/services/state-form-pmu-review.helper.ts`).
 

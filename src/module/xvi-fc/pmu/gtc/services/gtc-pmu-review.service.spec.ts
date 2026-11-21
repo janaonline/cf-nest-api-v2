@@ -74,7 +74,7 @@ describe('GtcPmuReviewService', () => {
       ),
       findOneAndUpdate: jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })),
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })),
       find: jest.fn().mockReturnValue(
         q([
           {
@@ -219,20 +219,22 @@ describe('GtcPmuReviewService', () => {
       expect(result.data!.permissions.canRejectForm).toBe(false);
     });
 
-    it('surfaces a previously-stored pmuRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
-      formModel['findOne'] = jest
-        .fn()
-        .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, pmuRemarks: 'Please redo section 2.' }),
-        );
+    it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
+          rejectionRemarks: 'Please redo section 2.',
+        }),
+      );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), 1, pmuUser);
-      expect(result.data!.pmuRemarks).toBe('Please redo section 2.');
+      expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result2 = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), 1, pmuUser);
-      expect(result2.data!.pmuRemarks).toBeNull();
+      expect(result2.data!.rejectionRemarks).toBeNull();
     });
 
     it('includes the installment in the response', async () => {
@@ -252,13 +254,13 @@ describe('GtcPmuReviewService', () => {
     it('blocks mutation when the form is not UNDER_REVIEW_BY_PMU', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), 1, pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions the form to UNDER_REVIEW_BY_MOHUA and writes a PMU_APPROVE history row with the data snapshot', async () => {
+    it('transitions the form to UNDER_REVIEW_BY_SO and writes a PMU_APPROVE history row with the data snapshot', async () => {
       const result = await service.approveCompleteForm(
         stateOid.toString(),
         yearOid.toString(),
@@ -270,24 +272,24 @@ describe('GtcPmuReviewService', () => {
 
       const call = formModel['findOneAndUpdate'].mock.calls[0] as unknown[];
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
-      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
 
       expect(historyModel['create']).toHaveBeenCalledWith(
         [
           expect.objectContaining({
             action: FormHistoryAction.PMU_APPROVE,
             installment: 1,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           }),
         ],
         undefined,
       );
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
   });
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty pmuRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 1, '   ', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -296,7 +298,7 @@ describe('GtcPmuReviewService', () => {
     it('blocks mutation when the form is already approved', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.rejectCompleteForm(
           stateOid.toString(),
@@ -310,7 +312,7 @@ describe('GtcPmuReviewService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions to RETURNED_BY_PMU, stores pmuRemarks, and writes a PMU_REJECT history row', async () => {
+    it('transitions to RETURNED_BY_PMU, stores rejectionRemarks, and writes a PMU_REJECT history row', async () => {
       const result = await service.rejectCompleteForm(
         stateOid.toString(),
         yearOid.toString(),
@@ -323,7 +325,10 @@ describe('GtcPmuReviewService', () => {
 
       const call = formModel['findOneAndUpdate'].mock.calls[0] as unknown[];
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
-      expect(setArg).toMatchObject({ currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, pmuRemarks: 'Please redo.' });
+      expect(setArg).toMatchObject({
+        currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
+        rejectionRemarks: 'Please redo.',
+      });
 
       expect(historyModel['create']).toHaveBeenCalledWith(
         [expect.objectContaining({ action: FormHistoryAction.PMU_REJECT, remarks: 'Please redo.' })],

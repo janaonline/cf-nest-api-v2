@@ -240,22 +240,22 @@ export class FcUnspentMohuaReviewService {
     });
   }
 
-  /** Requires a non-empty `mohuaRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
+  /** Requires a non-empty `rejectionRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
    *  logic" section for the No/Yes-branch rules, including reject's already-approved-rows block. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    mohuaRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<FcUnspentMohuaSubmitData>> {
     this.assertReviewAccess(user);
 
-    const trimmedRemarks = mohuaRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        mohuaRemarks: [{ field: 'mohuaRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 

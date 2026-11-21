@@ -197,6 +197,8 @@ const mockRowModel = {
   deleteMany: jest.fn(),
   countDocuments: jest.fn(),
   bulkWrite: jest.fn(),
+  // No row is frozen by a claim letter unless a test says so (survives clearAllMocks).
+  exists: jest.fn().mockReturnValue({ exec: () => Promise.resolve(null) }),
 };
 
 const mockHistoryModel = { create: jest.fn().mockResolvedValue(undefined) };

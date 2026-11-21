@@ -50,9 +50,12 @@ are the colleague plan's Phase 2 items 2-5.
 
 ## Consequences
 
-- A submitted batch can rely on an exemption MoHUA has not decided. What happens to the batch when
-  MoHUA rejects it, or whether approval waits for the decision, belongs to the MoHUA claim review. It
-  can read the snapshot above and the live statuses; this module does nothing on a decision.
+- A submitted batch can rely on an exemption MoHUA has not decided. The SO's review decides them
+  (mohua/claim-letters, 2026-11-03): the SO may mark an "Eligible via exemption" ULB for return by
+  picking which of its own exemptions (still at 5) to reject; returning the letter rejects those with
+  the ULB's remark, approving the letter approves every exemption still at 5. Both go through
+  `RequestExemptionMohuaService` before the letter's own transaction. This module still does nothing
+  on a decision.
 - The Submit confirm names both the State's own exemption requests still under review and how many
   ULBs rely on one.
 - `createNewVersion` re-checks every copied ULB, so one whose exemption was rejected fails the whole

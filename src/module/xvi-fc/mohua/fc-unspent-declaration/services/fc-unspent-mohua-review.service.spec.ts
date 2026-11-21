@@ -402,7 +402,7 @@ describe('FcUnspentMohuaReviewService', () => {
   // ─── rejectCompleteForm ─────────────────────────────────────────────────────
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty mohuaRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', mohuaUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -424,7 +424,7 @@ describe('FcUnspentMohuaReviewService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('No-branch: returns to RETURNED_BY_MOHUA and stores mohuaRemarks', async () => {
+    it('No-branch: returns to RETURNED_BY_MOHUA and stores rejectionRemarks', async () => {
       domainService['findForm'] = jest.fn().mockResolvedValue(makeForm({ isFcUnspent: false }));
 
       const result = await service.rejectCompleteForm(

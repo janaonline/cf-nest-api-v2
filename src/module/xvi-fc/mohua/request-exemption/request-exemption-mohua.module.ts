@@ -36,5 +36,7 @@ import { RequestExemptionMohuaService } from './request-exemption-mohua.service'
   ],
   controllers: [RequestExemptionMohuaController],
   providers: [RequestExemptionMohuaService],
+  // The SO's claim letter decision approves / rejects the exemptions its ULBs relied on through this service.
+  exports: [RequestExemptionMohuaService],
 })
 export class RequestExemptionMohuaModule {}

@@ -158,7 +158,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
         yearOid.toString(),
         {
           rowStatus: [
-            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
             FORM_STATUS.RETURNED_BY_MOHUA,
             FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
           ],
@@ -169,7 +169,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
         expect.objectContaining({
           rowStatus: {
             $in: [
-              FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+              FORM_STATUS.UNDER_REVIEW_BY_SO,
               FORM_STATUS.RETURNED_BY_MOHUA,
               FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
             ],
@@ -238,7 +238,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
         .mockReturnValue(
           q([
             makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }),
-            makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }),
+            makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }),
           ]),
         );
 
@@ -256,7 +256,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     it('sets row permissions to false when the parent form is no longer mutable', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       rowModel['find'] = jest.fn().mockReturnValue(q([makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU })]));
 
       const result = await service.getRows(
@@ -293,7 +293,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     it('blocks when the form is not UNDER_REVIEW_BY_PMU', async () => {
       domainService['findForm'] = jest
         .fn()
-        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockResolvedValue(makeForm({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(service.bulkApproveRows(approveDto(), pmuUser, '127.0.0.1', 'jest')).rejects.toThrow(
         ForbiddenException,
       );
@@ -314,7 +314,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     });
 
     it('rejects when a selected row is already APPROVED (not PENDING)', async () => {
-      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
       domainService['filterNotInStatus'] = jest.fn().mockReturnValue([row]);
       await expect(
@@ -331,7 +331,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
 
       const transitionArgs = domainService['transitionRows'].mock.calls[0] as unknown[];
       const transitions = transitionArgs[3] as Array<{ newStatus: string; rejectionRemark: string | null }>;
-      expect(transitions).toEqual([{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null }]);
+      expect(transitions).toEqual([{ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null }]);
     });
 
     it('approves the parent atomically when the domain service reports full resolution', async () => {
@@ -339,12 +339,12 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
       domainService['maybeSettleAfterBulkAction'] = jest
         .fn()
-        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+        .mockResolvedValue({ settled: true, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
 
       const result = await service.bulkApproveRows(approveDto([row._id.toString()]), pmuUser, '127.0.0.1', 'jest');
 
       expect(result.data!.parentAcknowledged).toBe(true);
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
       expect(mockSession.commitTransaction).toHaveBeenCalled();
     });
 
@@ -468,7 +468,7 @@ describe('ElectedUrbanLocalBodiesPmuRowsService', () => {
     });
 
     it('rejects when a selected row is not PENDING', async () => {
-      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+      const row = makeRow({ rowStatus: FORM_STATUS.UNDER_REVIEW_BY_SO });
       domainService['loadActiveRowsByIds'] = jest.fn().mockResolvedValue({ rows: [row], missingIds: [] });
       domainService['filterNotInStatus'] = jest.fn().mockReturnValue([row]);
       await expect(

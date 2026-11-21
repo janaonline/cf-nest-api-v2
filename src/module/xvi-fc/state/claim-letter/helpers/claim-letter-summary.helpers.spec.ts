@@ -48,6 +48,11 @@ function mockUser(overrides: Partial<AuthUser> = {}): AuthUser {
 }
 
 describe('mapClaimLetterBatchDocToSummary', () => {
+  it('returns the -R number, 0 for a letter saved before the field existed', () => {
+    expect(mapClaimLetterBatchDocToSummary(batchDoc(), mockUser()).resubmissionNumber).toBe(0);
+    expect(mapClaimLetterBatchDocToSummary(batchDoc({ resubmissionNumber: 2 }), mockUser()).resubmissionNumber).toBe(2);
+  });
+
   describe('finalClaimLetterStage', () => {
     const signed = { signedClaimFile: { path: 'x/signed.pdf' } };
     const finalClaimPdf = { file: { path: 'final/x.pdf' }, sourceKey: 'k' };
@@ -80,6 +85,11 @@ describe('mapClaimLetterBatchDocToSummary', () => {
     const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 2, isAbandoned: true }), mockUser());
     expect(summary.currentFormStatusLabel).toBe('Discarded');
     expect(summary.currentFormStatus).toBe(2);
+  });
+
+  it('keeps "Returned for Correction" for a letter the SO returned, though the return also flags it abandoned', () => {
+    const summary = mapClaimLetterBatchDocToSummary(batchDoc({ currentFormStatus: 16, isAbandoned: true }), mockUser());
+    expect(summary.currentFormStatusLabel).toBe('Returned for Correction');
   });
 
   it('labels an abandoned draft "Discarded" regardless of which currentFormStatus it was abandoned from', () => {

@@ -1897,7 +1897,7 @@ describe('ElectedUrbanLocalBodiesService', () => {
           form: formOid,
           datasetVersion: baseFormDoc.activeDatasetVersion,
           isActive: true,
-          rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA] },
+          rowStatus: { $in: [null, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.RETURNED_BY_MOHUA, FORM_STATUS.RETURNED_BY_SO] },
         },
         { $set: { rowStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU } },
         { session: mockSession },

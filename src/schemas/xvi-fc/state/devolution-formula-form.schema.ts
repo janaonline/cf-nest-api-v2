@@ -152,12 +152,9 @@ export class DevolutionFormulaForm {
   @Prop({ type: Boolean, default: false })
   checkboxConfirmation!: boolean;
 
-  // Reviewer remarks
+  /** The latest return's reason, from whoever returned it last (PMU, the SO or MoHUA). */
   @Prop({ type: String, default: null })
-  mohuaRemarks?: string | null;
-
-  @Prop({ type: String, default: null })
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'DevolutionFormulaForm', default: null })
   previousVersionId?: Types.ObjectId | null;
