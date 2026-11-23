@@ -1,6 +1,10 @@
 import type { Types } from 'mongoose';
 import type { FormStatusType } from 'src/common/constants/form-status.constants';
 import type { DecisionInfo } from 'src/schemas/xvi-fc/annual-account.schema';
+import type {
+  BankAccountFormLogAction,
+  BankAccountFormLogActorStage,
+} from 'src/schemas/xvi-fc/ulb/xvi-fc-bank-account-form-log.schema';
 
 export type XviFcBankAccountProofMimeType = 'application/pdf' | 'image/jpeg' | 'image/png';
 
@@ -78,14 +82,16 @@ export interface XviFcBankAccountResponse {
 }
 
 export interface BankAccountFormLogEntry {
-  action: 'SUBMITTED' | 'APPROVED' | 'RETURNED';
+  action: BankAccountFormLogAction;
   toStatus: FormStatusType;
   toStatusLabel: string;
-  actorStage: 'ULB' | 'STATE' | 'MOHUA';
+  actorStage: BankAccountFormLogActorStage;
   actorRole: string;
   note: string | null;
   filePath: string | null;
   batchId: string | null;
+  ifscCode: string | null;
+  accountNumberMasked: string | null;
   createdAt: Date;
 }
 

@@ -34,7 +34,7 @@ export interface GtcFormGetResponseData {
   actors: XvifcFormActor[];
   instructions: unknown[];
   installmentAccess: GtcInstallmentAccess;
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
 }
 
 /** Response shape for the static-template download endpoint - see CLAUDE.md's "Static template

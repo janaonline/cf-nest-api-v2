@@ -29,6 +29,18 @@ describe('summarizePmuWorklist', () => {
     expect(isPmuWorklistSummaryBalanced(summary)).toBe(true);
   });
 
+  it('counts SO review (15) with the MoHUA side and a return by the SO (16) as returned by MoHUA, staying balanced', () => {
+    const summary = summarizePmuWorklist([
+      row('a', FORM_STATUS.UNDER_REVIEW_BY_SO),
+      row('b', FORM_STATUS.UNDER_REVIEW_BY_MOHUA),
+      row('c', FORM_STATUS.RETURNED_BY_SO),
+    ]);
+
+    expect(summary.underReview).toEqual({ mohua: 2, pmu: 0 });
+    expect(summary.returned).toEqual({ mohua: 1, pmu: 0 });
+    expect(isPmuWorklistSummaryBalanced(summary)).toBe(true);
+  });
+
   it('handles an empty scope without dividing or going negative', () => {
     const summary = summarizePmuWorklist([]);
     expect(summary).toMatchObject({ total: 0, statesInScope: 0, notStarted: 0, inProgress: 0, acknowledged: 0 });

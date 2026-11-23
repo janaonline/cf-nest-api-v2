@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
@@ -29,14 +29,39 @@ import type {
   FcUnspentPmuRowTransitionRequest,
 } from '../types/fc-unspent-pmu-review.types';
 
-const ROW_LEAN_SELECT =
+export const ROW_LEAN_SELECT =
   'form rowNumber ulbId censusCode sbCode ulbName allocationAmount unspentAmount previousFcUnspentBalance allocationPerc eligibility rowStatus rejectionRemark';
+
+/** A row-history entry's `snapshot` — the row's post-transition values (including `rejectionRemark`) so a
+ *  rejection's reason survives a later reject→edit→resubmit cycle. Shared by review decisions and the
+ *  undo module so the two can't drift. `allocationSource` isn't in `ROW_LEAN_SELECT` and is left to its
+ *  schema default (null) — it's only meaningful for the STATE's own FINAL_SUBMIT entry. */
+export function buildFcUnspentRowSnapshot(
+  row: FcUnspentPmuRowLean,
+  newStatus: RowHistoryStatus,
+  rejectionRemark: string | null,
+): Record<string, unknown> {
+  return {
+    rowNumber: row.rowNumber,
+    ulbId: row.ulbId,
+    censusCode: row.censusCode,
+    sbCode: row.sbCode,
+    ulbName: row.ulbName,
+    allocationAmount: row.allocationAmount,
+    unspentAmount: row.unspentAmount,
+    previousFcUnspentBalance: row.previousFcUnspentBalance,
+    allocationPerc: row.allocationPerc,
+    eligibility: row.eligibility,
+    rowStatus: newStatus,
+    rejectionRemark,
+  };
+}
 
 /**
  * Shared PMU-review domain primitives used by both the row-level and complete-form approve/reject
  * flows so the two never diverge. See CLAUDE.md's "PMU vs MoHUA" and "Dependencies" sections for
  * why this operates on the same State-owned collections and hands off to the untouched MoHUA
- * module at UNDER_REVIEW_BY_MOHUA.
+ * module at UNDER_REVIEW_BY_SO.
  */
 @Injectable()
 export class FcUnspentPmuRowReviewDomainService {
@@ -156,20 +181,7 @@ export class FcUnspentPmuRowReviewDomainService {
       ip,
       userAgent,
       session,
-      buildSnapshot: (row, newStatus, rejectionRemark) => ({
-        rowNumber: row.rowNumber,
-        ulbId: row.ulbId,
-        censusCode: row.censusCode,
-        sbCode: row.sbCode,
-        ulbName: row.ulbName,
-        allocationAmount: row.allocationAmount,
-        unspentAmount: row.unspentAmount,
-        previousFcUnspentBalance: row.previousFcUnspentBalance,
-        allocationPerc: row.allocationPerc,
-        eligibility: row.eligibility,
-        rowStatus: newStatus,
-        rejectionRemark,
-      }),
+      buildSnapshot: buildFcUnspentRowSnapshot,
     });
   }
 
@@ -192,12 +204,12 @@ export class FcUnspentPmuRowReviewDomainService {
     });
   }
 
-  /** Sets the parent's status (+ optional `pmuRemarks`) via the shared `StateFormPmuReviewHelper`
+  /** Sets the parent's status (+ optional `rejectionRemarks`) via the shared `StateFormPmuReviewHelper`
    *  — see that class's own docblock for the migration history. */
   async transitionParent(
     formId: Types.ObjectId,
     toStatus: number,
-    pmuRemarks: string | null | undefined,
+    rejectionRemarks: string | null | undefined,
     newAuditRevision: number,
     userOid: Types.ObjectId,
     session: ClientSession,
@@ -207,7 +219,7 @@ export class FcUnspentPmuRowReviewDomainService {
       auditRevision: newAuditRevision,
       updatedBy: userOid,
     };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     return this.pmuReviewHelper.transitionForm<XviFcUnspentStateFormDocument>({
       formModel: this.formModel,
@@ -269,7 +281,7 @@ export class FcUnspentPmuRowReviewDomainService {
 
   /** Atomic with the session — settles the parent the instant every active row has a PMU decision,
    *  whether that decision was reached via a bulk-approve or a bulk-reject call.
-   *  `UNDER_REVIEW_BY_MOHUA` when every row was approved; `RETURNED_BY_PMU` when at least one row was
+   *  `UNDER_REVIEW_BY_SO` when every row was approved; `RETURNED_BY_PMU` when at least one row was
    *  rejected (fully-rejected and mixed outcomes both resolve here — see `resolveSettledFormStatus`).
    *  Mirrors `ElectedUrbanLocalBodiesPmuRowReviewDomainService.maybeSettleAfterBulkAction`; see also
    *  CLAUDE.md's "Row-level bulk review and the auto-approve rule" section. */

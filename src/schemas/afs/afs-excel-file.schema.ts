@@ -26,6 +26,32 @@ export class AfsDigitizationV3Segment {
 
 const AfsDigitizationV3SegmentSchema = SchemaFactory.createForClass(AfsDigitizationV3Segment);
 
+/** Scores FastAPI reports for a digitization job. Each is absent when that step did not run. */
+@Schema({ _id: false })
+export class AfsDigitizationV3Scores {
+  /** True when the uploaded doc type (record docType) is not among detectedDocTypes */
+  @Prop({ type: Boolean })
+  isMismatch?: boolean;
+
+  /** OCR confidence, 0-100 (FastAPI `confidence_score`); absent when the engine gives none */
+  @Prop({ type: Number })
+  ocrConfidenceScore?: number;
+
+  /** Gemini cross-check accuracy vs the source PDF, 0-100 (FastAPI `accuracy_score`) */
+  @Prop({ type: Number })
+  accuracyScore?: number;
+
+  /** PASS / FAIL / NOT_APPLICABLE / SKIPPED (doc mismatch) (FastAPI `arithmetic_assessment`) */
+  @Prop({ type: String })
+  arithmeticAssessment?: string;
+
+  /** PASS / PARTIAL / FAIL / UNVERIFIED (FastAPI `overall_assessment`) */
+  @Prop({ type: String })
+  overallAssessment?: string;
+}
+
+const AfsDigitizationV3ScoresSchema = SchemaFactory.createForClass(AfsDigitizationV3Scores);
+
 
 
 // @Schema({ _id: false })
@@ -103,6 +129,10 @@ export class AfsExcelFileItem {
   @Prop({ type: Number })
   noOfPages: number;
 
+  /** Size of the source PDF in bytes (same meaning as `pdf.fileSizeBytes` on the annual account's PDF) */
+  @Prop({ type: Number })
+  fileSizeBytes?: number;
+
   @Prop({ type: String })
   excelUrl: string;
 
@@ -125,9 +155,13 @@ export class AfsExcelFileItem {
   @Prop({ type: Boolean })
   isConsolidated?: boolean;
 
-  // True when the uploaded doc type (record docType) is not among detectedDocTypes
+  /** @deprecated Now `scores.isMismatch`. Still read as a fallback for files digitized before the move. */
   @Prop({ type: Boolean })
   isMismatch?: boolean;
+
+  /** Quality scores of the finished job; absent on files digitized before they were stored */
+  @Prop({ type: AfsDigitizationV3ScoresSchema, default: undefined })
+  scores?: AfsDigitizationV3Scores;
 
   @Prop({ type: QueueSchema })
   queue: Queue;}

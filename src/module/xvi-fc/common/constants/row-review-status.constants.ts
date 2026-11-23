@@ -14,6 +14,8 @@ export type RowReviewStatus = Extract<
   | typeof FORM_STATUS.ACTION_REQUIRED
   | typeof FORM_STATUS.UNDER_REVIEW_BY_PMU
   | typeof FORM_STATUS.RETURNED_BY_PMU
+  | typeof FORM_STATUS.UNDER_REVIEW_BY_SO
+  | typeof FORM_STATUS.RETURNED_BY_SO
 >;
 
 export const ROW_REVIEW_STATUS_VALUES = [
@@ -23,4 +25,12 @@ export const ROW_REVIEW_STATUS_VALUES = [
   FORM_STATUS.ACTION_REQUIRED,
   FORM_STATUS.UNDER_REVIEW_BY_PMU,
   FORM_STATUS.RETURNED_BY_PMU,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.RETURNED_BY_SO,
 ] as const;
+
+/** What a row-history entry may record: every live row status plus UNDO (10), which — as on the ULB
+ *  forms — is a log-only marker (`5|14 -> 10 -> 13` for a PMU undo) and is never set on the live row. */
+export type RowHistoryStatus = RowReviewStatus | typeof FORM_STATUS.UNDO;
+
+export const ROW_HISTORY_STATUS_VALUES = [...ROW_REVIEW_STATUS_VALUES, FORM_STATUS.UNDO] as const;

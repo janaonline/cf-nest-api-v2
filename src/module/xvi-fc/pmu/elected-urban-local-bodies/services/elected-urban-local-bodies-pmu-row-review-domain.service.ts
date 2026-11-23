@@ -3,7 +3,7 @@ import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
 import { escapeRegex } from 'src/common/utils/regex.util';
-import type { RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
+import type { RowHistoryStatus, RowReviewStatus } from 'src/module/xvi-fc/common/constants/row-review-status.constants';
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { PmuRowReviewHelper, resolveSettledFormStatus } from 'src/module/xvi-fc/common/services/pmu-row-review.helper';
 import {
@@ -30,8 +30,30 @@ import type {
   EulbPmuRowTransitionRequest,
 } from '../types/elected-urban-local-bodies-pmu-review.types';
 
-const ROW_LEAN_SELECT =
+export const ROW_LEAN_SELECT =
   'form datasetVersion rowNumber ulbId censusCode ulbName electedBodyStatus dateOfConstitution dateOfExpiry remarks rowStatus rejectionRemark';
+
+/** A row-history entry's `snapshot` — the row's post-transition values. Shared by review decisions and
+ *  the undo module so the two can't drift. */
+export function buildEulbRowSnapshot(
+  row: EulbPmuRowLean,
+  newStatus: RowHistoryStatus,
+  rejectionRemark: string | null,
+): Record<string, unknown> {
+  return {
+    rowNumber: row.rowNumber,
+    ulbId: row.ulbId ?? null,
+    censusCode: row.censusCode ?? null,
+    ulbName: row.ulbName,
+    electedBodyStatus: row.electedBodyStatus ?? null,
+    dateOfConstitution: row.dateOfConstitution ?? null,
+    dateOfExpiry: row.dateOfExpiry ?? null,
+    remarks: row.remarks ?? null,
+    datasetVersion: row.datasetVersion,
+    rowStatus: newStatus,
+    rejectionRemark,
+  };
+}
 
 /**
  * Shared PMU-review domain primitives used by both the row-level and complete-form approve/reject
@@ -159,19 +181,7 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
       ip,
       userAgent,
       session,
-      buildSnapshot: (row, newStatus, rejectionRemark) => ({
-        rowNumber: row.rowNumber,
-        ulbId: row.ulbId ?? null,
-        censusCode: row.censusCode ?? null,
-        ulbName: row.ulbName,
-        electedBodyStatus: row.electedBodyStatus ?? null,
-        dateOfConstitution: row.dateOfConstitution ?? null,
-        dateOfExpiry: row.dateOfExpiry ?? null,
-        remarks: row.remarks ?? null,
-        datasetVersion: row.datasetVersion,
-        rowStatus: newStatus,
-        rejectionRemark,
-      }),
+      buildSnapshot: buildEulbRowSnapshot,
     });
   }
 
@@ -197,17 +207,17 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
     });
   }
 
-  /** Sets the parent's `currentFormStatus` (+ optional `pmuRemarks`) — delegates the mechanical
+  /** Sets the parent's `currentFormStatus` (+ optional `rejectionRemarks`) — delegates the mechanical
    *  $set/NotFoundException guard to the shared Phase 4 helper. */
   async transitionParent(
     formId: Types.ObjectId,
     toStatus: number,
-    pmuRemarks: string | null | undefined,
+    rejectionRemarks: string | null | undefined,
     userOid: Types.ObjectId,
     session: ClientSession,
   ): Promise<EulbFormDocument> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     return this.pmuReviewHelper.transitionForm<EulbFormDocument>({
       formModel: this.formModel,
@@ -259,7 +269,7 @@ export class ElectedUrbanLocalBodiesPmuRowReviewDomainService {
 
   /** Atomic with the session — settles the parent the instant every active row (in the active
    *  dataset version) has a PMU decision, whether that decision was reached via a bulk-approve or a
-   *  bulk-reject call. `UNDER_REVIEW_BY_MOHUA` when every row was approved; `RETURNED_BY_PMU` when at
+   *  bulk-reject call. `UNDER_REVIEW_BY_SO` when every row was approved; `RETURNED_BY_PMU` when at
    *  least one row was rejected (fully-rejected and mixed outcomes both resolve here — see
    *  `resolveSettledFormStatus`). The `FormHistoryAction` tag follows the outcome, not which bulk
    *  action triggered the call, since it has always meant "the fromStatus→toStatus kind," not "which

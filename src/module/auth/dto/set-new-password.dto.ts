@@ -1,11 +1,8 @@
-import { IsOptional, IsString, MaxLength, MinLength, Matches } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsPolicyPassword } from '../password-policy';
 
 export class SetNewPasswordDto {
-  @IsString()
-  @MinLength(8, { message: 'Password must be at least 8 characters' })
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@#$%^&*!])/, {
-    message: 'Password must include uppercase, lowercase, a number, and a special character (@#$%^&*!)',
-  })
+  @IsPolicyPassword()
   newPassword!: string;
 
   @IsString()

@@ -11,6 +11,7 @@ export interface SfcStatusPmuFormLean {
   year: Types.ObjectId;
   currentFormStatus: number;
   data?: Record<string, unknown>;
+  rejectionRemarks?: string | null;
 }
 
 export type SfcStatusPmuReviewPermissions = PmuReviewPermissions;
@@ -23,7 +24,7 @@ export interface SfcStatusPmuReviewData {
   currentFormStatus: number;
   currentFormStatusLabel: string;
   /** Set on reject, never cleared on approve — see CLAUDE.md's "Status handling" section. */
-  pmuRemarks: string | null;
+  rejectionRemarks: string | null;
   questions: HydratedFieldConfig[];
   permissions: SfcStatusPmuReviewPermissions;
   actors: XvifcFormActor[];

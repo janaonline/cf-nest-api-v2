@@ -14,6 +14,7 @@ import {
   StreamableFile,
   UseGuards,
 } from '@nestjs/common';
+import { Types } from 'mongoose';
 import { ApiBearerAuth, ApiOperation } from '@nestjs/swagger/dist/decorators';
 import type { Request, Response } from 'express';
 import { CurrentUser } from 'src/module/auth/decorators/current-user.decorator';
@@ -228,7 +229,8 @@ export class DurController {
    * and can't be forwarded/reused outside an authenticated session the way a signed token could.
    * `uploadId` is optional but should always be sent when available (the manual-review queue row
    * always has it) — it guards against downloading a file that's since been replaced by a newer
-   * upload; see DurManualReviewService.getDocumentDownload.
+   * upload; see DurManualReviewService.getDocumentDownload. `requestId` (optional) downloads the exact
+   * file one manual-review request was raised on, even if its upload ID has since been reused.
    */
   @Get(':id/documents/:docId/download')
   @ApiOperation({ summary: "ADMIN downloads a DUR document's original uploaded file (no expiry, session-authenticated)" })
@@ -238,9 +240,19 @@ export class DurController {
     @Query('uploadId') uploadId: string | undefined,
     @CurrentUser() user: AuthUser,
     @Res() res: Response,
+    @Query('requestId') requestId?: string,
   ): Promise<void> {
     assertValidDocId(docId);
-    const { key, stream, headers } = await this.manualReviewService.getDocumentDownload(id, docId, uploadId, user);
+    if (requestId !== undefined && !Types.ObjectId.isValid(requestId)) {
+      throw new BadRequestException('requestId must be a valid id');
+    }
+    const { key, stream, headers } = await this.manualReviewService.getDocumentDownload(
+      id,
+      docId,
+      uploadId,
+      user,
+      requestId,
+    );
 
     stream.on('error', (err: unknown) => {
       this.logger.error(`S3 stream error for key "${key}": ${getErrorMessage(err)}`);

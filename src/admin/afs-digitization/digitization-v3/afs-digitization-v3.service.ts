@@ -1,10 +1,10 @@
 import { randomBytes } from 'crypto';
 import { InjectQueue } from '@nestjs/bullmq';
-import { BadRequestException, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { InjectModel } from '@nestjs/mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
-import { Model, Types, UpdateQuery } from 'mongoose';
+import { Connection, Model, Types, UpdateQuery } from 'mongoose';
 import { AFS_DIGITIZATION_V3_QUEUE } from 'src/core/constants/queues';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import { AfsExcelFile, AfsExcelFileDocument } from 'src/schemas/afs/afs-excel-file.schema';
@@ -24,6 +24,8 @@ import {
   DigitizationV3Result,
   V3_DOC_TYPES,
   MAX_ENQUEUE_BATCH,
+  FASTAPI_TO_NEST_DOC_TYPE,
+  UNKNOWN_DOC_TYPE,
 } from './afs-digitization-v3.constants';
 
 /** One ULB for the selected year / audit type / doc type, with its uploaded PDF (if any). */
@@ -49,18 +51,37 @@ interface V3View {
   detectedDocTypes: string[];
   segments: { docType: string; startPage: number; endPage: number; title?: string; isDuplicate?: boolean }[];
   isConsolidated: boolean;
-  isMismatch: boolean;
   noOfPages?: number;
   /** Key of the digitized Excel in our bucket */
   excelUrl?: string;
   /** FastAPI job id (`job_id` from `POST /afs-digitization/jobs`) */
   jobId?: string;
   error?: string;
+  /** When the job finished (completed or failed) */
+  digitizedAt?: Date;
+  /** How long the job took to run, in milliseconds */
+  elapsedMs?: number;
+  /** Scores of the finished job; absent when that step did not run or the file predates them */
+  scores?: {
+    /** The uploaded type (record docType) is not among detectedDocTypes */
+    isMismatch: boolean;
+    ocrConfidenceScore?: number;
+    accuracyScore?: number;
+    arithmeticAssessment?: string;
+    overallAssessment?: string;
+  };
   /** Digitized by the old flow (no detectedDocTypes): shown as digitized, but contents unknown and can be re-queued */
   isLegacy?: boolean;
 }
 
 type V3Record = V3View | undefined;
+
+/** A PDF uploaded from the v3 page (afs_xl_files.afsFile), the same slot the AFS dashboard's Upload writes */
+interface AfsPdf {
+  pdfUrl: string;
+  noOfPages?: number;
+  fileSizeBytes?: number;
+}
 
 /** Only these ulbFile fields are read for the list: small, and no data[]. */
 const ULB_FILE_PROJECTION = {
@@ -68,6 +89,10 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.digitizationStatus': 1,
   'ulbFile.digitizationMsg': 1,
   'ulbFile.queue.status': 1,
+  'ulbFile.queue.processedOn': 1,
+  'ulbFile.queue.finishedOn': 1,
+  'ulbFile.totalProcessingTimeMs': 1,
+  'ulbFile.scores': 1,
   'ulbFile.detectedDocTypes': 1,
   'ulbFile.segments': 1,
   'ulbFile.isConsolidated': 1,
@@ -79,8 +104,62 @@ const ULB_FILE_PROJECTION = {
   'ulbFile.createdAt': 1,
 };
 
+/** The same small fields of an AFS upload (`afsFile`), so its digitization can be shown next to the ULB file's */
+const AFS_FILE_PROJECTION = Object.fromEntries(
+  Object.keys(ULB_FILE_PROJECTION)
+    .filter((path) => path.startsWith('ulbFile.'))
+    .map((path) => [path.replace('ulbFile.', 'afsFile.'), 1]),
+);
+
+/** How long after a job finishes the score snapshot is recounted (one recount covers every job finished meanwhile). */
+const SCORE_REFRESH_DELAY_MS = 3 * 60 * 1000;
+
+/** Arithmetic status FastAPI stores when the uploaded doc type isn't in the PDF (no checks ran). */
+const ARITHMETIC_SKIPPED = 'SKIPPED';
+
 /** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
 const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
+
+export interface OverallRecalcSummary {
+  scanned: number;
+  changed: number;
+  unchanged: number;
+  /** No stored crosscheck score, so no overall can be derived */
+  skipped: number;
+  /** Mismatched files whose `scores.arithmeticAssessment` was set (or would be, on a dry run) to SKIPPED */
+  arithmeticSkippedSet: number;
+  dryRun: boolean;
+  /** e.g. `PARTIAL->PASS`: how many files moved between each pair */
+  transitions: Record<string, number>;
+}
+
+export interface ScoreBackfillSummary {
+  /** Digitized files that had a FastAPI job id but no stored scores */
+  candidates: number;
+  updated: number;
+  /** The job exists but carries no scores (e.g. validation did not run) */
+  noScores: number;
+  /** No job with that id in the digitization database */
+  notFound: number;
+}
+
+export interface ScoreMatchBackfillSummary {
+  /** True: nothing was written, the counts show what would be */
+  dryRun: boolean;
+  jobsRead: number;
+  /** Files whose scores were (or, in a dry run, would be) set */
+  updated: number;
+  /** Job's ULB name, year or doc type did not resolve, or the ULB name is shared by several ULBs */
+  unresolved: number;
+  /** No file record for that ULB / year / doc type */
+  noFile: number;
+  /** More than one file (audited and unaudited): not guessed */
+  ambiguousFile: number;
+  /** The file is not digitized by v3, e.g. failed or not started: not given scores */
+  fileNotDigitized: number;
+  /** The file already has scores, or is linked to a different job */
+  skipped: number;
+}
 
 export interface DigitizationV3Metrics {
   total: number;
@@ -127,6 +206,44 @@ interface UniquenessCell {
   duplicates: number;
 }
 
+/** Crosscheck confidence at or above this counts as high on the metrics cards. */
+const CONFIDENCE_THRESHOLD = 80;
+
+/** How many v3-digitized files have each score. A snapshot: refreshed by `rebuildMetrics` and the score backfills. */
+export interface DigitizationV3ScoreMetrics {
+  digitized: number;
+  withScoresObject: number;
+  withTextract: number;
+  withAccuracy: number;
+  withArithmetic: number;
+  withOverall: number;
+  mismatches: number;
+  /** Crosscheck confidence (accuracyScore) at or above / below `CONFIDENCE_THRESHOLD` */
+  confidenceHigh: number;
+  confidenceLow: number;
+  arithmeticPass: number;
+  arithmeticFail: number;
+  /** Arithmetic did not run because the uploaded doc type isn't in the file (mismatch) */
+  arithmeticSkipped: number;
+  overallPass: number;
+  overallPartial: number;
+  overallFail: number;
+  /** digitized - mismatches */
+  matches: number;
+  computedAt: Date | null;
+}
+
+/** Files that have been run (finished), split into the old flow ("old") and v3 ("new"). A snapshot. */
+export interface DigitizationV3RunMetrics {
+  /** oldDigitized + newDigitized + oldFailed + newFailed */
+  totalRun: number;
+  oldDigitized: number;
+  newDigitized: number;
+  oldFailed: number;
+  newFailed: number;
+  computedAt: Date | null;
+}
+
 export interface DigitizationV3OverallMetrics {
   /** Unique files to digitize (the uniqueness baseline); falls back to files that entered the pipeline until it is built */
   total: number;
@@ -136,12 +253,17 @@ export interface DigitizationV3OverallMetrics {
   queued: number;
   processing: number;
   failed: number;
+  /** Score coverage of the digitized files; null until the first rebuild / backfill computes it */
+  scores: DigitizationV3ScoreMetrics | null;
+  /** Old-flow vs v3 digitized / failed counts; null until computed, like `scores` */
+  runs: DigitizationV3RunMetrics | null;
   updatedAt: Date | null;
 }
 
 @Injectable()
-export class AfsDigitizationV3Service implements OnModuleInit {
+export class AfsDigitizationV3Service implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AfsDigitizationV3Service.name);
+  private scoreRefreshTimer?: NodeJS.Timeout;
 
   constructor(
     @InjectQueue(AFS_DIGITIZATION_V3_QUEUE)
@@ -156,6 +278,9 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     private readonly stateModel: Model<StateDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    // FastAPI's database (same server): holds the job records the scores are backfilled from
+    @InjectConnection('digitization_db')
+    private readonly digitizationConnection: Connection,
     private readonly fileTokenService: FileTokenService,
     private readonly config: ConfigService,
   ) {}
@@ -173,13 +298,31 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const page = query.page > 0 ? query.page : 1;
     const limit = query.limit > 0 ? query.limit : 100;
 
-    const { rows, records } = await this.loadSelection(query);
+    const { rows, records, afsPdfs, afsRecords } = await this.loadSelection(query);
     const metrics = this.computeMetrics(rows, records);
 
     const matching = rows.filter((row) => this.matchesFilters(records.get(row.ulb.toString()), query));
-    const data = matching
-      .slice((page - 1) * limit, page * limit)
-      .map((row) => this.shapeRow(row, query.docType, records.get(row.ulb.toString())));
+    if (query.sortColumn) {
+      const dir = query.sortDirection === 'asc' ? 1 : -1;
+      const value = (row: UlbRow): number | null => {
+        const record = records.get(row.ulb.toString());
+        if (query.sortColumn === 'pages') return row.pdfPageCount ?? record?.noOfPages ?? null;
+        return record?.digitizedAt ? new Date(record.digitizedAt).getTime() : null;
+      };
+      // Stable sort keeps the name order for ties; rows with no value always go last
+      matching.sort((a, b) => {
+        const va = value(a);
+        const vb = value(b);
+        if (va === vb) return 0;
+        if (va === null) return 1;
+        if (vb === null) return -1;
+        return (va - vb) * dir;
+      });
+    }
+    const data = matching.slice((page - 1) * limit, page * limit).map((row) => {
+      const key = row.ulb.toString();
+      return this.shapeRow(row, query.docType, records.get(key), afsPdfs.get(key), afsRecords.get(key));
+    });
 
     return { success: true, data, totalCount: matching.length, metrics };
   }
@@ -234,7 +377,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       }
 
       const current = records.get(row.ulb.toString())?.status;
-      if (current === DigitizationV3Statuses.DIGITIZED) {
+      if (current === DigitizationV3Statuses.DIGITIZED && !query.redigitize) {
         summary.skippedAlreadyDigitized++;
         continue;
       }
@@ -254,7 +397,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         batchId,
       };
 
-      const claimed = await this.claim(data);
+      const claimed = await this.claim(data, query.redigitize);
       if (!claimed) {
         // Another request queued it between our read and this write.
         summary.skippedAlreadyQueued++;
@@ -262,20 +405,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       }
 
       try {
-        const jobId = `digitize-v3-${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
-        // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
-        const finished = await this.digitizationV3Queue.getJob(jobId);
-        if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
-
-        await this.digitizationV3Queue.add(`digitize-v3-${data.ulb}-${data.year}-${data.docType}`, data, {
-          // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
-          jobId,
-          attempts: 2,
-          backoff: { type: 'exponential', delay: 30_000 },
-          // Kept for a while so they can be inspected; age is in seconds
-          removeOnComplete: { age: 2 * 24 * 60 * 60 },
-          removeOnFail: { age: 20 * 24 * 60 * 60 },
-        });
+        await this.addJob(data);
         summary.queued++;
       } catch (error) {
         summary.failedToQueue++;
@@ -291,6 +421,101 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     return { success: true, ...summary };
   }
 
+  /**
+   * Queues the PDFs an admin uploaded (`afsFile`) for the selected rows. Same rules as `enqueueByFilter`, but the file
+   * is the AFS upload and the result is saved on `afsFile`. Rows with no AFS upload, or already queued / digitized, are skipped.
+   * Meant for specific rows (`ulbId`), so the status / consolidated / mismatch filters (which describe the ULB file) are ignored.
+   */
+  async enqueueAfs(query: AfsDigitizationV3QueryDto) {
+    this.assertSupported(query);
+    if (!query.ulbId?.length) throw new BadRequestException('ulbId is required to digitize AFS uploads');
+
+    const { rows, afsPdfs, afsRecords } = await this.loadSelection(query);
+    const matching = rows.slice(0, MAX_ENQUEUE_BATCH);
+
+    const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 14);
+    const batchId = `${stamp.slice(0, 8)}-${stamp.slice(8)}-${randomBytes(2).toString('hex')}`;
+    const summary = {
+      batchId,
+      matched: matching.length,
+      queued: 0,
+      skippedNoPdf: 0,
+      skippedDuplicate: 0,
+      skippedAlreadyQueued: 0,
+      skippedAlreadyDigitized: 0,
+      failedToQueue: 0,
+    };
+
+    for (const row of matching) {
+      const key = row.ulb.toString();
+      const afsPdf = afsPdfs.get(key);
+      if (!afsPdf) {
+        summary.skippedNoPdf++;
+        continue;
+      }
+
+      const current = afsRecords.get(key)?.status;
+      if (current === DigitizationV3Statuses.DIGITIZED && !query.redigitize) {
+        summary.skippedAlreadyDigitized++;
+        continue;
+      }
+      if (current === DigitizationV3Statuses.QUEUED || current === DigitizationV3Statuses.PROCESSING) {
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+
+      const data: AfsDigitizationV3JobData = {
+        source: 'AFS',
+        annualAccountsId: row._id.toString(),
+        ulb: key,
+        year: query.yearId,
+        auditType: query.auditType as string,
+        docType: query.docType,
+        pdfUrl: afsPdf.pdfUrl,
+        ulbName: row.ulbName,
+        batchId,
+      };
+
+      if (!(await this.claim(data, query.redigitize))) {
+        summary.skippedAlreadyQueued++;
+        continue;
+      }
+      try {
+        await this.addJob(data);
+        summary.queued++;
+      } catch (error) {
+        summary.failedToQueue++;
+        this.logger.error(
+          `Failed to add AFS upload digitization v3 job for ulb ${data.ulb}`,
+          error instanceof Error ? error.stack : String(error),
+        );
+        await this.markFailed(data, 'Could not add the job to the queue');
+      }
+    }
+
+    this.logger.log(`AFS digitization v3 enqueue-afs: ${JSON.stringify(summary)}`);
+    return { success: true, ...summary };
+  }
+
+  /** Adds one job to Redis. The job id is per file and source, so a ULB file and its AFS upload can run side by side. */
+  private async addJob(data: AfsDigitizationV3JobData): Promise<void> {
+    const tag = data.source === 'AFS' ? 'afs-' : '';
+    const jobId = `digitize-v3-${tag}${data.ulb}-${data.year}-${data.auditType}-${data.docType}`;
+    // A finished job kept in Redis would make `add` a silent no-op for this id and leave the file stuck as queued
+    const finished = await this.digitizationV3Queue.getJob(jobId);
+    if (finished && ['completed', 'failed'].includes(await finished.getState())) await finished.remove();
+
+    await this.digitizationV3Queue.add(`digitize-v3-${tag}${data.ulb}-${data.year}-${data.docType}`, data, {
+      // Same file can never be in the queue twice; a finished job with this id is removed above so it can be retried.
+      jobId,
+      attempts: 2,
+      backoff: { type: 'exponential', delay: 30_000 },
+      // Kept for a while so they can be inspected; age is in seconds
+      removeOnComplete: { age: 2 * 24 * 60 * 60 },
+      removeOnFail: { age: 20 * 24 * 60 * 60 },
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // Writes used by the queue service
   // ---------------------------------------------------------------------------
@@ -304,27 +529,38 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     };
   }
 
+  /** The slot of the record a job writes to: the ULB's own PDF, or the one an admin uploaded */
+  private slot(data: Pick<AfsDigitizationV3JobData, 'source'>): 'ulbFile' | 'afsFile' {
+    return data.source === 'AFS' ? 'afsFile' : 'ulbFile';
+  }
+
   /**
-   * Atomically moves the ULB's file to `queued`. Returns false if it is already queued, or already digitized by v3.
+   * Atomically moves the file to `queued`. Returns false if it is already queued, or already digitized by v3
+   * (unless `redigitize`, which lets a digitized file be queued again).
    * Upserts so ULBs that were never digitized (no afs_xl_files record yet) can be queued too.
    *
-   * Only dotted `ulbFile.*` paths are written, so nothing else in the item is overwritten, and without
-   * defaults no empty `data[]` is created.
+   * Only dotted `ulbFile.*` (or `afsFile.*` for an AFS upload) paths are written, so nothing else in the item is
+   * overwritten, and without defaults no empty `data[]` is created.
    */
-  private async claim(data: AfsDigitizationV3JobData): Promise<boolean> {
+  private async claim(data: AfsDigitizationV3JobData, redigitize = false): Promise<boolean> {
     const key = this.recordKey(data);
+    const f = this.slot(data);
     try {
       const previous = await this.afsExcelFileModel
         .findOneAndUpdate(
           {
             ...key,
             $nor: [
-              { 'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED },
-              // `detectedDocTypes` exists only on items v3 has digitized
-              {
-                'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
-                'ulbFile.detectedDocTypes': { $exists: true },
-              },
+              { [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED },
+              // `detectedDocTypes` exists only on items v3 has digitized; a re-digitize may start from those
+              ...(redigitize
+                ? []
+                : [
+                    {
+                      [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
+                      [`${f}.detectedDocTypes`]: { $exists: true },
+                    },
+                  ]),
             ],
           },
           {
@@ -333,19 +569,20 @@ export class AfsDigitizationV3Service implements OnModuleInit {
               ...(data.annualAccountsId && { annualAccountsId: new Types.ObjectId(data.annualAccountsId) }),
             },
             $set: {
-              'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-              'ulbFile.uploadedBy': 'ULB',
-              'ulbFile.pdfUrl': data.pdfUrl,
-              ...(data.batchId && { 'ulbFile.batchId': data.batchId }),
-              'ulbFile.queue': { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
+              [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED,
+              [`${f}.uploadedBy`]: data.source === 'AFS' ? 'AFS' : 'ULB',
+              [`${f}.pdfUrl`]: data.pdfUrl,
+              ...(data.batchId && { [`${f}.batchId`]: data.batchId }),
+              [`${f}.queue`]: { status: QueueStatus.QUEUED, progress: 0, createdAt: new Date(), attemptsMade: 0 },
             },
             // A re-run starts clean
             $unset: {
-              'ulbFile.digitizationMsg': '',
-              'ulbFile.detectedDocTypes': '',
-              'ulbFile.segments': '',
-              'ulbFile.isConsolidated': '',
-              'ulbFile.isMismatch': '',
+              [`${f}.digitizationMsg`]: '',
+              [`${f}.detectedDocTypes`]: '',
+              [`${f}.segments`]: '',
+              [`${f}.isConsolidated`]: '',
+              [`${f}.isMismatch`]: '', // pre-`scores` location
+              [`${f}.scores`]: '',
             },
           },
           // new: false returns the record as it was (null when inserted), so the counters know what it moved from
@@ -353,7 +590,8 @@ export class AfsDigitizationV3Service implements OnModuleInit {
         )
         .lean()
         .exec();
-      await this.recordTransition(this.statusOf(previous), DigitizationV3Statuses.QUEUED);
+      // The overall counters track ULB files only
+      if (data.source !== 'AFS') await this.recordTransition(this.statusOf(previous), DigitizationV3Statuses.QUEUED);
       return true;
     } catch (error: any) {
       // Unique index {ulb, year, auditType, docType}: the record exists but does not match the filter above.
@@ -363,15 +601,16 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   }
 
   async markProcessing(data: AfsDigitizationV3JobData, bullJobId?: string) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.queue.status': QueueStatus.PROCESSING,
-          'ulbFile.queue.processedOn': new Date(),
-          ...(bullJobId && { 'ulbFile.queue.jobId': bullJobId }),
+          [`${f}.queue.status`]: QueueStatus.PROCESSING,
+          [`${f}.queue.processedOn`]: new Date(),
+          ...(bullJobId && { [`${f}.queue.jobId`]: bullJobId }),
         },
-        $unset: { 'ulbFile.digitizationMsg': '' },
+        $unset: { [`${f}.digitizationMsg`]: '' },
       },
       DigitizationV3Statuses.PROCESSING,
     );
@@ -382,53 +621,359 @@ export class AfsDigitizationV3Service implements OnModuleInit {
    * so a running or failed job can still be traced in FastAPI.
    */
   async markSubmitted(data: AfsDigitizationV3JobData, afsDigitizationJobId: string, version?: string) {
+    const f = this.slot(data);
     await this.afsExcelFileModel.updateOne(this.recordKey(data), {
       $set: {
-        'ulbFile.requestId': afsDigitizationJobId,
+        [`${f}.requestId`]: afsDigitizationJobId,
         // Pipeline version FastAPI stamped on the job (e.g. "v3")
-        ...(version && { 'ulbFile.version': version }),
+        ...(version && { [`${f}.version`]: version }),
       },
     });
   }
 
   async markDigitized(data: AfsDigitizationV3JobData, result: DigitizationV3Result) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+          [`${f}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
           // FastAPI job id; the full extraction and the Excel stay in FastAPI and are fetched by this id
-          'ulbFile.requestId': result.jobId,
-          'ulbFile.detectedDocTypes': result.detectedDocTypes,
-          'ulbFile.segments': result.segments,
-          'ulbFile.isConsolidated': result.isConsolidated,
-          'ulbFile.isMismatch': result.isMismatch,
-          'ulbFile.queue.status': QueueStatus.COMPLETED,
-          'ulbFile.queue.progress': 100,
-          'ulbFile.queue.finishedOn': new Date(),
-          ...(result.excelKey && { 'ulbFile.excelUrl': result.excelKey }),
-          ...(result.noOfPages != null && { 'ulbFile.noOfPages': result.noOfPages }),
-          ...(result.processingMs != null && { 'ulbFile.totalProcessingTimeMs': result.processingMs }),
+          [`${f}.requestId`]: result.jobId,
+          [`${f}.detectedDocTypes`]: result.detectedDocTypes,
+          [`${f}.segments`]: result.segments,
+          [`${f}.isConsolidated`]: result.isConsolidated,
+          [`${f}.scores.isMismatch`]: result.isMismatch,
+          [`${f}.queue.status`]: QueueStatus.COMPLETED,
+          [`${f}.queue.progress`]: 100,
+          [`${f}.queue.finishedOn`]: new Date(),
+          ...(result.excelKey && { [`${f}.excelUrl`]: result.excelKey }),
+          ...(result.noOfPages != null && { [`${f}.noOfPages`]: result.noOfPages }),
+          ...(result.processingMs != null && { [`${f}.totalProcessingTimeMs`]: result.processingMs }),
+          ...(result.ocrConfidenceScore != null && { [`${f}.scores.ocrConfidenceScore`]: result.ocrConfidenceScore }),
+          ...(result.accuracyScore != null && { [`${f}.scores.accuracyScore`]: result.accuracyScore }),
+          ...(result.arithmeticAssessment && { [`${f}.scores.arithmeticAssessment`]: result.arithmeticAssessment }),
+          ...(result.overallAssessment && { [`${f}.scores.overallAssessment`]: result.overallAssessment }),
           // Non-fatal problem (e.g. Excel copy failed): shown on the row, status stays digitized
-          ...(result.warning && { 'ulbFile.digitizationMsg': result.warning }),
+          ...(result.warning && { [`${f}.digitizationMsg`]: result.warning }),
         },
-        ...(!result.warning && { $unset: { 'ulbFile.digitizationMsg': '' } }),
+        ...(!result.warning && { $unset: { [`${f}.digitizationMsg`]: '' } }),
       },
       DigitizationV3Statuses.DIGITIZED,
     );
   }
 
+  /**
+   * One-off: fills `scores` on digitized v3 files (ULB and uploaded-AFS slots) from FastAPI's job records,
+   * read straight from the digitization database (`afs-digitization-jobs`, the scores sit in `result_json`).
+   * Also moves a file-level `isMismatch` into `scores.isMismatch`. Files whose scores are already stored are
+   * skipped, so it is safe to re-run; a file whose job has no scores keeps matching. `limit` caps the files per call.
+   * With `force`, files that already have scores are re-scored too (no paging: it always starts from the first `limit` files).
+   */
+  async backfillScoresFromJobs(limit: number, force = false): Promise<ScoreBackfillSummary> {
+    const summary: ScoreBackfillSummary = { candidates: 0, updated: 0, noScores: 0, notFound: 0 };
+    type Candidate = { docId: Types.ObjectId; slot: 'ulbFile' | 'afsFile'; requestId: string; isMismatch?: boolean };
+    const candidates: Candidate[] = [];
+
+    for (const slot of ['ulbFile', 'afsFile'] as const) {
+      const remaining = limit - candidates.length;
+      if (remaining <= 0) break;
+      const docs = await this.afsExcelFileModel
+        .find(
+          {
+            [`${slot}.digitizationStatus`]: DigitizationStatuses.DIGITIZED,
+            // Written only by v3 (`version` is not on files digitized before it was stamped)
+            [`${slot}.detectedDocTypes`]: { $exists: true },
+            [`${slot}.requestId`]: { $exists: true, $ne: null },
+            // Without `force`, only files with no scores stored yet
+            ...(!force && {
+              [`${slot}.scores.accuracyScore`]: { $exists: false },
+              [`${slot}.scores.overallAssessment`]: { $exists: false },
+            }),
+          },
+          { [`${slot}.requestId`]: 1, [`${slot}.isMismatch`]: 1 },
+        )
+        .limit(remaining)
+        .lean();
+      for (const d of docs as any[]) {
+        const requestId = d[slot]?.requestId;
+        if (requestId) candidates.push({ docId: d._id, slot, requestId, isMismatch: d[slot]?.isMismatch });
+      }
+    }
+    summary.candidates = candidates.length;
+    if (!candidates.length) return summary;
+
+    const jobCollection = this.digitizationConnection.collection(
+      this.config.get<string>('AFS_DIGITIZATION_JOB_COLLECTION_NAME') || 'afs-digitization-jobs',
+    );
+    const jobs = await jobCollection
+      .find(
+        { job_id: { $in: [...new Set(candidates.map((c) => c.requestId))] } },
+        {
+          projection: {
+            job_id: 1,
+            'result_json.confidence_score': 1,
+            'result_json.accuracy_score': 1,
+            'result_json.arithmetic_assessment': 1,
+            'result_json.overall_assessment': 1,
+          },
+        },
+      )
+      .toArray();
+    const byJobId = new Map(jobs.map((j: any) => [j.job_id as string, j.result_json ?? {}]));
+
+    const ops: any[] = [];
+    for (const c of candidates) {
+      const result = byJobId.get(c.requestId);
+      if (!result) {
+        summary.notFound++;
+        continue;
+      }
+      const scores: Record<string, unknown> = {
+        ocrConfidenceScore: result.confidence_score,
+        accuracyScore: result.accuracy_score,
+        arithmeticAssessment: result.arithmetic_assessment,
+        overallAssessment: result.overall_assessment,
+      };
+      const $set: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(scores)) {
+        if (value != null) $set[`${c.slot}.scores.${key}`] = value;
+      }
+      if (Object.keys($set).length) summary.updated++;
+      else summary.noScores++;
+      // Move the pre-`scores` flag along, so the file-level field is no longer needed
+      if (c.isMismatch != null) $set[`${c.slot}.scores.isMismatch`] = c.isMismatch;
+      if (Object.keys($set).length) ops.push({ updateOne: { filter: { _id: c.docId }, update: { $set } } });
+    }
+    if (ops.length) {
+      await this.afsExcelFileModel.bulkWrite(ops, { ordered: false });
+      await this.refreshScoreMetrics();
+    }
+    return summary;
+  }
+
+  /**
+   * Recomputes `scores.overallAssessment` on digitized v3 files from the scores already stored on the file
+   * (same rules as FastAPI's `_overall_assessment`), without calling FastAPI. A mismatched file also gets
+   * `scores.arithmeticAssessment = SKIPPED` (arithmetic doesn't run when the uploaded type isn't in the PDF):
+   *   document mismatch (scores.isMismatch)        -> FAIL
+   *   Textract confidence < 80                     -> FAIL
+   *   no crosscheck (accuracyScore)                -> left alone (UNVERIFIED is not stored)
+   *   crosscheck >= 80 and arithmetic not FAIL     -> PASS
+   *   crosscheck < 80 and arithmetic FAIL          -> FAIL
+   *   otherwise                                    -> PARTIAL
+   * A file with no `ocrConfidenceScore` counts as Textract pass (as in FastAPI). FastAPI also fails OCR when nothing was
+   * extracted, which the file does not record, so such a file is judged on crosscheck + arithmetic only.
+   * `dryRun` (the default at the endpoint) only counts.
+   */
+  async recalculateOverallAssessment(dryRun: boolean): Promise<OverallRecalcSummary> {
+    const summary: OverallRecalcSummary = {
+      scanned: 0,
+      changed: 0,
+      unchanged: 0,
+      skipped: 0,
+      arithmeticSkippedSet: 0,
+      dryRun,
+      transitions: {},
+    };
+    const BATCH = 1000;
+
+    for (const slot of ['ulbFile', 'afsFile'] as const) {
+      const cursor = this.afsExcelFileModel
+        .find(
+          { [`${slot}.digitizationStatus`]: DigitizationStatuses.DIGITIZED, [`${slot}.scores`]: { $exists: true } },
+          { [`${slot}.scores`]: 1 },
+        )
+        .lean()
+        .cursor();
+
+      let ops: any[] = [];
+      const flush = async () => {
+        if (!ops.length) return;
+        await this.afsExcelFileModel.bulkWrite(ops, { ordered: false });
+        ops = [];
+      };
+
+      for await (const d of cursor as AsyncIterable<any>) {
+        summary.scanned++;
+        const s = d[slot]?.scores ?? {};
+        const { ocrConfidenceScore: ocr, accuracyScore: accuracy, arithmeticAssessment: arithmetic } = s;
+        const old: string | undefined = s.overallAssessment;
+        const $set: Record<string, unknown> = {};
+
+        // A document mismatch skips arithmetic (FastAPI stores SKIPPED; older files kept FAIL or nothing)
+        if (s.isMismatch === true && arithmetic !== ARITHMETIC_SKIPPED) {
+          $set[`${slot}.scores.arithmeticAssessment`] = ARITHMETIC_SKIPPED;
+          summary.arithmeticSkippedSet++;
+        }
+
+        // A document mismatch fails the file whatever the other scores say, even with no crosscheck score
+        if (s.isMismatch !== true && typeof accuracy !== 'number') {
+          summary.skipped++;
+        } else {
+          let next: string;
+          if (s.isMismatch === true) next = 'FAIL';
+          else if (typeof ocr === 'number' && ocr < CONFIDENCE_THRESHOLD) next = 'FAIL';
+          else {
+            const crosscheckOk = accuracy >= CONFIDENCE_THRESHOLD;
+            const arithmeticOk = arithmetic !== 'FAIL';
+            next = crosscheckOk && arithmeticOk ? 'PASS' : !crosscheckOk && !arithmeticOk ? 'FAIL' : 'PARTIAL';
+          }
+          if (next === old) {
+            summary.unchanged++;
+          } else {
+            summary.changed++;
+            const key = `${old ?? 'none'}->${next}`;
+            summary.transitions[key] = (summary.transitions[key] ?? 0) + 1;
+            $set[`${slot}.scores.overallAssessment`] = next;
+          }
+        }
+
+        if (!dryRun && Object.keys($set).length) {
+          ops.push({ updateOne: { filter: { _id: d._id }, update: { $set } } });
+          if (ops.length >= BATCH) await flush();
+        }
+      }
+      await flush();
+    }
+
+    if (!dryRun && (summary.changed || summary.arithmeticSkippedSet)) await this.refreshScoreMetrics();
+    return summary;
+  }
+
+  /**
+   * Like `backfillScoresFromJobs`, but for jobs the file is not linked to by `requestId` (e.g. submitted straight to
+   * FastAPI): each job in the digitization database is matched to a file by its `expected` ULB name, financial year and
+   * doc type. Only a single, unambiguous, v3-digitized file with no scores yet is updated; it is never created.
+   * When several jobs match one file, the most recently completed one wins. `dryRun` (the default at the
+   * endpoint) only counts. The file's `requestId` is left alone, so the "view log" link is unchanged.
+   */
+  async backfillScoresByMatch(dryRun: boolean, limit: number): Promise<ScoreMatchBackfillSummary> {
+    const summary: ScoreMatchBackfillSummary = {
+      dryRun,
+      jobsRead: 0,
+      updated: 0,
+      unresolved: 0,
+      noFile: 0,
+      ambiguousFile: 0,
+      fileNotDigitized: 0,
+      skipped: 0,
+    };
+    const jobCollection = this.digitizationConnection.collection(
+      this.config.get<string>('AFS_DIGITIZATION_JOB_COLLECTION_NAME') || 'afs-digitization-jobs',
+    );
+    const jobs = await jobCollection
+      .find(
+        { status: 'completed', 'result_json.accuracy_score': { $ne: null } },
+        {
+          projection: {
+            job_id: 1,
+            completed_at: 1,
+            expected: 1,
+            'result_json.confidence_score': 1,
+            'result_json.accuracy_score': 1,
+            'result_json.arithmetic_assessment': 1,
+            'result_json.overall_assessment': 1,
+          },
+        },
+      )
+      .limit(limit)
+      .toArray();
+    summary.jobsRead = jobs.length;
+
+    const yearIdByLabel = new Map(Object.entries(YearIdToLabel).map(([id, label]) => [label, id]));
+    const ulbs = await this.ulbModel.find({}, { name: 1 }).lean();
+    const ulbsByName = new Map<string, Types.ObjectId[]>();
+    for (const u of ulbs as any[]) {
+      const key = String(u.name ?? '').trim().toLowerCase();
+      if (key) ulbsByName.set(key, [...(ulbsByName.get(key) ?? []), u._id]);
+    }
+
+    // One job per file: the most recently completed
+    const latest = new Map<string, { ulb: Types.ObjectId; year: string; docType: string; job: any }>();
+    for (const job of jobs as any[]) {
+      const e = job.expected ?? {};
+      const matches = ulbsByName.get(String(e.ulb_name ?? '').trim().toLowerCase()) ?? [];
+      const year = yearIdByLabel.get(e.financial_year);
+      const docType = FASTAPI_TO_NEST_DOC_TYPE[e.doc_type];
+      if (matches.length !== 1 || !year || !docType || docType === UNKNOWN_DOC_TYPE) {
+        summary.unresolved++;
+        continue;
+      }
+      const key = `${matches[0]}|${year}|${docType}`;
+      const current = latest.get(key);
+      if (!current || new Date(job.completed_at ?? 0) > new Date(current.job.completed_at ?? 0)) {
+        latest.set(key, { ulb: matches[0], year, docType, job });
+      }
+    }
+
+    const ops: any[] = [];
+    for (const { ulb, year, docType, job } of latest.values()) {
+      const files = await this.afsExcelFileModel
+        .find(
+          { ulb, year: new Types.ObjectId(year), docType },
+          {
+            'ulbFile.digitizationStatus': 1,
+            'ulbFile.detectedDocTypes': 1,
+            'ulbFile.requestId': 1,
+            'ulbFile.scores': 1,
+          },
+        )
+        .lean();
+      if (!files.length) {
+        summary.noFile++;
+        continue;
+      }
+      if (files.length > 1) {
+        summary.ambiguousFile++;
+        continue;
+      }
+      const file = files[0] as any;
+      const slot = file.ulbFile;
+      if (slot?.digitizationStatus !== DigitizationStatuses.DIGITIZED || !Array.isArray(slot?.detectedDocTypes)) {
+        summary.fileNotDigitized++;
+        continue;
+      }
+      const linkedElsewhere = slot.requestId && slot.requestId !== job.job_id;
+      if (slot.scores?.accuracyScore != null || slot.scores?.overallAssessment || linkedElsewhere) {
+        summary.skipped++;
+        continue;
+      }
+      const result = job.result_json ?? {};
+      const $set: Record<string, unknown> = {};
+      const scores = {
+        ocrConfidenceScore: result.confidence_score,
+        accuracyScore: result.accuracy_score,
+        arithmeticAssessment: result.arithmetic_assessment,
+        overallAssessment: result.overall_assessment,
+      };
+      for (const [k, v] of Object.entries(scores)) if (v != null) $set[`ulbFile.scores.${k}`] = v;
+      if (!Object.keys($set).length) {
+        summary.skipped++;
+        continue;
+      }
+      summary.updated++;
+      ops.push({ updateOne: { filter: { _id: file._id }, update: { $set } } });
+    }
+    if (!dryRun && ops.length) {
+      await this.afsExcelFileModel.bulkWrite(ops, { ordered: false });
+      await this.refreshScoreMetrics();
+    }
+    return summary;
+  }
+
   async markFailed(data: AfsDigitizationV3JobData, error: string) {
     const message = error.slice(0, 1000);
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.FAILED,
-          'ulbFile.digitizationMsg': message,
-          'ulbFile.queue.status': QueueStatus.FAILED,
-          'ulbFile.queue.failedReason': message,
-          'ulbFile.queue.finishedOn': new Date(),
+          [`${f}.digitizationStatus`]: DigitizationStatuses.FAILED,
+          [`${f}.digitizationMsg`]: message,
+          [`${f}.queue.status`]: QueueStatus.FAILED,
+          [`${f}.queue.failedReason`]: message,
+          [`${f}.queue.finishedOn`]: new Date(),
         },
       },
       DigitizationV3Statuses.FAILED,
@@ -437,13 +982,14 @@ export class AfsDigitizationV3Service implements OnModuleInit {
 
   /** Put the file back to `queued` between BullMQ retries so it is not shown as failed. */
   async markRetrying(data: AfsDigitizationV3JobData, error: string) {
+    const f = this.slot(data);
     await this.updateAndTrack(
       data,
       {
         $set: {
-          'ulbFile.digitizationStatus': DigitizationStatuses.QUEUED,
-          'ulbFile.digitizationMsg': error.slice(0, 1000),
-          'ulbFile.queue.status': QueueStatus.QUEUED,
+          [`${f}.digitizationStatus`]: DigitizationStatuses.QUEUED,
+          [`${f}.digitizationMsg`]: error.slice(0, 1000),
+          [`${f}.queue.status`]: QueueStatus.QUEUED,
         },
       },
       DigitizationV3Statuses.QUEUED,
@@ -601,6 +1147,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       queued: n(doc?.queuedFiles),
       processing: n(doc?.processingFiles),
       failed: n(doc?.failedFiles),
+      scores: doc?.scoreSummary
+        ? { ...doc.scoreSummary, matches: n(doc.scoreSummary.digitized - doc.scoreSummary.mismatches) }
+        : null,
+      runs: doc?.runSummary ? { ...doc.runSummary } : null,
       updatedAt: (doc as { updatedAt?: Date } | null)?.updatedAt ?? null,
     };
   }
@@ -679,7 +1229,155 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       { upsert: true, runValidators: true },
     );
     this.logger.log(`AFS digitization v3 counters rebuilt: ${JSON.stringify(set)}`);
+    await this.refreshScoreMetrics();
     return this.getMetrics();
+  }
+
+  /**
+   * Recounts how many v3-digitized files (ULB slot, same rule as the `digitized` card) have each score and stores it on
+   * the v3 metrics row. Called after a rebuild and after the score backfills; a failure is logged, never thrown.
+   */
+  async refreshScoreMetrics(): Promise<boolean> {
+    try {
+      const has = (path: string) => ({ $sum: { $cond: [{ $ne: [{ $type: path }, 'missing'] }, 1, 0] } });
+      const is = (path: string, value: string) => ({ $sum: { $cond: [{ $eq: [path, value] }, 1, 0] } });
+      const [row] = await this.afsExcelFileModel
+        .aggregate([
+          {
+            $match: {
+              'ulbFile.digitizationStatus': DigitizationStatuses.DIGITIZED,
+              'ulbFile.detectedDocTypes': { $type: 'array' },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              digitized: { $sum: 1 },
+              withScoresObject: has('$ulbFile.scores'),
+              withTextract: has('$ulbFile.scores.ocrConfidenceScore'),
+              withAccuracy: has('$ulbFile.scores.accuracyScore'),
+              withArithmetic: has('$ulbFile.scores.arithmeticAssessment'),
+              withOverall: has('$ulbFile.scores.overallAssessment'),
+              confidenceHigh: {
+                $sum: { $cond: [{ $and: [{ $isNumber: '$ulbFile.scores.accuracyScore' }, { $gte: ['$ulbFile.scores.accuracyScore', CONFIDENCE_THRESHOLD] }] }, 1, 0] },
+              },
+              confidenceLow: {
+                $sum: { $cond: [{ $and: [{ $isNumber: '$ulbFile.scores.accuracyScore' }, { $lt: ['$ulbFile.scores.accuracyScore', CONFIDENCE_THRESHOLD] }] }, 1, 0] },
+              },
+              arithmeticPass: is('$ulbFile.scores.arithmeticAssessment', 'PASS'),
+              arithmeticFail: is('$ulbFile.scores.arithmeticAssessment', 'FAIL'),
+              arithmeticSkipped: is('$ulbFile.scores.arithmeticAssessment', ARITHMETIC_SKIPPED),
+              overallPass: is('$ulbFile.scores.overallAssessment', 'PASS'),
+              overallPartial: is('$ulbFile.scores.overallAssessment', 'PARTIAL'),
+              overallFail: is('$ulbFile.scores.overallAssessment', 'FAIL'),
+              // Files digitized before `isMismatch` moved into `scores` still carry it on the file itself
+              mismatches: {
+                $sum: { $cond: [{ $ifNull: ['$ulbFile.scores.isMismatch', '$ulbFile.isMismatch'] }, 1, 0] },
+              },
+            },
+          },
+        ])
+        .exec();
+      const { _id, ...counts } = row ?? {
+        digitized: 0,
+        withScoresObject: 0,
+        withTextract: 0,
+        withAccuracy: 0,
+        withArithmetic: 0,
+        withOverall: 0,
+        mismatches: 0,
+        confidenceHigh: 0,
+        confidenceLow: 0,
+        arithmeticPass: 0,
+        arithmeticFail: 0,
+        arithmeticSkipped: 0,
+        overallPass: 0,
+        overallPartial: 0,
+        overallFail: 0,
+      };
+      const runSummary = await this.computeRunSummary();
+      await this.afsMetricModel.updateOne(
+        { docType: V3_METRICS_DOC_TYPE },
+        { $set: { scoreSummary: { ...counts, computedAt: new Date() }, runSummary } },
+        { upsert: true },
+      );
+      return true;
+    } catch (error) {
+      this.logger.error('Could not refresh the digitization v3 score metrics', error instanceof Error ? error.stack : String(error));
+      return false;
+    }
+  }
+
+  /**
+   * Refreshes the score snapshot shortly after a job finishes. The recount reads every digitized file, so a burst of
+   * finishing jobs shares one refresh: the first one starts the timer, the rest ride on it.
+   */
+  private scheduleScoreRefresh(): void {
+    if (this.scoreRefreshTimer) return;
+    this.scoreRefreshTimer = setTimeout(() => {
+      this.scoreRefreshTimer = undefined;
+      void this.refreshScoreMetrics(); // logs its own failures
+    }, SCORE_REFRESH_DELAY_MS);
+    this.scoreRefreshTimer.unref?.(); // never keeps the process alive
+  }
+
+  onModuleDestroy() {
+    if (this.scoreRefreshTimer) clearTimeout(this.scoreRefreshTimer);
+  }
+
+  /**
+   * Finished ULB files split into old flow vs v3, by the same rule as `toView`: a file is the old flow's when it was
+   * created before `LEGACY_CUTOFF` and is digitized with no `detectedDocTypes`, or failed with no `version`.
+   * A digitized file with no `detectedDocTypes` that is newer than the cutoff is neither, so it is not counted.
+   */
+  private async computeRunSummary(): Promise<DigitizationV3RunMetrics> {
+    const rows = await this.afsExcelFileModel
+      .aggregate<{ _id: string; n: number }>([
+        {
+          $match: {
+            'ulbFile.digitizationStatus': { $in: [DigitizationStatuses.DIGITIZED, DigitizationStatuses.FAILED] },
+          },
+        },
+        {
+          $project: {
+            c: {
+              $let: {
+                vars: {
+                  digitized: { $eq: ['$ulbFile.digitizationStatus', DigitizationStatuses.DIGITIZED] },
+                  isV3: { $isArray: '$ulbFile.detectedDocTypes' },
+                  hasVersion: { $ne: [{ $type: '$ulbFile.version' }, 'missing'] },
+                  oldDate: { $lt: ['$ulbFile.createdAt', LEGACY_CUTOFF] },
+                },
+                in: {
+                  $switch: {
+                    branches: [
+                      { case: { $and: ['$$digitized', '$$isV3'] }, then: 'newDigitized' },
+                      { case: { $and: ['$$digitized', '$$oldDate'] }, then: 'oldDigitized' },
+                      { case: '$$digitized', then: 'other' },
+                      { case: { $and: [{ $not: ['$$hasVersion'] }, '$$oldDate'] }, then: 'oldFailed' },
+                    ],
+                    default: 'newFailed',
+                  },
+                },
+              },
+            },
+          },
+        },
+        { $group: { _id: '$c', n: { $sum: 1 } } },
+      ])
+      .exec();
+    const n = (key: string) => rows.find((r) => r._id === key)?.n ?? 0;
+    const counts = {
+      oldDigitized: n('oldDigitized'),
+      newDigitized: n('newDigitized'),
+      oldFailed: n('oldFailed'),
+      newFailed: n('newFailed'),
+    };
+    return {
+      ...counts,
+      totalRun: counts.oldDigitized + counts.newDigitized + counts.oldFailed + counts.newFailed,
+      computedAt: new Date(),
+    };
   }
 
   private statusOf(record?: { ulbFile?: any } | null) {
@@ -692,11 +1390,18 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     update: UpdateQuery<AfsExcelFileDocument>,
     next: DigitizationV3Statuses,
   ) {
+    // The overall counters track ULB files only; an AFS upload is just updated
+    if (data.source === 'AFS') {
+      await this.afsExcelFileModel.updateOne(this.recordKey(data), update);
+      return;
+    }
     const previous = await this.afsExcelFileModel
       .findOneAndUpdate(this.recordKey(data), update, { new: false, projection: ULB_FILE_PROJECTION })
       .lean()
       .exec();
     await this.recordTransition(this.statusOf(previous), next);
+    // A finished file changes the score and run snapshots (counts above already moved by $inc)
+    if (next === DigitizationV3Statuses.DIGITIZED || next === DigitizationV3Statuses.FAILED) this.scheduleScoreRefresh();
   }
 
   /** A counter problem must never fail or retry a digitization job, so it is logged and swallowed. */
@@ -802,14 +1507,26 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     const existing = await this.afsExcelFileModel
       .find(
         { ulb: { $in: rows.map((r) => r.ulb) }, year: yearId, auditType, docType: query.docType },
-        ULB_FILE_PROJECTION,
+        { ...ULB_FILE_PROJECTION, ...AFS_FILE_PROJECTION, 'afsFile.pdfUrl': 1, 'afsFile.fileSizeBytes': 1 },
       )
       .lean()
       .exec();
     const records = new Map<string, V3Record>(existing.map((r) => [r.ulb.toString(), this.toView(r.ulbFile)]));
+    // PDFs an admin uploaded (afsFile), shown next to the ULB's own PDF, and where their digitization stands
+    const afsPdfs = new Map<string, AfsPdf>();
+    const afsRecords = new Map<string, V3Record>();
+    for (const r of existing) {
+      if (!r.afsFile?.pdfUrl) continue;
+      afsPdfs.set(r.ulb.toString(), {
+        pdfUrl: r.afsFile.pdfUrl,
+        noOfPages: r.afsFile.noOfPages,
+        fileSizeBytes: r.afsFile.fileSizeBytes,
+      });
+      afsRecords.set(r.ulb.toString(), this.toView(r.afsFile));
+    }
     await this.followOriginals(rows, records, yearId, auditType);
 
-    return { rows, records };
+    return { rows, records, afsPdfs, afsRecords };
   }
 
   /**
@@ -871,7 +1588,7 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       const record = records.get(row.ulb.toString());
       metrics[byStatus[this.displayStatus(record)]]++;
       if (record?.isConsolidated) metrics.consolidated++;
-      if (record?.isMismatch) metrics.mismatch++;
+      if (record?.scores?.isMismatch) metrics.mismatch++;
       if (row.isDuplicate) metrics.duplicate++;
     }
     return metrics;
@@ -886,8 +1603,16 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     if (query.digitizationV3Status && status !== query.digitizationV3Status) return false;
     if (query.isConsolidated === true && !record?.isConsolidated) return false;
     if (query.isConsolidated === false && !(isDigitized && !record?.isConsolidated)) return false;
-    if (query.isMismatch === true && !record?.isMismatch) return false;
-    if (query.isMismatch === false && !(isDigitized && !record?.isMismatch)) return false;
+    if (query.isMismatch === true && !record?.scores?.isMismatch) return false;
+    if (query.isMismatch === false && !(isDigitized && !record?.scores?.isMismatch)) return false;
+
+    if (query.digitizedFrom || query.digitizedTo) {
+      // Files with no digitized date (not finished, or no timestamp) never match a date range
+      if (!record?.digitizedAt) return false;
+      const at = new Date(record.digitizedAt).getTime();
+      if (query.digitizedFrom && at < new Date(query.digitizedFrom).getTime()) return false;
+      if (query.digitizedTo && at > new Date(query.digitizedTo).getTime()) return false;
+    }
     return true;
   }
 
@@ -898,7 +1623,15 @@ export class AfsDigitizationV3Service implements OnModuleInit {
   private toView(item?: {
     digitizationStatus?: string;
     digitizationMsg?: string;
-    queue?: { status?: string };
+    queue?: { status?: string; processedOn?: Date; finishedOn?: Date };
+    totalProcessingTimeMs?: number;
+    scores?: {
+      isMismatch?: boolean;
+      ocrConfidenceScore?: number;
+      accuracyScore?: number;
+      arithmeticAssessment?: string;
+      overallAssessment?: string;
+    };
     detectedDocTypes?: string[];
     segments?: V3View['segments'];
     isConsolidated?: boolean;
@@ -932,12 +1665,27 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       status = DigitizationV3Statuses.FAILED;
     }
 
+    const finishedOn = item.queue?.finishedOn;
+    const processedOn = item.queue?.processedOn;
+    const finished = status === DigitizationV3Statuses.DIGITIZED || status === DigitizationV3Statuses.FAILED;
+    let elapsedMs: number | undefined;
+    if (finished) {
+      if (typeof item.totalProcessingTimeMs === 'number') elapsedMs = item.totalProcessingTimeMs;
+      else if (finishedOn && processedOn) {
+        const diff = new Date(finishedOn).getTime() - new Date(processedOn).getTime();
+        if (diff >= 0) elapsedMs = diff;
+      }
+    }
+
     return {
       status,
+      digitizedAt: finished && finishedOn ? finishedOn : undefined,
+      elapsedMs,
+      // `isMismatch` used to sit on the file itself: fall back to it for files digitized before it moved into `scores`
+      scores: { ...item.scores, isMismatch: !!(item.scores?.isMismatch ?? item.isMismatch) },
       detectedDocTypes: item.detectedDocTypes ?? [],
       segments: item.segments ?? [],
       isConsolidated: !!item.isConsolidated,
-      isMismatch: !!item.isMismatch,
       noOfPages: item.noOfPages,
       excelUrl: item.excelUrl || undefined,
       jobId: item.requestId || undefined,
@@ -957,8 +1705,10 @@ export class AfsDigitizationV3Service implements OnModuleInit {
     return record?.status ?? DigitizationV3Statuses.NOT_DIGITIZED;
   }
 
-  private shapeRow(row: UlbRow, docType: string, record: V3Record) {
+  private shapeRow(row: UlbRow, docType: string, record: V3Record, afsPdf?: AfsPdf, afsRecord?: V3Record) {
     const excelUrl = this.displayStatus(record) === DigitizationV3Statuses.DIGITIZED ? record?.excelUrl : undefined;
+    const afsExcelUrl =
+      this.displayStatus(afsRecord) === DigitizationV3Statuses.DIGITIZED ? afsRecord?.excelUrl : undefined;
     return {
       _id: row._id,
       ulb: row.ulb,
@@ -974,6 +1724,17 @@ export class AfsDigitizationV3Service implements OnModuleInit {
       isDuplicate: row.isDuplicate,
       duplicateOfDocType: row.duplicateOfDocType ?? null,
       pdfUrlSigned: row.pdfUrl ? this.fileTokenService.signFileUrl(row.pdfUrl) : null,
+      afsPdfUrl: afsPdf?.pdfUrl ?? null,
+      afsPdfUrlSigned: afsPdf ? this.fileTokenService.signFileUrl(afsPdf.pdfUrl) : null,
+      afsPdfPageCount: afsPdf?.noOfPages || null,
+      afsPdfSizeBytes: afsPdf?.fileSizeBytes ?? null,
+      // Digitization of the uploaded AFS PDF (same shape as `digitization`); absent until a PDF is uploaded
+      afsDigitization: afsPdf
+        ? afsRecord
+          ? { ...afsRecord, status: this.displayStatus(afsRecord) }
+          : { status: DigitizationV3Statuses.NOT_DIGITIZED }
+        : null,
+      afsExcelUrlSigned: afsExcelUrl ? this.fileTokenService.signFileUrl(afsExcelUrl) : null,
       // Same as the PDF: a signed link served by this API. Only for files v3 has digitized.
       excelUrl: excelUrl ?? null,
       excelUrlSigned: excelUrl ? this.fileTokenService.signFileUrl(excelUrl) : null,

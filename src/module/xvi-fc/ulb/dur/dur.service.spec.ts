@@ -209,6 +209,7 @@ describe('DurService', () => {
       documents: [
         {
           docId: 'tiedGrant',
+          processingStatus: 'FAILED',
           currentUpload: { uploadId: 'upload-1', file: { path: 's3/key/tiedGrant.pdf' } },
           manualReviewDecision: null,
           uploadBlockedUntil: null,
@@ -235,6 +236,42 @@ describe('DurService', () => {
           $inc: { retryValidationCount: 1 },
         }),
       );
+    });
+
+    it("clears the previous run's verdict and manual-review flag, so a crash on the retry can't reuse the old FAIL", async () => {
+      await service.retryUpload(durId, 'tiedGrant' as any, ulbUser);
+
+      expect(mockDurModel.updateOne).toHaveBeenCalledWith(
+        { _id: durId, 'documents.docId': 'tiedGrant' },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            'documents.$.currentUpload.ocrInfo.validationStatus': null,
+            'documents.$.currentUpload.ocrInfo.failedChecks': [],
+            'documents.$.currentUpload.ocrInfo.isManualReviewRequested': false,
+            'documents.$.currentUpload.ocrInfo.manualReviewRequestedAt': null,
+          }),
+        }),
+      );
+      expect(mockUploadHistoryModel.updateOne).toHaveBeenCalledWith(
+        { uploadId: 'upload-1' },
+        expect.objectContaining({
+          $set: expect.objectContaining({ 'ocrInfo.validationStatus': null, 'ocrInfo.isManualReviewRequested': false }),
+        }),
+      );
+    });
+
+    it('refuses to retry a document that already passed', async () => {
+      mockDurModel.findById.mockReturnValue(
+        mockQuery({
+          ...durWithUpload,
+          documents: [{ ...durWithUpload.documents[0], processingStatus: 'PASSED' }, durWithUpload.documents[1]],
+        }),
+      );
+
+      await expect(service.retryUpload(durId, 'tiedGrant' as any, ulbUser)).rejects.toThrow(
+        'This document has already passed validation and cannot be retried.',
+      );
+      expect(mockDurQueue.add).not.toHaveBeenCalled();
     });
 
     it('enqueues a fresh validation job for the same upload', async () => {

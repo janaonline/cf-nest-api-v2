@@ -3,7 +3,14 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  MOHUA_DECIDED_ROW_STATUSES,
+  PmuUndoEligibilityService,
+} from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -15,6 +22,7 @@ import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import { FileInfoNormalizerService } from 'src/module/xvi-fc/common/services/file-info-normalizer.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import { FileTokenService } from 'src/core/file-token/file-token.service';
 import type { FileInfo } from 'src/schemas/common/file.schema';
 import { YearIdToLabel } from 'src/core/constants/years';
@@ -38,7 +46,7 @@ import type {
 import type { PmuWorklistData } from 'src/module/xvi-fc/common/types/pmu-worklist.type';
 import { State, StateDocument } from 'src/schemas/state.schema';
 
-type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
+type PmuFormLeanWithPopulate =XvifcActorSourceDocument & {
   _id: Types.ObjectId;
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
@@ -46,7 +54,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   fcDeclaration?: FileInfo | null;
   fcUnspentDeclaration?: FileInfo | null;
   checkboxConfirmation?: boolean;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /** Form-level PMU review concerns: review metadata (GET) and complete-form approve/reject. See
@@ -65,6 +73,8 @@ export class FcUnspentPmuReviewService {
     private readonly fileTokenService: FileTokenService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly formJsonConfigService: FcUnspentDeclarationFormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state worklist backing the PMU worklist page — join/NOT_STARTED mechanics live in the
@@ -78,7 +88,7 @@ export class FcUnspentPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcUnspentStateFormDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -142,6 +152,9 @@ export class FcUnspentPmuReviewService {
     );
 
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
+    permissions.canUndo =
+      (await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'FC_UNSPENT', id: doc._id })) &&
+      !(await this.hasMohuaDecidedRows(doc._id, doc.isFcUnspent === true));
 
     const { fields: allFields, thresholdPercent: threshold } = await this.formJsonConfigService.loadFormConfig(yearId);
     const questionsConfig = getFcUnspentFieldsByType(allFields, 'FC_UNSPENT_MAIN_FORM_FIELDS');
@@ -169,7 +182,7 @@ export class FcUnspentPmuReviewService {
       checkboxConfirmation: doc.checkboxConfirmation ?? false,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       threshold,
       questions,
       rowSummary,
@@ -222,7 +235,10 @@ export class FcUnspentPmuReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU && r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      (r) =>
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_SO &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -243,7 +259,7 @@ export class FcUnspentPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU has no status of its own once approved — see CLAUDE.md's "PMU vs MoHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
     const newAuditRevision = form.auditRevision + 1;
 
     const session = await this.formModel.db.startSession();
@@ -254,7 +270,7 @@ export class FcUnspentPmuReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null })),
+        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -288,22 +304,22 @@ export class FcUnspentPmuReviewService {
     });
   }
 
-  /** Requires a non-empty `pmuRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
+  /** Requires a non-empty `rejectionRemarks`. See CLAUDE.md's "The complete-form approve/reject branch
    *  logic" section for the already-approved-rows block. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<FcUnspentPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -325,7 +341,9 @@ export class FcUnspentPmuReviewService {
     let toReject: Awaited<ReturnType<FcUnspentPmuRowReviewDomainService['getActiveRows']>> = [];
     if (form.isFcUnspent === true) {
       const activeRows = await this.domainService.getActiveRows(form._id);
-      const alreadyActive = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      const alreadyActive = activeRows.filter(
+        (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      );
       if (alreadyActive.length > 0) {
         throwXviFcValidationError({
           _form: [
@@ -377,13 +395,27 @@ export class FcUnspentPmuReviewService {
       await session.endSession();
     }
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'FC Unspent Declaration',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('FC Unspent Declaration form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
+
+  /** True when MoHUA has already acknowledged or returned any active row — the case undo must refuse. */
+  private async hasMohuaDecidedRows(formId: Types.ObjectId, isYesBranch: boolean): Promise<boolean> {
+    if (!isYesBranch) return false;
+    const rows = await this.domainService.getActiveRows(formId);
+    return rows.some((r) => MOHUA_DECIDED_ROW_STATUSES.includes(r.rowStatus as number));
+  }
 
   private async approveDirectly(
     form: FcUnspentPmuFormLean,
@@ -395,7 +427,7 @@ export class FcUnspentPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU has no status of its own once approved — see CLAUDE.md's "PMU vs MoHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
     const newAuditRevision = form.auditRevision + 1;
 
     const session = await this.formModel.db.startSession();

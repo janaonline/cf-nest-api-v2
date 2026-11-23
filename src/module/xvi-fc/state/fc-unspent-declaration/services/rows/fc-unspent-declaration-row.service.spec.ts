@@ -574,7 +574,14 @@ describe('FcUnspentDeclarationRowService', () => {
         form: formOid,
         isActive: true,
         ulbId: { $nin: [ulbOid1] },
-        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        rowStatus: {
+          $nin: [
+            FORM_STATUS.UNDER_REVIEW_BY_PMU,
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
       expect(update.$set).toMatchObject({ isActive: false });
     });
@@ -816,7 +823,14 @@ describe('FcUnspentDeclarationRowService', () => {
 
       const [filter] = getUpdateManyArgs(rowModel['updateMany']);
       expect(filter).toMatchObject({
-        rowStatus: { $nin: [FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA] },
+        rowStatus: {
+          $nin: [
+            FORM_STATUS.UNDER_REVIEW_BY_PMU,
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
       });
     });
 
@@ -841,10 +855,21 @@ describe('FcUnspentDeclarationRowService', () => {
   });
 
   describe('deactivateAllRows', () => {
-    it('deactivates every active row for the form', async () => {
+    it('deactivates every active row except those under review or approved, so a claimed row is never dropped', async () => {
       await service.deactivateAllRows(formOid, userOid, mockSession);
       const [filter, update] = getUpdateManyArgs(rowModel['updateMany']);
-      expect(filter).toEqual({ form: formOid, isActive: true });
+      expect(filter).toEqual({
+        form: formOid,
+        isActive: true,
+        rowStatus: {
+          $nin: [
+            FORM_STATUS.UNDER_REVIEW_BY_PMU,
+            FORM_STATUS.UNDER_REVIEW_BY_SO,
+            FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+          ],
+        },
+      });
       expect(update.$set).toMatchObject({ isActive: false, updatedBy: userOid });
     });
   });

@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -13,6 +16,8 @@ import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklis
 import type { GetPmuWorklistQueryDto } from 'src/module/xvi-fc/common/dto/get-pmu-worklist-query.dto';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { EulbFormJsonConfigService } from 'src/module/xvi-fc/state/elected-urban-local-bodies/services/form-json/elected-urban-local-bodies-form-json.service';
 import { getFieldsByType } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-form-json.helpers';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -27,6 +32,12 @@ import {
   EulbFormDocument,
   EulbValidationStatus,
 } from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-form.schema';
+import {
+  ElectedUrbanLocalBodiesRow,
+  EulbRowDocument,
+} from 'src/schemas/xvi-fc/state/elected-urban-local-bodies-row.schema';
+import { computeEulbStatusSummary } from 'src/module/xvi-fc/state/elected-urban-local-bodies/helpers/elected-urban-local-bodies-status-summary.helper';
+import { deriveElectedBodyStatuses } from 'src/module/xvi-fc/state/elected-urban-local-bodies/validators/elected-urban-local-bodies.validator';
 import { ElectedUrbanLocalBodiesPmuRowReviewDomainService } from './elected-urban-local-bodies-pmu-row-review-domain.service';
 import type { EulbPmuReviewData, EulbPmuSubmitData } from '../types/elected-urban-local-bodies-pmu-review.types';
 import type { PmuWorklistData } from 'src/module/xvi-fc/common/types/pmu-worklist.type';
@@ -39,7 +50,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   checkboxConfirmation?: boolean;
   electedBodyExcelFile?: unknown;
   signedElectedbodyFile?: unknown;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
   validationStatus?: EulbValidationStatus;
 };
 
@@ -59,11 +70,15 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     private readonly ulbModel: Model<UlbDocument>,
     @InjectModel(State.name)
     private readonly stateModel: Model<StateDocument>,
+    @InjectModel(ElectedUrbanLocalBodiesRow.name)
+    private readonly rowModel: Model<EulbRowDocument>,
     private readonly domainService: ElectedUrbanLocalBodiesPmuRowReviewDomainService,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly eulbFormJsonConfig: EulbFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state worklist: every active+published state left-joined against its EULB document (if
@@ -76,7 +91,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<EulbFormDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -128,12 +143,23 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const rowSummary = await this.domainService.getRowSummary(doc._id, doc.activeDatasetVersion ?? 0);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus, { includeRowReview: true });
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'ELECTED_BODY', id: doc._id });
 
     const fields = await this.eulbFormJsonConfig.loadFields(yearId);
     const mainFormFields = getFieldsByType(fields, 'EULB_MAIN_FORM_FIELDS');
     if (mainFormFields.length === 0) {
       throw new NotFoundException('EULB_MAIN_FORM_FIELDS group is empty in form configuration.');
     }
+
+    // Always computed here (unlike the State page, which waits for MoHUA review): PMU reviews from 13.
+    const statusSummary = await computeEulbStatusSummary(
+      this.rowModel,
+      doc._id as Types.ObjectId,
+      stateId,
+      yearId,
+      doc.activeDatasetVersion ?? 0,
+      deriveElectedBodyStatuses(getFieldsByType(fields, 'EULB_ROW_EDIT_FIELDS')),
+    );
 
     const savedData: Record<string, unknown> = {};
     if (doc.checkboxConfirmation !== undefined) savedData['checkboxConfirmation'] = doc.checkboxConfirmation;
@@ -153,9 +179,10 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
       yearId,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       rowSummary,
+      statusSummary,
       permissions,
       actors,
       validationStatus: doc.validationStatus ?? 'NOT_VALIDATED',
@@ -165,7 +192,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
   }
 
   /** Approves every currently-pending row and, once none remain pending/rejected/needing-update,
-   *  settles the parent at `UNDER_REVIEW_BY_MOHUA` in the same transaction — mirrors FC Unspent's
+   *  settles the parent at `UNDER_REVIEW_BY_SO` in the same transaction — mirrors FC Unspent's
    *  `approveCompleteForm` for the Yes-branch case. PMU has no status of its own once approved;
    *  rows and parent alike land on the same status MoHUA's own review already uses. */
   async approveCompleteForm(
@@ -189,7 +216,10 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     }
 
     const blocking = activeRows.filter(
-      (r) => r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU && r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+      (r) =>
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_PMU &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_SO &&
+        r.rowStatus !== FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
     );
     if (blocking.length > 0) {
       throwXviFcValidationError({
@@ -218,7 +248,7 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
         form._id,
         stateOid,
         yearOid,
-        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA, rejectionRemark: null })),
+        toApprove.map((row) => ({ row, newStatus: FORM_STATUS.UNDER_REVIEW_BY_SO, rejectionRemark: null })),
         userOid,
         ip,
         userAgent,
@@ -242,22 +272,22 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     });
   }
 
-  /** Requires a non-empty `pmuRemarks`. Blocks if any row has already been individually approved —
+  /** Requires a non-empty `rejectionRemarks`. Blocks if any row has already been individually approved —
    *  mirrors FC Unspent's `rejectCompleteForm`. */
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<EulbPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -266,7 +296,9 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     assertCanPmuMutateForm(form.currentFormStatus);
 
     const activeRows = await this.domainService.getActiveRows(form._id, form.activeDatasetVersion);
-    const alreadyActive = activeRows.filter((r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+    const alreadyActive = activeRows.filter(
+      (r) => r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_SO || r.rowStatus === FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+    );
     if (alreadyActive.length > 0) {
       throwXviFcValidationError({
         _form: [
@@ -322,6 +354,12 @@ export class ElectedUrbanLocalBodiesPmuReviewService {
     } finally {
       await session.endSession();
     }
+
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: stateOid,
+      formName: 'Elected Body Status',
+      remarks: trimmedRemarks,
+    });
 
     return xviFcSuccess('Elected Urban Local Bodies form rejected.', {
       currentFormStatus: toStatus,

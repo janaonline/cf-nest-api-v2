@@ -6,12 +6,14 @@ import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/s
 
 export const CLAIM_LETTER_BATCH_BLOCKED = 'CLAIM_LETTER_BATCH_BLOCKED';
 
-/** Draft, under MoHUA review, or returned by MoHUA. */
-const ACTIVE_STATUSES: number[] = [
-  FORM_STATUS.IN_PROGRESS,
-  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-  FORM_STATUS.RETURNED_BY_MOHUA,
-];
+/**
+ * Draft, under SO review, or returned by MoHUA. UNDER_REVIEW_BY_MOHUA (5) is not active: once the SO has approved a
+ * letter the State can start the next (MoHUA's final 5 -> 7 step comes later). A letter the SO returned (16) is
+ * never active: the return also abandons it, which frees its slot (see `isReturnedClaimLetter`).
+ * ponytail: RETURNED_BY_MOHUA (6) is listed for MoHUA's own return, not built yet; ADR 0004 notes that it would make
+ * an old letter block newer ones, so revisit when that step is built.
+ */
+const ACTIVE_STATUSES: number[] = [FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_SO, FORM_STATUS.RETURNED_BY_MOHUA];
 
 export interface ClaimLetterActiveBatch {
   _id: Types.ObjectId;

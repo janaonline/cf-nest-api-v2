@@ -35,8 +35,7 @@ describe('ClaimLetterSubmitService', () => {
   let service: ClaimLetterSubmitService;
   let eligibilityService: {
     resolveRemainingUlbIds: jest.Mock;
-    evaluateStateLevelGate: jest.Mock;
-    resolveUlbLevelEligibility: jest.Mock;
+    recheckClaimLetter: jest.Mock;
   };
   let expectedUlbSetService: { resolve: jest.Mock };
   let historyService: { recordTransition: jest.Mock };
@@ -66,8 +65,7 @@ describe('ClaimLetterSubmitService', () => {
   beforeEach(async () => {
     eligibilityService = {
       resolveRemainingUlbIds: jest.fn().mockResolvedValue([]),
-      evaluateStateLevelGate: jest.fn().mockResolvedValue({ passed: true, sources: [] }),
-      resolveUlbLevelEligibility: jest.fn().mockResolvedValue({ perUlbEligible: new Map() }),
+      recheckClaimLetter: jest.fn().mockResolvedValue({ failedStateConditions: [], ineligibleUlbs: [] }),
     };
     expectedUlbSetService = { resolve: jest.fn() };
     historyService = { recordTransition: jest.fn().mockResolvedValue(undefined) };
@@ -139,7 +137,7 @@ describe('ClaimLetterSubmitService', () => {
       expect(historyService.recordTransition).not.toHaveBeenCalled();
     });
 
-    it('throws ConflictException when status is neither IN_PROGRESS nor UNDER_REVIEW_BY_MOHUA', async () => {
+    it('throws ConflictException when status is neither IN_PROGRESS nor an already-submitted status', async () => {
       batchModel.findOne.mockReturnValue(q({ ...readyParent, currentFormStatus: 6 }));
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(ConflictException);
     });
@@ -155,18 +153,18 @@ describe('ClaimLetterSubmitService', () => {
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(BadRequestException);
     });
 
-    it('transitions to UNDER_REVIEW_BY_MOHUA and records history with both files inside one transaction', async () => {
+    it('transitions to UNDER_REVIEW_BY_SO and records history with both files inside one transaction', async () => {
       const finalClaimPdf = { file: { path: 'final/x.pdf' }, sourceKey: 'reviewed-key', pageCount: 7 };
       batchModel.findOne.mockReturnValue(q(readyParent));
-      batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, currentFormStatus: 5, finalClaimPdf }));
+      batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, currentFormStatus: 15, finalClaimPdf }));
 
       const result = await service.submit('x', stateUser, 'reviewed-key', '127.0.0.1', 'jest-agent');
 
-      expect(result.data?.currentFormStatus).toBe(5);
+      expect(result.data?.currentFormStatus).toBe(15);
       expect(historyService.recordTransition).toHaveBeenCalledWith(
         expect.objectContaining({
           fromStatus: 2,
-          toStatus: 5,
+          toStatus: 15,
           actionSource: 'DIRECT_STATE_REVIEW',
           submittedFiles: { signedClaimFile: { path: 'x/signed.pdf' }, finalClaimPdf },
         }),
@@ -175,7 +173,10 @@ describe('ClaimLetterSubmitService', () => {
       expect(session.commitTransaction).toHaveBeenCalled();
 
       const [filter] = batchModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>];
-      expect(filter['$or']).toEqual([{ editLockToken: null }, { editLockAcquiredAt: { $lt: expect.any(Date) } }]);
+      expect(filter['$or']).toEqual([
+        { editLockToken: null },
+        { editLockAcquiredAt: { $lt: expect.any(Date) as unknown } },
+      ]);
       // Pinned as read, so a re-upload or letter-details save in between cannot slip in.
       expect(filter['signedClaimFile.path']).toBe('x/signed.pdf');
       expect(filter['finalClaimPdf.sourceKey']).toBe('reviewed-key');
@@ -217,30 +218,26 @@ describe('ClaimLetterSubmitService', () => {
 
     it('re-checks the State gate fresh and names the failed conditions', async () => {
       batchModel.findOne.mockReturnValue(q(readyParent));
-      eligibilityService.evaluateStateLevelGate.mockResolvedValue({
-        passed: false,
-        sources: [
-          { result: 'PASSED', displayLabel: 'SFC', formType: 'SFC' },
-          { result: 'FAILED', displayLabel: 'Grant Transfer Certificate', formType: 'GTC' },
-        ],
+      eligibilityService.recheckClaimLetter.mockResolvedValue({
+        failedStateConditions: ['Grant Transfer Certificate'],
+        ineligibleUlbs: [],
       });
 
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(
         'The State-level claim conditions are no longer met: Grant Transfer Certificate.',
       );
-      expect(eligibilityService.resolveUlbLevelEligibility).not.toHaveBeenCalled();
       expect(connection.startSession).not.toHaveBeenCalled();
     });
 
     it('re-checks every batch ULB fresh and names the ones no longer eligible (first 10 + more)', async () => {
       batchModel.findOne.mockReturnValue(q(readyParent));
-      const children = Array.from({ length: 12 }, (_, i) => ({
-        ulbId: new Types.ObjectId(),
-        ulbSnapshot: { name: `ULB ${i + 1}` },
-      }));
-      batchUlbModel.find.mockReturnValue(q(children));
-      eligibilityService.resolveUlbLevelEligibility.mockResolvedValue({
-        perUlbEligible: new Map(children.map((c) => [String(c.ulbId), false])),
+      eligibilityService.recheckClaimLetter.mockResolvedValue({
+        failedStateConditions: [],
+        ineligibleUlbs: Array.from({ length: 12 }, (_, i) => ({
+          ulbId: String(i),
+          name: `ULB ${i + 1}`,
+          reason: 'NOT_ELIGIBLE',
+        })),
       });
 
       await expect(service.submit('x', stateUser, 'reviewed-key')).rejects.toThrow(
@@ -324,22 +321,22 @@ describe('ClaimLetterSubmitService', () => {
 
       it('allows submission once no ULBs remain unclaimed', async () => {
         batchModel.findOne.mockReturnValue(q(finalBatchParent));
-        batchModel.findOneAndUpdate.mockReturnValue(q({ ...finalBatchParent, currentFormStatus: 5 }));
+        batchModel.findOneAndUpdate.mockReturnValue(q({ ...finalBatchParent, currentFormStatus: 15 }));
         expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: 'ulb-1', name: 'Alpha ULB' }]);
         eligibilityService.resolveRemainingUlbIds.mockResolvedValue([]);
 
         const result = await service.submit('x', stateUser, 'reviewed-key');
 
-        expect(result.data?.currentFormStatus).toBe(5);
+        expect(result.data?.currentFormStatus).toBe(15);
       });
 
       it('does not run the completeness check for a non-final batch (batchNumber 2)', async () => {
         batchModel.findOne.mockReturnValue(q({ ...readyParent, batchNumber: 2 }));
-        batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, batchNumber: 2, currentFormStatus: 5 }));
+        batchModel.findOneAndUpdate.mockReturnValue(q({ ...readyParent, batchNumber: 2, currentFormStatus: 15 }));
 
         const result = await service.submit('x', stateUser, 'reviewed-key');
 
-        expect(result.data?.currentFormStatus).toBe(5);
+        expect(result.data?.currentFormStatus).toBe(15);
         expect(expectedUlbSetService.resolve).not.toHaveBeenCalled();
         expect(eligibilityService.resolveRemainingUlbIds).not.toHaveBeenCalled();
       });

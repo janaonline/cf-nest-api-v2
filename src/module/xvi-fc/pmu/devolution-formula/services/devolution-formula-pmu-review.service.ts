@@ -3,7 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -13,6 +17,7 @@ import { buildPmuWorklistRows } from 'src/module/xvi-fc/common/utils/pmu-worklis
 import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/state-form-pmu-review.helper';
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import { DfFormJsonConfigService } from 'src/module/xvi-fc/state/devolution-formula/services/form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from 'src/module/xvi-fc/state/devolution-formula/helpers/devolution-formula-form-json.helpers';
 import { UlbEligibilityService } from 'src/module/ulb-eligibility/ulb-eligibility.service';
@@ -56,7 +61,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   _id: Types.ObjectId;
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
   excelFile?: unknown;
   checkboxConfirmation?: boolean;
 };
@@ -84,6 +89,8 @@ export class DevolutionFormulaPmuReviewService {
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly dfFormJsonConfig: DfFormJsonConfigService,
     private readonly ulbEligibilityService: UlbEligibilityService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state PMU worklist — see CLAUDE.md's "Worklist synthesis" section. */
@@ -94,7 +101,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<DevolutionFormulaFormDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -145,6 +152,7 @@ export class DevolutionFormulaPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'DEVOLUTION_FORMULA', id: doc._id });
 
     const fields = await this.dfFormJsonConfig.loadFields(yearId);
     const mainFormFields = getDfFieldsByType(fields, 'DF_MAIN_FORM_FIELDS');
@@ -169,7 +177,7 @@ export class DevolutionFormulaPmuReviewService {
       installment,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -235,8 +243,8 @@ export class DevolutionFormulaPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // No status of its own once approved — see CLAUDE.md's "Approve lands directly on
-    // UNDER_REVIEW_BY_MOHUA" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    // UNDER_REVIEW_BY_SO" section.
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -250,17 +258,17 @@ export class DevolutionFormulaPmuReviewService {
     stateId: string,
     yearId: string,
     installment: DfInstallment,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<DevolutionFormulaPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -283,11 +291,18 @@ export class DevolutionFormulaPmuReviewService {
       userAgent,
     );
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: new Types.ObjectId(stateId),
+      formName: 'ULB-wise Allocation',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('ULB-wise Allocation form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
+
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -298,7 +313,7 @@ export class DevolutionFormulaPmuReviewService {
   ): Promise<DevolutionFormulaPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus activeDatasetVersion')
+      .select('state year installment currentFormStatus activeDatasetVersion rejectionRemarks')
       .lean<DevolutionFormulaPmuFormLean>()
       .exec();
   }
@@ -309,14 +324,14 @@ export class DevolutionFormulaPmuReviewService {
     form: DevolutionFormulaPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<DevolutionFormulaFormDocument>({
       formModel: this.formModel,
@@ -340,7 +355,7 @@ export class DevolutionFormulaPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }

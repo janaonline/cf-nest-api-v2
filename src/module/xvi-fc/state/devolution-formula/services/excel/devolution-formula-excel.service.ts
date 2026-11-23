@@ -53,6 +53,7 @@ import type {
   DfValidateExcelResponseData,
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
+import { assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
 import { amountsAreEqual, snapToWholeRupee } from '../../helpers/devolution-formula-tolerance.helpers';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
@@ -202,6 +203,7 @@ export class DevolutionFormulaExcelService {
 
     if (existingDoc) {
       assertCanStateEditForm(fromStatus);
+      await assertNoFrozenDfRows(this.rowModel, existingDoc._id as Types.ObjectId, existingDoc.activeDatasetVersion ?? 0);
     }
 
     // 2. Normalize + validate the inbound canonical file object (path, extension/MIME, size)
@@ -596,6 +598,7 @@ export class DevolutionFormulaExcelService {
     }
 
     assertCanStateEditForm(form.currentFormStatus ?? FORM_STATUS.NOT_STARTED);
+    await assertNoFrozenDfRows(this.rowModel, form._id as Types.ObjectId, form.activeDatasetVersion ?? 0);
 
     const grantAlloc = await this.dfService.resolveGrantAllocation(stateOid, yearOid);
     // Defensive rounding — see the matching comment in validateExcel above.

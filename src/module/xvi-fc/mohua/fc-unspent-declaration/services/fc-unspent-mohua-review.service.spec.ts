@@ -13,6 +13,9 @@ import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FcUnspentMohuaFormLean, FcUnspentMohuaRowLean } from '../types/fc-unspent-mohua-review.types';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -118,6 +121,7 @@ describe('FcUnspentMohuaReviewService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
         FcUnspentMohuaReviewService,
         { provide: getModelToken(XviFcUnspentStateForm.name), useValue: formModel },
         { provide: FcUnspentRowReviewDomainService, useValue: domainService },
@@ -398,7 +402,7 @@ describe('FcUnspentMohuaReviewService', () => {
   // ─── rejectCompleteForm ─────────────────────────────────────────────────────
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty mohuaRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', mohuaUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -420,7 +424,7 @@ describe('FcUnspentMohuaReviewService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('No-branch: returns to RETURNED_BY_MOHUA and stores mohuaRemarks', async () => {
+    it('No-branch: returns to RETURNED_BY_MOHUA and stores rejectionRemarks', async () => {
       domainService['findForm'] = jest.fn().mockResolvedValue(makeForm({ isFcUnspent: false }));
 
       const result = await service.rejectCompleteForm(

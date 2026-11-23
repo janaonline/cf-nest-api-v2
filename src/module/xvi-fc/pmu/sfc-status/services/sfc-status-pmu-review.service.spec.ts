@@ -16,6 +16,14 @@ import { State } from 'src/schemas/state.schema';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { FORM_STATUS, FormHistoryAction } from 'src/common/constants/form-status.constants';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
+
+const mockFormReturnedNotification = { notifyStateFormReturned: jest.fn().mockResolvedValue(undefined) };
+const mockUndoEligibility = {
+  canUndo: jest.fn().mockResolvedValue(false),
+  assertNoClaimLetterLocks: jest.fn().mockResolvedValue(undefined),
+};
 
 function q<T>(value: T) {
   const chain: Record<string, unknown> = {};
@@ -65,7 +73,7 @@ describe('SfcStatusPmuReviewService', () => {
       ),
       findOneAndUpdate: jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA })),
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO })),
       find: jest.fn().mockReturnValue(
         q([
           {
@@ -81,6 +89,8 @@ describe('SfcStatusPmuReviewService', () => {
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
+        { provide: FormReturnedNotificationService, useValue: mockFormReturnedNotification },
+        { provide: PmuUndoEligibilityService, useValue: mockUndoEligibility },
         SfcStatusPmuReviewService,
         StateFormPmuReviewHelper,
         XvifcFormActorsService,
@@ -187,43 +197,47 @@ describe('SfcStatusPmuReviewService', () => {
       expect(result.data!.permissions.canRejectForm).toBe(false);
     });
 
-    it('surfaces a previously-stored pmuRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
-      formModel['findOne'] = jest
-        .fn()
-        .mockReturnValue(
-          q({ _id: formOid, currentFormStatus: FORM_STATUS.RETURNED_BY_PMU, pmuRemarks: 'Please redo section 2.' }),
-        );
+    it('surfaces a previously-stored rejectionRemarks (e.g. while RETURNED_BY_PMU), null when absent', async () => {
+      formModel['findOne'] = jest.fn().mockReturnValue(
+        q({
+          _id: formOid,
+          currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
+          rejectionRemarks: 'Please redo section 2.',
+        }),
+      );
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.pmuRemarks).toBe('Please redo section 2.');
+      expect(result.data!.rejectionRemarks).toBe('Please redo section 2.');
 
       formModel['findOne'] = jest
         .fn()
         .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU }));
       const result2 = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result2.data!.pmuRemarks).toBeNull();
+      expect(result2.data!.rejectionRemarks).toBeNull();
     });
 
-    it('remains viewable once approved (PMU has no status of its own — lands on UNDER_REVIEW_BY_MOHUA)', async () => {
+    it('remains viewable once approved (PMU has no status of its own — lands on UNDER_REVIEW_BY_SO)', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('grants canApproveForm/canRejectForm only for an admin-subrole PMU user on a mutable form', async () => {
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
-      expect(result.data!.permissions).toEqual({ canView: true, canApproveForm: true, canRejectForm: true });
+      expect(result.data!.permissions).toEqual({ canView: true, canApproveForm: true, canRejectForm: true, canUndo: false });
     });
 
-    it('withholds mutation permissions for a reviewer-subrole PMU user', async () => {
-      const reviewerUser = {
-        _id: userOid.toString(),
-        scope: Scope.PMU,
-        xviFcSubrole: 'reviewer',
-      } as unknown as AuthUser;
+    it('also grants approve/reject to a reviewer-subrole PMU user (reviewers hold APPROVE_STATE_SUBMISSIONS_PMU)', async () => {
+      const reviewerUser = { _id: userOid.toString(), scope: Scope.PMU, xviFcSubrole: 'reviewer' } as unknown as AuthUser;
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), reviewerUser);
-      expect(result.data!.permissions).toEqual({ canView: true, canApproveForm: false, canRejectForm: false });
+      expect(result.data!.permissions).toEqual({ canView: true, canApproveForm: true, canRejectForm: true, canUndo: false });
+    });
+
+    it('withholds mutation permissions for a viewer-subrole PMU user', async () => {
+      const viewerUser = { _id: userOid.toString(), scope: Scope.PMU, xviFcSubrole: 'viewer' } as unknown as AuthUser;
+      const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), viewerUser);
+      expect(result.data!.permissions).toEqual({ canView: true, canApproveForm: false, canRejectForm: false, canUndo: false });
     });
   });
 
@@ -238,17 +252,17 @@ describe('SfcStatusPmuReviewService', () => {
     it('blocks mutation when the form is not UNDER_REVIEW_BY_PMU', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions the form to UNDER_REVIEW_BY_MOHUA via findOneAndUpdate', async () => {
+    it('transitions the form to UNDER_REVIEW_BY_SO via findOneAndUpdate', async () => {
       await service.approveCompleteForm(stateOid.toString(), yearOid.toString(), pmuUser, '127.0.0.1', 'jest');
       const call = formModel['findOneAndUpdate'].mock.calls[0] as unknown[];
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
-      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(setArg['currentFormStatus']).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
 
     it('writes a PMU_APPROVE history row snapshotting the form data, non-transactionally', async () => {
@@ -258,7 +272,7 @@ describe('SfcStatusPmuReviewService', () => {
           expect.objectContaining({
             action: FormHistoryAction.PMU_APPROVE,
             fromStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU,
-            toStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+            toStatus: FORM_STATUS.UNDER_REVIEW_BY_SO,
           }),
         ],
         undefined,
@@ -273,12 +287,12 @@ describe('SfcStatusPmuReviewService', () => {
         '127.0.0.1',
         'jest',
       );
-      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_MOHUA);
+      expect(result.data!.currentFormStatus).toBe(FORM_STATUS.UNDER_REVIEW_BY_SO);
     });
   });
 
   describe('rejectCompleteForm', () => {
-    it('requires a non-empty pmuRemarks', async () => {
+    it('requires a non-empty rejectionRemarks', async () => {
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), '   ', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(BadRequestException);
@@ -287,13 +301,13 @@ describe('SfcStatusPmuReviewService', () => {
     it('blocks mutation when the form is already approved', async () => {
       formModel['findOne'] = jest
         .fn()
-        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_SO }));
       await expect(
         service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('transitions to RETURNED_BY_PMU and stores pmuRemarks', async () => {
+    it('transitions to RETURNED_BY_PMU and stores rejectionRemarks', async () => {
       const result = await service.rejectCompleteForm(
         stateOid.toString(),
         yearOid.toString(),
@@ -307,9 +321,37 @@ describe('SfcStatusPmuReviewService', () => {
       const setArg = (call[1] as { $set: Record<string, unknown> }).$set;
       expect(setArg).toMatchObject({
         currentFormStatus: FORM_STATUS.RETURNED_BY_PMU,
-        pmuRemarks: 'Please redo the figures.',
+        rejectionRemarks: 'Please redo the figures.',
       });
       expect(result.data!.currentFormStatus).toBe(FORM_STATUS.RETURNED_BY_PMU);
+    });
+
+    it('notifies the State users with the remark once the reject is written, and not when it is blocked', async () => {
+      mockFormReturnedNotification.notifyStateFormReturned.mockClear();
+      formModel['findOne'] = jest
+        .fn()
+        .mockReturnValue(q({ _id: formOid, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA }));
+      await expect(
+        service.rejectCompleteForm(stateOid.toString(), yearOid.toString(), 'Fix this.', pmuUser, '127.0.0.1', 'jest'),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockFormReturnedNotification.notifyStateFormReturned).not.toHaveBeenCalled();
+    });
+
+    it('queues the State return notification for a successful reject', async () => {
+      mockFormReturnedNotification.notifyStateFormReturned.mockClear();
+      await service.rejectCompleteForm(
+        stateOid.toString(),
+        yearOid.toString(),
+        'Please redo the figures.',
+        pmuUser,
+        '127.0.0.1',
+        'jest',
+      );
+      expect(mockFormReturnedNotification.notifyStateFormReturned).toHaveBeenCalledWith({
+        stateId: stateOid,
+        formName: 'SFC Status',
+        remarks: 'Please redo the figures.',
+      });
     });
 
     it('writes a PMU_REJECT history row with the remark and data snapshot', async () => {
@@ -331,6 +373,14 @@ describe('SfcStatusPmuReviewService', () => {
         ],
         undefined,
       );
+    });
+  });
+
+  describe('getReviewMetadata canUndo', () => {
+    it('reports whatever the shared eligibility check says', async () => {
+      mockUndoEligibility.canUndo.mockResolvedValueOnce(true);
+      const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), pmuUser);
+      expect(result.data!.permissions.canUndo).toBe(true);
     });
   });
 });

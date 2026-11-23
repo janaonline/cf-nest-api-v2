@@ -35,7 +35,7 @@ describe('ClaimLetterEligibilityService', () => {
   let devolutionFormModel: { findOne: jest.Mock };
   let devolutionRowModel: { find: jest.Mock };
   let batchModel: { find: jest.Mock };
-  let batchUlbModel: { aggregate: jest.Mock };
+  let batchUlbModel: { aggregate: jest.Mock; find?: jest.Mock };
   let ulbLockModel: { find: jest.Mock };
 
   const stateId = new Types.ObjectId().toString();
@@ -976,6 +976,69 @@ describe('ClaimLetterEligibilityService', () => {
 
       expect(count).toBe(0);
       expect(redis.get).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('recheckClaimLetter', () => {
+    const stateOid = new Types.ObjectId();
+    const yearOid = new Types.ObjectId();
+    const okUlb = new Types.ObjectId();
+    const badUlb = new Types.ObjectId();
+    const goneUlb = new Types.ObjectId();
+    const scope = { _id: new Types.ObjectId(), state: stateOid, year: yearOid, installment: 1 as const };
+
+    beforeEach(() => {
+      batchUlbModel.find = jest.fn().mockReturnValue(
+        q([
+          { ulbId: okUlb, ulbSnapshot: { name: 'Khowai' } },
+          { ulbId: badUlb, ulbSnapshot: { name: 'Kumarghat' } },
+          { ulbId: goneUlb, ulbSnapshot: { name: 'Melaghar' } },
+        ]),
+      );
+      // Melaghar is no longer active, so it is not in the State's expected set.
+      expectedUlbSetService.resolve.mockResolvedValue([{ ulbId: String(okUlb) }, { ulbId: String(badUlb) }]);
+      jest.spyOn(service, 'evaluateStateLevelGate').mockResolvedValue({ passed: true, sources: [] } as never);
+      jest.spyOn(service, 'resolveUlbLevelEligibility').mockResolvedValue({
+        perUlbEligible: new Map([
+          [String(okUlb), true],
+          [String(badUlb), false],
+        ]),
+      } as never);
+    });
+
+    it('names a ULB that fails its criteria and one no longer active, and keeps the eligible one', async () => {
+      const result = await service.recheckClaimLetter(scope);
+
+      expect(result.failedStateConditions).toEqual([]);
+      expect(result.ineligibleUlbs).toEqual([
+        { ulbId: String(badUlb), name: 'Kumarghat', reason: 'NOT_ELIGIBLE' },
+        { ulbId: String(goneUlb), name: 'Melaghar', reason: 'NOT_ACTIVE' },
+      ]);
+      // Only active ULBs are evaluated against the criteria.
+      expect(service.resolveUlbLevelEligibility).toHaveBeenCalledWith(String(stateOid), String(yearOid), 1, [
+        String(okUlb),
+        String(badUlb),
+      ]);
+    });
+
+    it('lists the State-level conditions that now fail', async () => {
+      jest.spyOn(service, 'evaluateStateLevelGate').mockResolvedValue({
+        passed: false,
+        sources: [
+          { result: 'PASSED', displayLabel: 'SFC', formType: 'SFC' },
+          { result: 'FAILED', displayLabel: 'Grant Transfer Certificate', formType: 'GTC' },
+        ],
+      } as never);
+
+      const result = await service.recheckClaimLetter(scope);
+
+      expect(result.failedStateConditions).toEqual(['Grant Transfer Certificate']);
+    });
+
+    it('reports nothing when every ULB still qualifies (e.g. one relying on a pending exemption)', async () => {
+      batchUlbModel.find = jest.fn().mockReturnValue(q([{ ulbId: okUlb, ulbSnapshot: { name: 'Khowai' } }]));
+
+      await expect(service.recheckClaimLetter(scope)).resolves.toEqual({ failedStateConditions: [], ineligibleUlbs: [] });
     });
   });
 });

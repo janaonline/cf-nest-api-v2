@@ -3,7 +3,10 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -15,6 +18,8 @@ import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/stat
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -41,7 +46,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
   data?: Record<string, unknown>;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /**
@@ -61,6 +66,8 @@ export class SfcStatusPmuReviewService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly formJsonService: FormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** Cross-state PMU worklist for a year — see `buildPmuWorklistRows` for the join/synthesis
@@ -73,7 +80,7 @@ export class SfcStatusPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcSfcStatusDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -122,6 +129,7 @@ export class SfcStatusPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'SFC_STATUS', id: doc._id });
 
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, SFC_FORM_ID);
     if (!formJson.data?.length) throw new NotFoundException('SFC Status form configuration not found');
@@ -134,7 +142,7 @@ export class SfcStatusPmuReviewService {
       yearId,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -159,7 +167,7 @@ export class SfcStatusPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // No PMU-specific "approved" status — see CLAUDE.md's "Status handling" section.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -172,17 +180,17 @@ export class SfcStatusPmuReviewService {
   async rejectCompleteForm(
     stateId: string,
     yearId: string,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<SfcStatusPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -205,18 +213,25 @@ export class SfcStatusPmuReviewService {
       userAgent,
     );
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: new Types.ObjectId(stateId),
+      formName: 'SFC Status',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('SFC Status form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private async findForm(stateId: string, yearId: string): Promise<SfcStatusPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), formType: SFC_STATUS_FORM_TYPE })
-      .select('state year currentFormStatus data')
+      .select('state year currentFormStatus data rejectionRemarks')
       .lean<SfcStatusPmuFormLean>()
       .exec();
   }
@@ -228,14 +243,14 @@ export class SfcStatusPmuReviewService {
     form: SfcStatusPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<XviFcSfcStatusDocument>({
       formModel: this.formModel,
@@ -259,7 +274,7 @@ export class SfcStatusPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }

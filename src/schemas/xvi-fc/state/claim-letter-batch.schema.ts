@@ -107,6 +107,11 @@ export class ClaimLetterBatch {
   @Prop({ type: Number, enum: [1, 2, 3], required: true })
   batchNumber!: ClaimLetterBatchNumber;
 
+  /** Returned letters (16 or 6) that held this slot before, counted at create: above 0 adds `-R<n>` to the Ref No
+   *  and file names. Never changes. */
+  @Prop({ type: Number, default: 0, immutable: true })
+  resubmissionNumber!: number;
+
   @Prop({ type: Number, required: true, default: 1 })
   version!: number;
 
@@ -242,6 +247,12 @@ export const ClaimLetterBatchSchema = SchemaFactory.createForClass(ClaimLetterBa
 ClaimLetterBatchSchema.index(
   { state: 1, year: 1, installment: 1, batchNumber: 1, version: 1 },
   { unique: true, partialFilterExpression: { isAbandoned: false } },
+);
+
+// Two submitted letters never share a Ref No: a slot reused after a return gets the next resubmissionNumber.
+ClaimLetterBatchSchema.index(
+  { state: 1, year: 1, installment: 1, batchNumber: 1, resubmissionNumber: 1, version: 1 },
+  { unique: true, partialFilterExpression: { submittedAt: { $type: 'date' } } },
 );
 
 // A retried create request can never produce two parents.

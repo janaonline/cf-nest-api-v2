@@ -39,9 +39,11 @@ import {
 } from 'src/module/file/file-response.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import {
+  FIRST_ATTEMPT_MESSAGE,
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
+  isPastFirstAttempt,
   isUploadBlocked,
 } from 'src/common/utils/manual-review-cooldown.util';
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
@@ -114,8 +116,12 @@ export class DurManualReviewService {
     const docSlot = dur.documents.find((d) => d.docId === docId);
     if (!docSlot?.currentUpload) throw new NotFoundException('Document not found');
 
-    if (docSlot.currentUpload.ocrInfo?.validationStatus !== 'FAIL') {
+    // Case-insensitive; a technical failure (no validationStatus) is fixed by Retry / Re-upload instead.
+    if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed validation.');
+    }
+    if (!isPastFirstAttempt(docSlot.currentUpload)) {
+      throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('Manual review has already been requested for this document.');
@@ -133,6 +139,8 @@ export class DurManualReviewService {
           `After that, uploads will be temporarily blocked. For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`,
       );
     }
+    // Same gate as an upload: the form must still be ULB-editable.
+    this.durService.assertCanUlbUpload(dur, docId);
 
     const requestedAt = new Date();
     await this.durModel.updateOne(
@@ -198,11 +206,19 @@ export class DurManualReviewService {
     const deciderName = await resolveDeciderName(this.userModel, user._id);
     const decision = buildDecisionRecord(dto.decision, dto.note, user, ipAddress, userAgent, deciderName);
 
-    const rejectionUpdate: Record<string, unknown> = {};
-    if (dto.decision === 'RETURNED') {
-      rejectionUpdate['documents.$.manualReviewRejectionCount'] = (docSlot.manualReviewRejectionCount ?? 0) + 1;
-      rejectionUpdate['documents.$.postRejectionAttemptsUsed'] = 0;
-    }
+    // An approval clears the strike counter and any old cooldown, the same as a validation PASS does;
+    // validationStatus keeps the validator's own FAIL verdict, the decision record is the override.
+    const decisionUpdate: Record<string, unknown> =
+      dto.decision === 'RETURNED'
+        ? {
+            'documents.$.manualReviewRejectionCount': (docSlot.manualReviewRejectionCount ?? 0) + 1,
+            'documents.$.postRejectionAttemptsUsed': 0,
+          }
+        : {
+            'documents.$.processingStatus': 'PASSED',
+            'documents.$.postRejectionAttemptsUsed': 0,
+            'documents.$.uploadBlockedUntil': null,
+          };
 
     // $elemMatch (not two separate 'documents.x' filters) so both conditions bind to the same
     // array element — combined with the in-memory check above, this also closes the race where
@@ -210,16 +226,16 @@ export class DurManualReviewService {
     // only the first updateOne can still match once manualReviewDecision is no longer null.
     const updateResult = await this.durModel.updateOne(
       { _id: dur._id, documents: { $elemMatch: { docId, manualReviewDecision: null } } },
-      {
-        $set: {
-          'documents.$.manualReviewDecision': decision,
-          ...(dto.decision === 'APPROVED' && { 'documents.$.processingStatus': 'PASSED' }),
-          ...rejectionUpdate,
-        },
-      },
+      { $set: { 'documents.$.manualReviewDecision': decision, ...decisionUpdate } },
     );
     if (updateResult.matchedCount === 0) {
       throw new ConflictException('This manual review request has already been decided.');
+    }
+    if (dto.decision === 'APPROVED') {
+      await this.uploadHistoryModel.updateOne(
+        { uploadId: docSlot.currentUpload.uploadId },
+        { $set: { processingStatus: 'PASSED' } },
+      );
     }
 
     const decidedBy = { userId: new Types.ObjectId(user._id), role: user.role, ipAddress, userAgent };
@@ -387,12 +403,20 @@ export class DurManualReviewService {
    * live — when the requested uploadId is still the current one. A pre-migration upload that's since
    * been superseded resolves through the manual-review request that references it (its `filePath`
    * snapshot, else the derived S3 key), and 404s if no such request exists.
+   *
+   * Two cases skip the lookups above:
+   * - `requestId` names one manual-review request: its own `filePath` snapshot is the file it was raised
+   *   on, even if that upload ID was reused since (a reused pre-history ID's history row holds the
+   *   replacement file, so the uploadId alone is ambiguous there).
+   * - neither id: the document's current upload is the answer, straight from the live slot (a history
+   *   row or an older request for the same uploadId can lag behind a same-ID re-upload).
    */
   async getDocumentDownload(
     id: string,
     docId: XviFcDurDocId,
     uploadId: string | undefined,
     user: AuthUser,
+    requestId?: string,
   ): Promise<DurDocumentDownload> {
     if (user.scope !== Scope.ADMIN) {
       throw new ForbiddenException('Only ADMIN users may download manual-review documents');
@@ -410,44 +434,64 @@ export class DurManualReviewService {
       return docSlot;
     };
 
+    type DownloadFile = { path: string; originalName?: string | null; mimeType?: string | null };
+    const durObjectId = new Types.ObjectId(id);
+    let file: DownloadFile | undefined;
     let resolvedUploadId = uploadId;
-    if (!resolvedUploadId) {
+    // The request named by id (scoped to this form/doc, so an admin can't probe arbitrary keys).
+    let namedRequest: { uploadId: string; filePath?: string | null } | null = null;
+
+    if (requestId) {
+      namedRequest = await this.manualReviewRequestModel
+        .findOne({ _id: new Types.ObjectId(requestId), durId: durObjectId, docId })
+        .select('uploadId filePath')
+        .lean<{ uploadId: string; filePath?: string | null }>()
+        .exec();
+      if (!namedRequest) throw new NotFoundException('Manual review request not found');
+      resolvedUploadId = namedRequest.uploadId;
+      if (namedRequest.filePath) file = { path: namedRequest.filePath, mimeType: 'application/pdf' };
+    } else if (!resolvedUploadId) {
       const slot = await loadDocSlot();
       if (!slot?.currentUpload) throw new NotFoundException('Document not found');
       resolvedUploadId = slot.currentUpload.uploadId;
+      file = slot.currentUpload.file;
     }
 
-    const uploadRecord = await this.uploadHistoryModel
-      .findOne({ durId: new Types.ObjectId(id), docId, uploadId: resolvedUploadId })
-      .lean()
-      .exec();
-
-    let file: { path: string; originalName?: string | null; mimeType?: string | null } | undefined = uploadRecord?.file;
+    if (!file) {
+      const uploadRecord = await this.uploadHistoryModel
+        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+        .lean()
+        .exec();
+      file = uploadRecord?.file;
+    }
+    // Not in history (superseded pre-history upload): the manual-review request that references this
+    // exact form/doc/upload is checked BEFORE the live slot — after a decided request a re-upload can
+    // replace currentUpload with a different path under the same uploadId. Scoped so an admin can't
+    // probe arbitrary keys.
+    const request =
+      namedRequest ??
+      (file
+        ? null
+        : await this.manualReviewRequestModel
+            .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
+            .select('filePath')
+            .lean()
+            .exec());
+    if (!file && request?.filePath) {
+      file = { path: request.filePath, mimeType: 'application/pdf' };
+    }
     if (!file) {
       const slot = await loadDocSlot();
       if (slot?.currentUpload?.uploadId === resolvedUploadId) file = slot.currentUpload.file;
     }
-    if (!file) {
-      // Superseded pre-history upload: resolve via the manual-review request that references it —
-      // its own `filePath` snapshot first, else the S3 key layout (confirmUpload only enforces the
-      // prefix, so this is a last resort). Scoped to a request on this exact form/doc/upload so an
-      // admin can't probe arbitrary keys.
-      const durObjectId = new Types.ObjectId(id);
-      const request = await this.manualReviewRequestModel
-        .findOne({ durId: durObjectId, docId, uploadId: resolvedUploadId })
-        .select('filePath')
-        .lean()
-        .exec();
-      if (request?.filePath) {
-        file = { path: request.filePath, mimeType: 'application/pdf' };
-      } else if (request) {
-        const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
-        if (dur) {
-          file = {
-            path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
-            mimeType: 'application/pdf',
-          };
-        }
+    if (!file && request) {
+      // Last resort: the S3 key layout (confirmUpload only enforces the prefix).
+      const dur = await this.durModel.findById(durObjectId).select('ulb design_year').lean().exec();
+      if (dur) {
+        file = {
+          path: `xvi-fc/dur/${dur.ulb}/${dur.design_year}/${docId}/${resolvedUploadId}.pdf`,
+          mimeType: 'application/pdf',
+        };
       }
     }
     if (!file) throw new NotFoundException('Upload not found');
@@ -604,8 +648,10 @@ export class DurManualReviewService {
   }
 
   /**
-   * Filter + lookup stages shared by the paginated list and the unpaginated Excel dump — everything
-   * up to (not including) sort/pagination, so both read exactly the same rows for a given query.
+   * Filter stages shared by the paginated list and the unpaginated Excel dump, so both read exactly
+   * the same rows for a given query. Only the State filter and the ULB search join ULB/State here;
+   * every other lookup (`durManualReviewHistoryLookupStages`) runs after sort/pagination, on the rows returned only, so a page
+   * never joins the whole history.
    */
   private buildDurManualReviewHistoryFilterStages(dto: DurManualReviewHistoryQueryDto): PipelineStage[] {
     const match: Record<string, unknown> = {};
@@ -623,22 +669,23 @@ export class DurManualReviewService {
       };
     }
 
+    const search = dto.search?.trim();
+    const searchRegex = search ? new RegExp(escapeRegex(search), 'i') : null;
     return [
       { $match: match },
-      ...this.durManualReviewHistoryLookupStages(),
-      ...(dto.stateId ? [{ $match: { 'stateDoc._id': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
-      ...(dto.breachedOnly ? [{ $match: { isBreached: true } } as PipelineStage] : []),
-      ...(dto.search?.trim()
-        ? [
-            {
-              $match: {
-                $or: [
-                  { ulbName: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                  { ulbCode: new RegExp(escapeRegex(dto.search.trim()), 'i') },
-                ],
-              },
-            } as PipelineStage,
-          ]
+      ...(dto.stateId || searchRegex
+        ? ([
+            { $lookup: { from: 'ulbs', localField: 'ulb', foreignField: '_id', as: 'ulbDoc' } },
+            { $addFields: { ulbDoc: { $arrayElemAt: ['$ulbDoc', 0] } } },
+          ] as PipelineStage[])
+        : []),
+      ...(dto.stateId ? [{ $match: { 'ulbDoc.state': new Types.ObjectId(dto.stateId) } } as PipelineStage] : []),
+      ...(searchRegex
+        ? [{ $match: { $or: [{ 'ulbDoc.name': searchRegex }, { 'ulbDoc.code': searchRegex }] } } as PipelineStage]
+        : []),
+      // Same derivation as isBreached in the lookup stages — never stored.
+      ...(dto.breachedOnly
+        ? [{ $match: { $expr: { $lt: ['$dueAt', { $ifNull: ['$decidedAt', '$$NOW'] }] } } } as PipelineStage]
         : []),
     ];
   }
@@ -656,7 +703,12 @@ export class DurManualReviewService {
       { $sort: { requestedAt: -1 } },
       {
         $facet: {
-          data: [{ $skip: (page - 1) * pageSize }, { $limit: pageSize }, this.durManualReviewHistoryProjectStage()],
+          data: [
+            { $skip: (page - 1) * pageSize },
+            { $limit: pageSize },
+            ...this.durManualReviewHistoryLookupStages(),
+            this.durManualReviewHistoryProjectStage(),
+          ],
           totalCount: [{ $count: 'count' }],
         },
       },
@@ -765,6 +817,7 @@ export class DurManualReviewService {
     const pipeline: PipelineStage[] = [
       ...this.buildDurManualReviewHistoryFilterStages(dto),
       { $sort: { requestedAt: -1 } },
+      ...this.durManualReviewHistoryLookupStages(),
       this.durManualReviewHistoryProjectStage(),
     ];
 

@@ -1,4 +1,15 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  InternalServerErrorException,
+  Param,
+  Post,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ApiBearerAuth } from '@nestjs/swagger';
 import { Roles } from 'src/module/auth/decorators/roles.decorator';
 import { Role } from 'src/module/auth/enum/role.enum';
@@ -32,6 +43,19 @@ export class AfsDigitizationV3Controller {
     return { success: true, data: await this.digitizationV3Service.getMetrics() };
   }
 
+  /**
+   * Recounts the score and run snapshot now (the "Refresh" button) and returns the fresh overall metrics.
+   * The snapshot is also refreshed a few minutes after a job finishes, so this is only needed to see it sooner.
+   */
+  @Post('metrics/refresh')
+  @HttpCode(HttpStatus.OK)
+  async refreshMetrics() {
+    if (!(await this.digitizationV3Service.refreshScoreMetrics())) {
+      throw new InternalServerErrorException('Could not refresh the metrics');
+    }
+    return { success: true, data: await this.digitizationV3Service.getMetrics() };
+  }
+
   /** Unique files / pages per year, doc type, state and audit type (all optional filters), from the uniqueness baseline. */
   @Get('metrics/breakdown')
   async breakdown(
@@ -46,22 +70,6 @@ export class AfsDigitizationV3Controller {
     };
   }
 
-  /** Recounts the overall cards from the records. Only needed to fix drift; the cards are kept up to date by the jobs. */
-  @Post('metrics/rebuild')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildMetrics() {
-    return { success: true, data: await this.digitizationV3Service.rebuildMetrics() };
-  }
-
-  /** Recounts the unique files / pages to digitize (the `total` card) from the annual accounts. Reads every account, so it takes a while. */
-  @Post('metrics/rebuild-uniqueness')
-  @Public()
-  @HttpCode(HttpStatus.OK)
-  async rebuildUniqueness() {
-    return { success: true, data: await this.digitizationV3Service.rebuildUniqueness() };
-  }
-
   /** FastAPI's log for one job: status, progress step, error and warnings, timestamps. */
   @Get('jobs/:afsDigitizationJobId/log')
   async jobLog(@Param('afsDigitizationJobId') afsDigitizationJobId: string) {
@@ -74,5 +82,12 @@ export class AfsDigitizationV3Controller {
   @HttpCode(HttpStatus.ACCEPTED)
   enqueueByFilter(@Body() body: AfsDigitizationV3QueryDto) {
     return this.digitizationV3Service.enqueueByFilter(body);
+  }
+
+  /** Digitizes the PDFs an admin uploaded for the given rows (`ulbId` required). Skips rows with no upload or already queued / digitized. */
+  @Post('enqueue-afs')
+  @HttpCode(HttpStatus.ACCEPTED)
+  enqueueAfs(@Body() body: AfsDigitizationV3QueryDto) {
+    return this.digitizationV3Service.enqueueAfs(body);
   }
 }

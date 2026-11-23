@@ -3,7 +3,11 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { FORM_STATUS, FormHistoryAction, getFormStatusLabel } from 'src/common/constants/form-status.constants';
-import { assertCanPmuMutateForm, canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import {
+  assertCanPmuMutateForm,
+  canPmuViewForm,
+} from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   assertPmuOrMohuaViewerAccess,
   assertPmuReviewerAccess,
@@ -15,6 +19,7 @@ import { StateFormPmuReviewHelper } from 'src/module/xvi-fc/common/services/stat
 import { XvifcFormActorsService } from 'src/module/xvi-fc/common/services/xvifc-form-actors.service';
 import { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
+import { FormReturnedNotificationService } from 'src/module/xvi-fc/common/reminders/form-returned-notification.service';
 import type { XvifcActorSourceDocument } from 'src/module/xvi-fc/common/types/xvifc-form-actors.type';
 import type { XviFcApiResponse } from 'src/module/xvi-fc/common/response/xvi-fc-api-response';
 import { throwXviFcValidationError, xviFcSuccess } from 'src/module/xvi-fc/common/response/xvi-fc-response.util';
@@ -34,7 +39,7 @@ type PmuFormLeanWithPopulate = XvifcActorSourceDocument & {
   state?: Types.ObjectId | { _id?: Types.ObjectId; name?: string };
   currentFormStatus?: number;
   data?: Record<string, unknown>;
-  pmuRemarks?: string | null;
+  rejectionRemarks?: string | null;
 };
 
 /**
@@ -57,6 +62,8 @@ export class GtcPmuReviewService {
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly formQuestionHydrator: FormQuestionHydratorService,
     private readonly formJsonService: FormJsonService,
+    private readonly formReturnedNotification: FormReturnedNotificationService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
   /** See `buildPmuWorklistRows` (`common/utils/pmu-worklist.util.ts`) for the cross-state/
@@ -69,7 +76,7 @@ export class GtcPmuReviewService {
   ): Promise<XviFcApiResponse<PmuWorklistData>> {
     assertPmuReviewerAccess(user);
 
-    const { rows, summary, page, limit, total } = await buildPmuWorklistRows({
+    const { rows, summary, page, limit, total } = await buildPmuWorklistRows<XviFcGtcDocument>({
       stateModel: this.stateModel,
       formModel: this.formModel,
       yearId,
@@ -120,6 +127,7 @@ export class GtcPmuReviewService {
 
     const { actors, stateName } = this.xvifcFormActorsService.buildActorsAndStateName(doc);
     const permissions = buildPmuReviewerFormPermissions(user, currentFormStatus);
+    permissions.canUndo = await this.undoEligibility.canUndo(user, currentFormStatus, stateOid, yearOid, { type: 'GTC', id: doc._id });
 
     const formJson = await this.formJsonService.findActiveByDesignYearAndFormId(yearId, GTC_FORM_ID);
     if (!formJson.data?.length) throw new NotFoundException('GTC form configuration not found');
@@ -133,7 +141,7 @@ export class GtcPmuReviewService {
       installment,
       currentFormStatus,
       currentFormStatusLabel: getFormStatusLabel(currentFormStatus),
-      pmuRemarks: doc.pmuRemarks ?? null,
+      rejectionRemarks: doc.rejectionRemarks ?? null,
       questions,
       permissions,
       actors,
@@ -159,8 +167,8 @@ export class GtcPmuReviewService {
     const userOid = new Types.ObjectId(user._id);
     const fromStatus = form.currentFormStatus;
     // PMU is an internal pre-screen for MoHUA, not a status-bearing stage of its own once
-    // approved — the form lands directly on UNDER_REVIEW_BY_MOHUA.
-    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_MOHUA;
+    // approved — the form lands on UNDER_REVIEW_BY_SO (15), ready for a claim letter.
+    const toStatus = FORM_STATUS.UNDER_REVIEW_BY_SO;
 
     await this.transition(form, fromStatus, toStatus, undefined, FormHistoryAction.PMU_APPROVE, userOid, ip, userAgent);
 
@@ -174,17 +182,17 @@ export class GtcPmuReviewService {
     stateId: string,
     yearId: string,
     installment: GtcInstallment,
-    pmuRemarks: string,
+    rejectionRemarks: string,
     user: AuthUser,
     ip: string,
     userAgent: string,
   ): Promise<XviFcApiResponse<GtcPmuSubmitData>> {
     assertPmuReviewerAccess(user);
 
-    const trimmedRemarks = pmuRemarks?.trim();
+    const trimmedRemarks = rejectionRemarks?.trim();
     if (!trimmedRemarks) {
       throwXviFcValidationError({
-        pmuRemarks: [{ field: 'pmuRemarks', code: 'required', message: 'A rejection remark is required.' }],
+        rejectionRemarks: [{ field: 'rejectionRemarks', code: 'required', message: 'A rejection remark is required.' }],
       });
     }
 
@@ -207,18 +215,25 @@ export class GtcPmuReviewService {
       userAgent,
     );
 
+    void this.formReturnedNotification.notifyStateFormReturned({
+      stateId: new Types.ObjectId(stateId),
+      formName: 'Grant Transfer Certificate',
+      remarks: trimmedRemarks,
+    });
+
     return xviFcSuccess('GTC form rejected.', {
       currentFormStatus: toStatus,
       currentFormStatusLabel: getFormStatusLabel(toStatus),
     });
   }
 
+
   // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private async findForm(stateId: string, yearId: string, installment: GtcInstallment): Promise<GtcPmuFormLean | null> {
     return this.formModel
       .findOne({ state: new Types.ObjectId(stateId), year: new Types.ObjectId(yearId), installment })
-      .select('state year installment currentFormStatus data')
+      .select('state year installment currentFormStatus data rejectionRemarks')
       .lean<GtcPmuFormLean>()
       .exec();
   }
@@ -229,14 +244,14 @@ export class GtcPmuReviewService {
     form: GtcPmuFormLean,
     fromStatus: number,
     toStatus: number,
-    pmuRemarks: string | undefined,
+    rejectionRemarks: string | undefined,
     action: FormHistoryAction,
     userOid: Types.ObjectId,
     ip: string,
     userAgent: string,
   ): Promise<void> {
     const setFields: Record<string, unknown> = { currentFormStatus: toStatus, updatedBy: userOid };
-    if (pmuRemarks !== undefined) setFields['pmuRemarks'] = pmuRemarks;
+    if (rejectionRemarks !== undefined) setFields['rejectionRemarks'] = rejectionRemarks;
 
     await this.pmuReviewHelper.transitionForm<XviFcGtcDocument>({
       formModel: this.formModel,
@@ -261,7 +276,7 @@ export class GtcPmuReviewService {
         changedAt: new Date(),
         ip,
         userAgent,
-        remarks: pmuRemarks,
+        remarks: rejectionRemarks,
       }),
     });
   }
