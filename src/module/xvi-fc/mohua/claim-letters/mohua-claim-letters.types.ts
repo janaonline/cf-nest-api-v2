@@ -2,6 +2,7 @@ import type {
   MOHUA_CLAIM_LETTERS_FIRST_CLAIM_STATUS,
   MOHUA_CLAIM_LETTERS_ULB_STATUS,
 } from './mohua-claim-letters.constants';
+import type { ClaimLetterColumnKind } from 'src/module/xvi-fc/state/claim-letter/types/claim-letter-document.types';
 
 /** All money is whole Rupees, as everywhere else in xvi-fc; the UI converts to crore for display. */
 export interface MohuaClaimLettersStateRow {
@@ -132,6 +133,8 @@ export interface MohuaClaimLetterDetail {
   /** Sent back with an approval so a letter changed in the meantime is not approved blind. */
   revision: number;
   number: string;
+  /** As on the list item; the Claim Eligibility CTA filters to it. */
+  batchNumber: number;
   state: { id: string; name: string };
   yearId: string;
   installment: number;
@@ -224,5 +227,108 @@ export interface MohuaClaimLetterSoDecision {
 
 export interface MohuaClaimLetterUlbs {
   items: MohuaClaimLetterUlbRow[];
+  pagination: { page: number; limit: number; total: number; totalPages: number };
+}
+
+// ─── ULB Eligibility page ───────────────────────────────────────────────────
+
+/** One condition column, in the letter's annexure order. `key` is the criterion type. */
+export interface MohuaUlbEligibilityColumn {
+  key: string;
+  /** The criterion's display label, for the Failed condition filter. */
+  label: string;
+  header: string;
+  kind: ClaimLetterColumnKind;
+}
+
+/** One ULB in the cached State-wide build. Whole Rupees. */
+export interface MohuaUlbEligibilityBuildRow {
+  ulbId: string;
+  name: string;
+  censusCode: string | null;
+  sbCode: string | null;
+  /** Devolution allocation for the installment; null when the ULB has none. */
+  allocation: number | null;
+  /** One cell per column: the letter's text, or the ULB form's own status where the letter says "No". For an amount
+   *  column, only its note (e.g. "Exempted"); the figure is in `amounts`. */
+  cells: string[];
+  /** Whole Rupees for an amount column (14th FC unspent, 0 = Nil), null for the others. */
+  amounts: (number | null)[];
+  eligible: boolean;
+  /** Criterion types the ULB fails, plus NO_ALLOCATION. */
+  failedConditions: string[];
+}
+
+/** A State condition that fails, for the page banner. */
+export interface MohuaUlbEligibilityStateCondition {
+  label: string;
+  statusLabel: string;
+}
+
+/** The condition check for one State, cached 15 minutes. */
+export interface MohuaUlbEligibilityBuild {
+  /** ISO time the check ran. */
+  asOn: string;
+  stateName: string;
+  designYearLabel: string;
+  stateGate: { passed: boolean; failedConditions: MohuaUlbEligibilityStateCondition[] };
+  /** No ULB has a ULB-owned form past Not Started. */
+  noneStarted: boolean;
+  columns: MohuaUlbEligibilityColumn[];
+  rows: MohuaUlbEligibilityBuildRow[];
+}
+
+/** The letter holding a ULB, read live. Drafts are not linkable: MoHUA can't open them. */
+export interface MohuaUlbEligibilityBatch {
+  claimLetterId: string;
+  batchNumber: number;
+  status: number;
+  statusLabel: string;
+  linkable: boolean;
+}
+
+export interface MohuaUlbEligibilityRow {
+  slNo: number;
+  ulbId: string;
+  name: string;
+  censusCode: string | null;
+  sbCode: string | null;
+  /** Half the allocation each; null when the ULB has none. */
+  tied: number | null;
+  untied: number | null;
+  cells: string[];
+  amounts: (number | null)[];
+  eligible: boolean;
+  failedConditions: string[];
+  batch: MohuaUlbEligibilityBatch | null;
+}
+
+/** State-wide counts, before filters. */
+export interface MohuaUlbEligibilityCounts {
+  total: number;
+  eligible: number;
+  ineligible: number;
+  inLetter: number;
+  notInLetter: number;
+  /** Eligible ULBs no letter holds yet, for the page summary. */
+  eligibleNotInLetter: number;
+  batches: { batchNumber: number; count: number }[];
+  letterStatuses: { status: number; count: number }[];
+}
+
+export interface MohuaUlbEligibility {
+  asOn: string;
+  stateName: string;
+  designYearLabel: string;
+  installment: number;
+  stateGate: MohuaUlbEligibilityBuild['stateGate'];
+  noneStarted: boolean;
+  columns: MohuaUlbEligibilityColumn[];
+  /** Options for the Failed condition filter. */
+  conditions: { key: string; label: string }[];
+  counts: MohuaUlbEligibilityCounts;
+  /** Over every row matching the filters, across pages. */
+  totals: { tied: number; untied: number };
+  items: MohuaUlbEligibilityRow[];
   pagination: { page: number; limit: number; total: number; totalPages: number };
 }
