@@ -1,7 +1,8 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsString, Matches, MinLength } from 'class-validator';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { IsOtp } from '../decorators/is-otp.decorator';
 import { Match } from 'src/common/decorators/match.decorator';
+import { IsPolicyPassword } from '../password-policy';
 
 export class ResetPasswordDto {
   @ApiProperty({ description: 'Email address, census code, SB code, or 10-digit mobile number used during sendOtp' })
@@ -14,15 +15,7 @@ export class ResetPasswordDto {
   @IsOtp()
   otp!: string;
 
-  @ApiProperty({
-    minLength: 8,
-    description: 'New password — must contain uppercase, lowercase, number and special character',
-  })
-  @IsString()
-  @MinLength(8)
-  @Matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])/, {
-    message: 'Password must have uppercase, lowercase, number and special character',
-  })
+  @IsPolicyPassword('New password — must contain uppercase, lowercase, number and special character')
   newPassword!: string;
 
   @ApiProperty({ description: 'Must match newPassword' })

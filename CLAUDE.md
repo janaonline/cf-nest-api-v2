@@ -56,11 +56,13 @@ npm run seed:xvifc-pmu-doe-menu           # Gives the MOHUA_PMU and DOE roles th
 npm run seed:xvifc-mohua-claims-menu      # Adds a "Grant Management" group (after Profile) with "Claims & Submissions" to the MoHUA sidebar for every MoHUA
                                           # menu year (scripts/seed-xvifc-mohua-claims-menu.ts). Idempotent; `-- --dry-run` reports,
                                           # `-- --year <id>` limits to one year. Clear the no-TTL side-menu cache afterwards
-                                          # (DELETE xvi-fc/admin/cache/side-menu) and run it only once the UI route is deployed
+                                          # (DELETE xvi-fc/admin/cache/side-menu) and run it only once the UI route is deployed.
+                                          # `-- --role MOHUA_PMU` adds the same row to the PMU sidebar (read-only page)
 npm run seed:xvifc-mohua-om-menu          # Adds an "OM Generation" group (after Grant Management) with "Generate OM" and "OM Generation
                                           # History" to the MoHUA sidebar for every MoHUA menu year (scripts/seed-xvifc-mohua-om-menu.ts).
                                           # Idempotent; `-- --dry-run` reports, `-- --year <id>` limits to one year. Clear the no-TTL
-                                          # side-menu cache afterwards and run it only once the UI routes are deployed
+                                          # side-menu cache afterwards and run it only once the UI routes are deployed.
+                                          # `-- --role MOHUA_PMU` adds only "OM Generation History" to the PMU sidebar (read-only)
 ```
 
 ## Architecture
@@ -154,7 +156,8 @@ src/
 │   │                    # om (Office Memorandum, one per claim letter the SO verified: GET xvi-fc/mohua/om/:yearId/:installment lists
 │   │                    # States and their verified letters; .../letter/:id/document + PATCH .../draft (the "No." and "Dated" boxes);
 │   │                    # POST .../letter/:id/generate numbers it OM/<STATE>/<FY>/<n>, freezes its content and returns one PDF: the OM, the claim letter's ULB lists (frozen with the OM), then the
-│   │                    # claim letter's annexures from its frozen final PDF; GET :omId/pdf; PUT :omId/signed-file (PDF, 5 MB); GET history/:yearId/:installment. The SO's approve copies
+│   │                    # claim letter's annexures from its frozen final PDF; GET :omId/pdf; PUT :omId/signed-file (PDF, 5 MB); GET history/:yearId/:installment. The GETs are open to MoHUA, DoE and
+│   │                    # PMU (read-only monitoring) and ADMIN; draft, generate and the signed upload are MoHUA's. The SO's approve copies
 │   │                    # the letter's ULBs into xvifc_om_ulbs; rows A-K come from the claim letter's own document — see mohua/om/CLAUDE.md)
 │   ├── side-menu/, cache/, common/ # XviFcCacheService/Interceptor, form-actors, form-status-access helpers,
 │   │                     # YearAccessService (dynamic year access/exemption for new ULBs - see below),
