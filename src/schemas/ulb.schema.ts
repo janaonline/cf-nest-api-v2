@@ -46,6 +46,9 @@ export class Approval {
 
 export const ApprovalSchema = SchemaFactory.createForClass(Approval);
 
+export const ULB_CLOSURE_REASONS = ['MERGER', 'SPLIT', 'DENOTIFIED'] as const;
+export type UlbClosureReason = (typeof ULB_CLOSURE_REASONS)[number];
+
 /**
  * Materialized access and exemption state for one ULB and year.
  * Once present, yearEnabled and disabledFormIds are the source of truth with no fallback.
@@ -203,6 +206,22 @@ export class Ulb {
   @Prop({ type: CommonFileSchema, default: null })
   gazetteNotificationFile: CommonFile | null;
 
+  // ── Closure (merged / split / de-notified) ─────────────────────────────────
+  /** Start calendar year of the first design year the ULB no longer participates in (2026 = 2026-27). null = open. */
+  @Prop({ type: Number, default: null })
+  closureYear!: number | null;
+
+  @Prop({ type: String, enum: ULB_CLOSURE_REASONS, default: null })
+  closureReason!: UlbClosureReason | null;
+
+  /** Set only when closureReason is MERGER. */
+  @Prop({ type: Types.ObjectId, ref: 'Ulb', default: null })
+  mergedInto!: Types.ObjectId | null;
+
+  /** Legal reference, e.g. "G.O.Ms.No.264 MA&UD (MA) Dept., Dt.03.12.2025". */
+  @Prop({ default: '' })
+  closureRemarks!: string;
+
   // ── Approval workflow ──────────────────────────────────────────────────────
   @Prop({ type: ApprovalSchema, default: () => ({}) })
   approval: Approval;
@@ -234,4 +253,5 @@ export const UlbSchema = SchemaFactory.createForClass(Ulb);
 
 UlbSchema.index({ state: 1, isActive: 1 });
 UlbSchema.index({ state: 1, 'approval.status': 1 });
+UlbSchema.index({ mergedInto: 1 }, { partialFilterExpression: { mergedInto: { $type: 'objectId' } } });
 UlbSchema.index({ state: 1, adc: 1 });
