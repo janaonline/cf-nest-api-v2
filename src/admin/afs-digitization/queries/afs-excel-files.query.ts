@@ -287,6 +287,46 @@ const addFileFieldsAfsFileVsUlbFile = {
   },
 };
 
+/**
+ * A file slot is publishable when it is digitized and, if it has an overall assessment, that assessment is PASS.
+ * Legacy files (no `scores.overallAssessment`) stay publishable on digitized status alone.
+ */
+const publishableSlot = (slot: 'ulbFile' | 'afsFile') => ({
+  $and: [
+    { $eq: [`$${slot}.digitizationStatus`, 'digitized'] },
+    {
+      $or: [
+        { $eq: [{ $ifNull: [`$${slot}.scores.overallAssessment`, null] }, null] },
+        { $eq: [`$${slot}.scores.overallAssessment`, 'PASS'] },
+      ],
+    },
+  ],
+});
+
+// Same priority as addFileFieldsAfsFileVsUlbFile (afsFile first, then ulbFile) but with the PASS rule applied.
+const addPublishableFileFields = {
+  $addFields: {
+    file: {
+      $switch: {
+        branches: [
+          { case: publishableSlot('afsFile'), then: '$afsFile' },
+          { case: publishableSlot('ulbFile'), then: '$ulbFile' },
+        ],
+        default: null,
+      },
+    },
+    fileType: {
+      $switch: {
+        branches: [
+          { case: publishableSlot('afsFile'), then: 'afsFile' },
+          { case: publishableSlot('ulbFile'), then: 'ulbFile' },
+        ],
+        default: null,
+      },
+    },
+  },
+};
+
 export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): PipelineStage[] => {
   const pipeline: PipelineStage[] = [];
   const yearId = new Types.ObjectId(query.yearId as string);
@@ -298,11 +338,13 @@ export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): Pipelin
       'ulbFile.digitizationStatus': 1,
       'ulbFile.excelUrl': 1,
       'ulbFile.createdAt': 1,
+      'ulbFile.scores.overallAssessment': 1,
 
       'afsFile.noOfPages': 1,
       'afsFile.digitizationStatus': 1,
       'afsFile.excelUrl': 1,
       'afsFile.createdAt': 1,
+      'afsFile.scores.overallAssessment': 1,
 
       ulb: 1,
       year: 1,
@@ -322,8 +364,8 @@ export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): Pipelin
   }
 
   pipeline.push(
-    // Priority 1: afsFile if digitized, Priority 2: ulbFile if digitized
-    addFileFieldsAfsFileVsUlbFile,
+    // Priority 1: afsFile if digitized, Priority 2: ulbFile if digitized (files with an assessment must be PASS)
+    addPublishableFileFields,
 
     // Keep only documents which have a digitized file (digitizationStatus = 'digitized')
     { $match: { file: { $ne: null } } },
@@ -437,7 +479,8 @@ export const getAfsListPipeline = (query: ResourcesSectionExcelListDto): Pipelin
       type: { $first: 'excel' },
       ulbId: { $first: '$ulb' },
       year: { $first: query.year },
-      modifiedAt: { $first: '$file.createdAt' },
+      // Older files have no createdAt; fall back to the document's creation time (from its ObjectId).
+      modifiedAt: { $first: { $ifNull: ['$file.createdAt', { $toDate: '$_id' }] } },
       ulbName: { $first: '$ulbData.name' },
       state: { $first: '$stateData.name' },
       fileName: {
@@ -475,6 +518,11 @@ export const getAfsReportPipeline = (query: ResourcesSectionExcelReportDto): Pip
         year: new Types.ObjectId(query.yearId),
         auditType: query.auditType,
         [`${query.fileType}.digitizationStatus`]: 'digitized',
+        // Files with an assessment must be PASS; legacy files have no assessment and are unaffected.
+        $or: [
+          { [`${query.fileType}.scores.overallAssessment`]: { $exists: false } },
+          { [`${query.fileType}.scores.overallAssessment`]: 'PASS' },
+        ],
       },
     },
     // TODO: Fix URLs, URL is stored without /
