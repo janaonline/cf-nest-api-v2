@@ -20,6 +20,7 @@ import {
   MOHUA_ULB_ELIGIBILITY_REFRESH_FLOOR_SECONDS,
   MOHUA_ULB_ELIGIBILITY_DEFAULT_LIMIT,
   MOHUA_ULB_ELIGIBILITY_DRAFT_LABEL,
+  MOHUA_ULB_ELIGIBILITY_LETTER_STATUSES,
   MOHUA_ULB_ELIGIBILITY_NO_ALLOCATION,
   MOHUA_ULB_ELIGIBILITY_NO_ALLOCATION_LABEL,
 } from './mohua-claim-letters.constants';
@@ -253,7 +254,10 @@ export class MohuaUlbEligibilityService {
     };
   }
 
-  /** The letter holding each ULB: its lock, then the letter. Two queries; returned letters hold no locks. */
+  /**
+   * The letter holding each ULB: its lock, then the letter. Two queries; returned letters hold no locks. A return or
+   * discard can commit between the two reads, so the letter query keeps only letters that still hold ULBs.
+   */
   private async resolveHoldingLetters(stateId: string, yearId: string): Promise<Map<string, MohuaUlbEligibilityBatch>> {
     const locks = await this.lockModel
       .find({
@@ -269,7 +273,11 @@ export class MohuaUlbEligibilityService {
 
     const letterIds = [...new Set(locks.map((l) => String(l.claimLetter)))];
     const letters = await this.batchModel
-      .find({ _id: { $in: letterIds.map((id) => new Types.ObjectId(id)) } })
+      .find({
+        _id: { $in: letterIds.map((id) => new Types.ObjectId(id)) },
+        currentFormStatus: { $in: MOHUA_ULB_ELIGIBILITY_LETTER_STATUSES },
+        isAbandoned: false,
+      })
       .select('batchNumber currentFormStatus')
       .lean<{ _id: Types.ObjectId; batchNumber: number; currentFormStatus: number }[]>()
       .exec();
