@@ -1037,6 +1037,7 @@ export class MohuaClaimLettersService {
       id: String(batch._id),
       revision: batch.revision ?? 0,
       number: batch.fileBaseName,
+      batchNumber: batch.batchNumber,
       state: { id: String(batch.state), name: state?.name ?? '' },
       yearId: String(batch.year),
       installment: batch.installment,

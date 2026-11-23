@@ -128,7 +128,9 @@ two can never disagree; the frontend renders the backend's text verbatim.
   that is not enabled prints "Not applicable").
 - Cell text is decided only in `buildAnnexureCell` (`helpers/claim-letter-letter.helpers.ts`), whose
   comment lists the rules. A discretionary exemption prints "Exemption requested" while under MoHUA
-  review and "Exempted" once approved (ADR 0005).
+  review and "Exempted" once approved (ADR 0005). MoHUA's ULB Eligibility page reuses it and
+  `ClaimLetterDocumentService.resolveUnspentAmounts`, and only swaps a failed ULB form's "No" for that form's status
+  (`mohua/claim-letters/mohua-ulb-eligibility.helpers.ts`).
 - Dates the State picks are stored as UTC-midnight ISO strings and printed "07 Oct 2026" with UTC
   getters (fixed month names, no locale); the as-on stamp is IST ("07 Oct 2026, 14:30").
 - Names: each one names the State, FY, installment and batch. `fileBaseName` is

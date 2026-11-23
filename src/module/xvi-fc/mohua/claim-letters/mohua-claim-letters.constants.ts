@@ -102,3 +102,29 @@ export const MOHUA_CLAIM_LETTERS_ULB_STATUS = {
 
 export const MOHUA_CLAIM_LETTER_ULBS_DEFAULT_LIMIT = 20;
 export const MOHUA_CLAIM_LETTER_ULBS_MAX_LIMIT = 100;
+
+/** ULB Eligibility page: 10 rows a page. Only the condition check is cached; batches are read live. */
+export const MOHUA_ULB_ELIGIBILITY_DEFAULT_LIMIT = 10;
+export const MOHUA_ULB_ELIGIBILITY_MAX_LIMIT = 50;
+export const MOHUA_ULB_ELIGIBILITY_CACHE_TTL_SECONDS = 15 * 60;
+/** Refresh rebuilds only a cached check older than this, so repeated clicks don't re-run the whole State. */
+export const MOHUA_ULB_ELIGIBILITY_REFRESH_FLOOR_SECONDS = 60;
+
+export const MOHUA_ULB_ELIGIBILITY_FILTERS = ['ELIGIBLE', 'INELIGIBLE'] as const;
+
+/** The `batch` filter value for ULBs held by no letter. */
+export const MOHUA_ULB_ELIGIBILITY_NOT_IN_LETTER = 'NONE';
+
+/** The failed-condition key for a ULB with no devolution allocation (the others are criterion types). */
+export const MOHUA_ULB_ELIGIBILITY_NO_ALLOCATION = 'NO_ALLOCATION';
+export const MOHUA_ULB_ELIGIBILITY_NO_ALLOCATION_LABEL = 'No devolution allocation';
+
+/** Statuses of a letter that holds ULB locks: draft (2), under SO review (15), under MoHUA review (5), acknowledged (7). */
+export const MOHUA_ULB_ELIGIBILITY_LETTER_STATUSES: number[] = [
+  FORM_STATUS.IN_PROGRESS,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+];
+
+export const MOHUA_ULB_ELIGIBILITY_DRAFT_LABEL = 'Draft';

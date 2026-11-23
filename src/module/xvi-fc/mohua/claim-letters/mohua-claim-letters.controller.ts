@@ -26,8 +26,9 @@ import { ApproveMohuaClaimLetterDto } from './mohua-claim-letters-approve.dto';
 import { ReturnMohuaClaimLetterDto } from './mohua-claim-letters-return.dto';
 import { DecideMohuaClaimLetterUlbDto } from './mohua-claim-letters-ulb-decision.dto';
 import { MOHUA_CLAIM_LETTER_REVIEWER_FORBIDDEN_MESSAGE } from './mohua-claim-letters.constants';
-import { GetMohuaClaimLetterUlbsQueryDto } from './mohua-claim-letters-query.dto';
+import { GetMohuaClaimLetterUlbsQueryDto, GetMohuaUlbEligibilityQueryDto } from './mohua-claim-letters-query.dto';
 import { MohuaClaimLettersService } from './mohua-claim-letters.service';
+import { MohuaUlbEligibilityService } from './mohua-ulb-eligibility.service';
 
 /** Claim letter screens for MoHUA (and DoE, a read-only copy). Only the SO's approve and return decide a letter. */
 @ApiTags('XVI-FC - MoHUA Claim Letters')
@@ -36,7 +37,10 @@ import { MohuaClaimLettersService } from './mohua-claim-letters.service';
 @UseGuards(PermissionGuard)
 @RequirePermissions(Permission.VIEW_STATUS_REPORTS)
 export class MohuaClaimLettersController {
-  constructor(private readonly service: MohuaClaimLettersService) {}
+  constructor(
+    private readonly service: MohuaClaimLettersService,
+    private readonly ulbEligibilityService: MohuaUlbEligibilityService,
+  ) {}
 
   @ApiOperation({ summary: 'One claim letter: its State-signed file and headline numbers' })
   @Get('letter/:claimLetterId')
@@ -112,6 +116,25 @@ export class MohuaClaimLettersController {
   ) {
     this.assertViewScope(user);
     return xviFcSuccess('Claim letter ULBs fetched.', await this.service.getClaimLetterUlbs(claimLetterId, query));
+  }
+
+  @ApiOperation({
+    summary:
+      "Every ULB of a State: eligible or not, each condition's status and the letter holding it (search, filters, paged). The condition check is cached 15 minutes; refresh=true rebuilds it",
+  })
+  @Get('ulb-eligibility/:stateId/:yearId/:installment')
+  async getUlbEligibility(
+    @Param('stateId', ParseObjectIdPipe) stateId: string,
+    @Param('yearId', ParseObjectIdPipe) yearId: string,
+    @Param('installment', ParseIntPipe) installment: number,
+    @Query() query: GetMohuaUlbEligibilityQueryDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    this.assertViewScope(user);
+    return xviFcSuccess(
+      'ULB eligibility fetched.',
+      await this.ulbEligibilityService.getUlbEligibility(stateId, yearId, installment, query),
+    );
   }
 
   @ApiOperation({ summary: "One state's claim letters waiting on MoHUA" })

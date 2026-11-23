@@ -16,6 +16,7 @@ import { OmUlb, OmUlbSchema } from 'src/schemas/xvi-fc/mohua/om-ulb.schema';
 import { RequestExemptionMohuaModule } from '../request-exemption/request-exemption-mohua.module';
 import { MohuaClaimLettersController } from './mohua-claim-letters.controller';
 import { MohuaClaimLettersService } from './mohua-claim-letters.service';
+import { MohuaUlbEligibilityService } from './mohua-ulb-eligibility.service';
 
 /** MoHUA-side claim letter screens — read-only, decoupled from the State-side claim-letter module. */
 @Module({
@@ -35,6 +36,6 @@ import { MohuaClaimLettersService } from './mohua-claim-letters.service';
     RequestExemptionMohuaModule,
   ],
   controllers: [MohuaClaimLettersController],
-  providers: [MohuaClaimLettersService],
+  providers: [MohuaClaimLettersService, MohuaUlbEligibilityService],
 })
 export class MohuaClaimLettersModule {}
