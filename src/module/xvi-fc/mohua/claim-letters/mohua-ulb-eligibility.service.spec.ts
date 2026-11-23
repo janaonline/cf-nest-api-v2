@@ -217,6 +217,26 @@ describe('MohuaUlbEligibilityService', () => {
     expect(lockModel.find).toHaveBeenCalledTimes(2);
   });
 
+  it('reads only letters that still hold ULBs', async () => {
+    await get();
+    expect(batchModel.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        currentFormStatus: { $in: [2, 15, 5, 7] },
+        isAbandoned: false,
+      }),
+    );
+  });
+
+  it('shows a ULB in no letter when its letter was returned between the two reads', async () => {
+    // The lock query still saw Agra's lock; the letter query no longer finds its letter.
+    batchModel.find.mockReturnValue(
+      chain([{ _id: LETTER_3, batchNumber: 3, currentFormStatus: FORM_STATUS.IN_PROGRESS }]),
+    );
+    const result = await get();
+    expect(result.items.find((r) => r.ulbId === U1)?.batch).toBeNull();
+    expect(result.counts).toMatchObject({ inLetter: 1, notInLetter: 3 });
+  });
+
   it('lists eligible ULBs first, then ineligible ones, each A to Z', async () => {
     // Agra now fails audited accounts and Mau passes it, so Mau (eligible) comes before Agra.
     eligibility.resolveUlbLevelEligibility.mockResolvedValue({

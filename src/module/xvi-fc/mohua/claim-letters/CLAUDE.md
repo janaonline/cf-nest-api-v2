@@ -23,7 +23,9 @@ can read it (`assertViewScope`), the same as the other claim letter reads.
   made together in one process share one run. Redis is only a cache: a failed read or write is logged and the page is
   built without it.
 - **Live part:** the ULB locks and their letters are read on every request (two queries), so a new draft, submit or
-  return shows at once. Returned letters hold no locks, so their ULBs show as in no letter. A draft (2) is not
+  return shows at once. Returned letters hold no locks, so their ULBs show as in no letter. The letter query keeps
+  only letters still holding ULBs (`MOHUA_ULB_ELIGIBILITY_LETTER_STATUSES`, not abandoned), since a return can commit
+  between the two reads. A draft (2) is not
   `linkable`: MoHUA's letter pages list only `MOHUA_CLAIM_LETTERS_LISTED_STATUSES`.
 - **Entry points (UI):** the State page's Claim Letters panel, the State's claim letters header, and the claim letter
   header (filtered to its `batchNumber` via `?batch=N`; a returned letter opens the whole State).
