@@ -98,7 +98,10 @@ describe('DevolutionFormulaRowService', () => {
       exists: jest.fn().mockReturnValue(q(null)),
     };
     excelService = { generateExcel: jest.fn().mockResolvedValue(new ArrayBuffer(0)) };
-    claimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+    claimLetterUlbLockModel = {
+      findOne: jest.fn().mockReturnValue(q(null)),
+      countDocuments: jest.fn().mockReturnValue(q(0)),
+    };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -212,6 +215,15 @@ describe('DevolutionFormulaRowService', () => {
       expect(set['newUlbCount']).toBe(0);
       expect(set['missingUlbCount']).toBe(0);
       expect(set['duplicateUlbCount']).toBe(0);
+    });
+
+    it('refuses while a draft claim letter holds a ULB of the installment, touching nothing (ADR 0009)', async () => {
+      claimLetterUlbLockModel['countDocuments'].mockReturnValue(q(1));
+
+      await expect(service.deleteUploadedExcel(stateOid.toString(), yearOid.toString(), 1, adminUser)).rejects.toThrow(
+        BadRequestException,
+      );
+      expect(formModel['findByIdAndUpdate']).not.toHaveBeenCalled();
     });
 
     it('refuses while a row is part of an approved claim letter (5 / 7), touching nothing', async () => {

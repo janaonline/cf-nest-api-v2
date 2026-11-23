@@ -29,6 +29,7 @@ import {
   ANNUAL_ACCOUNT_PROCESSING_QUEUE,
   ZIP_RESOURCES_QUEUE,
 } from 'src/core/constants/queues';
+import { AfsDigitizationV3BackfillController } from './digitization-v3/afs-digitization-v3-backfill.controller';
 import { AfsDigitizationV3Controller } from './digitization-v3/afs-digitization-v3.controller';
 import { AfsDigitizationV3Processor } from './digitization-v3/afs-digitization-v3.processor';
 import { AfsDigitizationV3QueueService } from './digitization-v3/afs-digitization-v3-queue.service';
@@ -99,7 +100,7 @@ import { AuditorsReportOcrProcessor } from './queue/auditors-report-ocr.processo
       { name: ANNUAL_ACCOUNT_PROCESSING_QUEUE, adapter: BullMQAdapter },
     ),
   ],
-  controllers: [AfsDigitizationController, AfsDigitizationV3Controller],
+  controllers: [AfsDigitizationController, AfsDigitizationV3Controller, AfsDigitizationV3BackfillController],
   providers: [
     AfsDigitizationV3Service,
     AfsDigitizationV3QueueService,

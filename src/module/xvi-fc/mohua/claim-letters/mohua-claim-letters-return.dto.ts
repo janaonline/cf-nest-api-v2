@@ -1,5 +1,16 @@
 import { Transform } from 'class-transformer';
-import { ArrayUnique, IsArray, IsIn, IsInt, IsString, MaxLength, Min, MinLength } from 'class-validator';
+import {
+  ArrayUnique,
+  IsArray,
+  IsIn,
+  IsInt,
+  IsMongoId,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Min,
+  MinLength,
+} from 'class-validator';
 import {
   MOHUA_CLAIM_LETTER_REMARK_MAX_LENGTH,
   MOHUA_CLAIM_LETTER_REMARK_MIN_LENGTH,
@@ -18,6 +29,16 @@ export class ReturnMohuaClaimLetterDto {
   @ArrayUnique()
   @IsIn(MOHUA_CLAIM_LETTER_RETURNABLE_STATE_FORM_IDS, { each: true })
   stateFormIds!: number[];
+
+  /**
+   * The State's other letters under SO review the dialog said this return also returns (`otherLettersUnderReview`).
+   * Checked only when the return reopens a State form; a different set is refused (ADR 0009). Missing means none.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayUnique()
+  @IsMongoId({ each: true })
+  affectedLetterIds?: string[];
 
   /** Why the letter is returned — required, shared with the State. Trimmed before the length checks. */
   @Transform(({ value }: { value: unknown }) => (typeof value === 'string' ? value.trim() : value))

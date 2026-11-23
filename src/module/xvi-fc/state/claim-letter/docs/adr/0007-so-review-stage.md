@@ -36,7 +36,8 @@ exemption as it was, and a retried return rejects each one once.
 
 **Only what the SO marked is returned.** The SO marks ULBs first (`soDecision` on the claim ULB row); the return
 reopens each marked ULB's picked forms and rows, plus the State-wide items picked in the request. Everything else
-keeps its status.
+keeps its status. SFC and GTC are returnable only while at 15; a return that reopens a State form also returns the
+State's other letters under SO review and clears its drafts' signed letters (ADR 0009).
 
 **Rows of a submitted letter are frozen.** While a ULB is in a letter at 15, 5 or 7, or its row is at 5 or 7:
 - Elected Body's post-submission update refuses that ULB, by name;
@@ -57,7 +58,7 @@ through `FormReturnedNotificationService.notifyClaimLetterReturned`. A failed em
 ## Consequences
 
 - Status 5 means "approved by the SO"; MoHUA's own final step (5 -> 7) and its return (6) are not built yet. When
-  they are, 6 needs the same handling as 16 (`RETURNED_CLAIM_LETTER_STATUSES` already lists it; see ADR 0004).
+  they are, 6 needs the same handling as 16 (`RETURNED_CLAIM_LETTER_STATUSES` already lists it; see ADR 0009).
 - Approve costs one fresh eligibility run per letter, the same as submit.
 - The freeze is per path. A new write path that can replace or deactivate a State form's rows must apply the same
   rule, or it can change the evidence of a letter MoHUA is reviewing.

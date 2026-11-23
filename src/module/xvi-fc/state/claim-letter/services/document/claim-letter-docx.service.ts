@@ -15,6 +15,7 @@ import {
   VerticalAlign,
   WidthType,
 } from 'docx';
+import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { buildXviFcDownloadFileName } from 'src/shared/utils/xvi-fc-download-file-name.util';
 import {
@@ -31,9 +32,13 @@ import type {
   ClaimLetterParagraph,
   ClaimLetterRun,
 } from '../../types/claim-letter-document.types';
-import { CLAIM_LETTER_COLUMN_ALIGN, claimLetterColumnShares } from '../../helpers/claim-letter-annexure-columns.helpers';
+import {
+  CLAIM_LETTER_COLUMN_ALIGN,
+  claimLetterColumnShares,
+} from '../../helpers/claim-letter-annexure-columns.helpers';
 import { buildClaimLetterBatchLabel } from '../../helpers/claim-letter-financial.helpers';
 import { printedText } from '../../helpers/claim-letter-letter.helpers';
+import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 import { ClaimLetterDocumentService, type ClaimLetterDocumentParent } from './claim-letter-document.service';
 
@@ -76,12 +81,21 @@ export class ClaimLetterDocxService {
   constructor(
     private readonly documentService: ClaimLetterDocumentService,
     private readonly letterDetailsService: ClaimLetterLetterDetailsService,
+    private readonly eligibilityService: ClaimLetterEligibilityService,
   ) {}
 
-  /** The State's download: only once the mandatory letter details are complete. */
+  /** The State's download: only once the mandatory letter details are complete and, for a draft, while every
+   *  State-level condition holds, so nothing is signed before a returned State form is corrected (ADR 0009). */
   async generateForDownload(claimLetterId: string, user: AuthUser): Promise<{ buffer: Buffer; fileName: string }> {
     const parent = await this.documentService.loadParent(claimLetterId, user);
     await this.letterDetailsService.assertComplete(parent, 'downloading');
+    if (parent.currentFormStatus === FORM_STATUS.IN_PROGRESS) {
+      await this.eligibilityService.assertStateConditionsMet(
+        String(parent.state),
+        String(parent.year),
+        parent.installment,
+      );
+    }
     return this.generate(parent);
   }
 

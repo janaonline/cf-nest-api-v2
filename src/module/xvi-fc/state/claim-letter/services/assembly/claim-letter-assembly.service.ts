@@ -22,10 +22,14 @@ import type {
 import {
   CLAIM_LETTER_CHILD_INSERT_CHUNK_SIZE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
-  CLAIM_LETTER_MAX_BATCH_NUMBER,
   CLAIM_LETTER_STALE_BUILD_THRESHOLD_MINUTES,
 } from '../../constants/claim-letter.constants';
 import { deleteBuildingParentArtifacts } from '../../helpers/claim-letter-build-cleanup.helpers';
+import {
+  allLettersInUseMessage,
+  firstFreeBatchNumber,
+  openLettersFilter,
+} from '../../helpers/claim-letter-cap.helpers';
 import { assertInstallmentSupported } from '../../helpers/claim-letter-installment.helpers';
 import {
   amountsAreEqual,
@@ -46,8 +50,7 @@ import {
   DevolutionAllocation,
 } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
-import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
+import { ClaimLetterFormJsonService, claimAmountConfigOf } from '../form-json/claim-letter-form-json.service';
 import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import { RETURNED_CLAIM_LETTER_STATUSES } from '../../helpers/claim-letter-returned.helpers';
@@ -58,6 +61,7 @@ import {
   lockedUlbsMessage,
 } from '../../helpers/claim-letter-rejected-ulbs.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
+import { abortIfActive } from '../../helpers/claim-letter-concurrency.helpers';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
@@ -121,6 +125,8 @@ interface PreparedChildren {
   gatePassed: boolean;
   stateEligibilitySources: Record<string, unknown>[];
   allocationByUlbId: Map<string, DevolutionAllocation>;
+  /** formjson 26's cap, read in the same fetch as the claim-amount switch. */
+  maxClaimLetters: number;
 }
 
 /** A conflict that may be a reclaimable stale BUILDING row, unlike live contention (ADR 0002). */
@@ -175,7 +181,6 @@ export class ClaimLetterAssemblyService {
     private readonly eligibilityService: ClaimLetterEligibilityService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
-    private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly undoEligibility: PmuUndoEligibilityService,
   ) {}
 
@@ -204,9 +209,6 @@ export class ClaimLetterAssemblyService {
       const idempotent = await this.checkIdempotentRetry(input.buildRequestId, stateOid);
       if (idempotent) return idempotent;
     }
-    // Best-effort (ADR 0004): the preview / download / submit guards are the hard rule.
-    await this.activeBatchService.assertCanCreate({ state: stateOid, year: yearOid, installment: input.installment });
-
     // Validated before reserving, like update: a refused create holds no slot or lock meanwhile, and
     // one refusal names the locked rows too.
     const prepared = await this.prepareChildren(input.ulbSelections, userOid, stateOid, yearOid, input.installment, {});
@@ -218,6 +220,7 @@ export class ClaimLetterAssemblyService {
       ulbIds,
       buildRequestId,
       userOid,
+      prepared.maxClaimLetters,
     );
 
     try {
@@ -254,6 +257,7 @@ export class ClaimLetterAssemblyService {
     ulbIds: string[],
     buildRequestId: string,
     userOid: Types.ObjectId,
+    maxClaimLetters: number,
   ): Promise<ClaimLetterBatchDocument> {
     try {
       return await this.attemptReserveBatchSlotAndLocks(
@@ -263,6 +267,7 @@ export class ClaimLetterAssemblyService {
         ulbIds,
         buildRequestId,
         userOid,
+        maxClaimLetters,
       );
     } catch (err) {
       // A lock conflict may be a stale build's lock too, so it is reclaimable here.
@@ -279,6 +284,7 @@ export class ClaimLetterAssemblyService {
           ulbIds,
           buildRequestId,
           userOid,
+          maxClaimLetters,
         );
       } catch (retryErr) {
         throw await this.namedLockConflict(retryErr, ulbIds, stateOid, yearOid, installment);
@@ -347,12 +353,13 @@ export class ClaimLetterAssemblyService {
     ulbIds: string[],
     buildRequestId: string,
     userOid: Types.ObjectId,
+    maxClaimLetters: number,
   ): Promise<ClaimLetterBatchDocument> {
     const session = await this.connection.startSession();
     try {
       session.startTransaction();
 
-      const batchNumber = await this.allocateBatchNumber(stateOid, yearOid, installment, session);
+      const batchNumber = await this.allocateBatchNumber(stateOid, yearOid, installment, maxClaimLetters, session);
       const resubmissionNumber = await this.countReturnedInSlot(stateOid, yearOid, installment, batchNumber, session);
 
       const stateDoc = await this.stateModel.findById(stateOid).select('code').session(session).lean().exec();
@@ -426,7 +433,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return parent;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -437,23 +444,20 @@ export class ClaimLetterAssemblyService {
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
+    maxClaimLetters: number,
     session: ClientSession,
-  ): Promise<1 | 2 | 3> {
+  ): Promise<number> {
     const used = await this.batchModel
-      .find({ state: stateOid, year: yearOid, installment, isAbandoned: false })
+      .find(openLettersFilter({ state: stateOid, year: yearOid, installment }))
       .select('batchNumber')
       .session(session)
-      .lean<{ batchNumber: 1 | 2 | 3 }[]>()
+      .lean<{ batchNumber: number }[]>()
       .exec();
-    const usedSet = new Set(used.map((d) => d.batchNumber));
 
-    for (const candidate of [1, 2, 3] as const) {
-      if (!usedSet.has(candidate)) return candidate;
-    }
+    const free = firstFreeBatchNumber(new Set(used.map((d) => d.batchNumber)), maxClaimLetters);
+    if (free !== null) return free;
     // Reclaimable: a stale BUILDING row holding a slot would fail every retry the same way.
-    throw new ReclaimableConflictException(
-      `All ${CLAIM_LETTER_MAX_BATCH_NUMBER} claim slots are already in use for this installment.`,
-    );
+    throw new ReclaimableConflictException(allLettersInUseMessage(maxClaimLetters));
   }
 
   /** The new letter's `resubmissionNumber`: returned letters that held this slot before. A discarded draft never
@@ -539,7 +543,7 @@ export class ClaimLetterAssemblyService {
       );
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -600,11 +604,12 @@ export class ClaimLetterAssemblyService {
     installment: number,
     lockScope?: { excludeClaimLetterId?: string },
   ): Promise<PreparedChildren> {
-    const [gate, allocationByUlbId, claimAmountConfig] = await Promise.all([
+    const [gate, allocationByUlbId, formConfig] = await Promise.all([
       this.eligibilityService.evaluateStateLevelGate(String(stateOid), String(yearOid), installment as 1 | 2),
       this.eligibilityService.resolveDevolutionAllocations(String(stateOid), String(yearOid), installment as 1 | 2),
-      this.formJsonConfigService.loadClaimAmountConfig(String(yearOid)),
+      this.formJsonConfigService.loadFormConfig(String(yearOid)),
     ]);
+    const claimAmountConfig = claimAmountConfigOf(formConfig);
 
     if (!gate.passed) {
       const reason = gate.sources.find((s) => s.result === 'FAILED')?.reasonCode ?? 'STATE_GATE_FAILED';
@@ -715,6 +720,7 @@ export class ClaimLetterAssemblyService {
         .filter((s) => s.result === 'PASSED' || s.result === 'EXEMPTED')
         .map((s) => this.toEligibilitySourceSnapshot(s)),
       allocationByUlbId,
+      maxClaimLetters: formConfig.maxClaimLetters,
     };
   }
 
@@ -1043,7 +1049,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return finalized;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1408,7 +1414,7 @@ export class ClaimLetterAssemblyService {
       }
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1486,7 +1492,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return updated;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1543,7 +1549,7 @@ export class ClaimLetterAssemblyService {
             state: updated['state'] as Types.ObjectId,
             year: updated['year'] as Types.ObjectId,
             installment: updated['installment'] as 1 | 2,
-            batchNumber: updated['batchNumber'] as 1 | 2 | 3,
+            batchNumber: updated['batchNumber'] as number,
             version: updated['version'] as number,
             fromStatus: FORM_STATUS.IN_PROGRESS,
             toStatus: FORM_STATUS.IN_PROGRESS,
@@ -1558,7 +1564,7 @@ export class ClaimLetterAssemblyService {
 
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1596,7 +1602,7 @@ export class ClaimLetterAssemblyService {
     const stateOid = previous['state'] as Types.ObjectId;
     const yearOid = previous['year'] as Types.ObjectId;
     const installment = previous['installment'] as number;
-    const batchNumber = previous['batchNumber'] as 1 | 2 | 3;
+    const batchNumber = previous['batchNumber'] as number;
     // A new version is the same letter, so it keeps its Ref No.
     const resubmissionNumber = (previous['resubmissionNumber'] as number | undefined) ?? 0;
     const previousVersion = previous['version'] as number;
@@ -1662,7 +1668,7 @@ export class ClaimLetterAssemblyService {
     stateOid: Types.ObjectId,
     yearOid: Types.ObjectId,
     installment: number,
-    batchNumber: 1 | 2 | 3,
+    batchNumber: number,
     resubmissionNumber: number,
     version: number,
     previousId: Types.ObjectId,
@@ -1746,7 +1752,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return parent;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1823,7 +1829,7 @@ export class ClaimLetterAssemblyService {
       await session.commitTransaction();
       return finalized;
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();
@@ -1859,7 +1865,7 @@ export class ClaimLetterAssemblyService {
       );
       await session.commitTransaction();
     } catch (err) {
-      await session.abortTransaction();
+      await abortIfActive(session);
       throw err;
     } finally {
       await session.endSession();

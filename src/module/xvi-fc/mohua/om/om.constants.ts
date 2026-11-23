@@ -12,7 +12,9 @@ export const OM_FIELDS = [
     required: true,
     placeholder: 'No.',
     hintText: 'The e-Office file number of this OM',
-    validations: [{ name: 'maxlength', validator: OM_NUMBER_MAX_LENGTH, message: `At most ${OM_NUMBER_MAX_LENGTH} characters.` }],
+    validations: [
+      { name: 'maxlength', validator: OM_NUMBER_MAX_LENGTH, message: `At most ${OM_NUMBER_MAX_LENGTH} characters.` },
+    ],
   },
   {
     key: OM_FIELD.DATE,
@@ -32,7 +34,7 @@ export const OM_TITLE = 'OFFICE MEMORANDUM';
 /** Printed after the ULB lists. */
 export const OM_ULB_LISTS_FOOTNOTE =
   'The table below lists eligible ULBs included in the current claim batch. Other eligible ULBs may be included in ' +
-  'subsequent claims.';
+  'other claim letters.';
 
 export const OM_LETTERHEAD = [
   'Government of India',

@@ -32,6 +32,40 @@ export class AfsMetric {
   @Prop({ type: Number, default: 0 })
   processingFiles: number;
 
+  /** Digitization v3 only (docType 'v3'): how many digitized files have each score; refreshed by rebuild / backfill */
+  @Prop({ type: Object })
+  scoreSummary?: {
+    digitized: number;
+    withScoresObject: number;
+    withTextract: number;
+    withAccuracy: number;
+    withArithmetic: number;
+    withOverall: number;
+    mismatches: number;
+    /** Crosscheck confidence (accuracyScore) at or above / below 80 */
+    confidenceHigh: number;
+    confidenceLow: number;
+    arithmeticPass: number;
+    arithmeticFail: number;
+    /** Arithmetic skipped because the uploaded doc type isn't in the file (mismatch) */
+    arithmeticSkipped: number;
+    overallPass: number;
+    overallPartial: number;
+    overallFail: number;
+    computedAt: Date;
+  };
+
+  /** Digitization v3 only (docType 'v3'): files run through the old flow vs v3; refreshed by rebuild / backfill */
+  @Prop({ type: Object })
+  runSummary?: {
+    totalRun: number;
+    oldDigitized: number;
+    newDigitized: number;
+    oldFailed: number;
+    newFailed: number;
+    computedAt: Date;
+  };
+
   /** Digitization v3 uniqueness baseline (docType 'v3-uniqueness'): pages in the unique files (totalFiles = the unique files) */
   @Prop({ type: Number, default: 0 })
   totalPages: number;
