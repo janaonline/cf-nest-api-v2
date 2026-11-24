@@ -6,7 +6,6 @@ import { DynamicFormValidationService } from 'src/module/xvi-fc/common/dynamic-f
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import type { ClaimLetterFormConfig, ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
 import type { FormQuestionHydratorService } from 'src/module/xvi-fc/common/services/form-question-hydrator.service';
-import type { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import type { ExemptionResolverService } from 'src/module/xvi-fc/common/services/exemption-resolver.service';
 import {
   ClaimLetterLetterDetailsService,
@@ -72,6 +71,7 @@ function formConfig(overrides: Partial<ClaimLetterFormConfig> = {}): ClaimLetter
     letterSkipPrefill: new Set(['letterNo', 'letterDate']),
     letterConfigured: true,
     mergeDocuments: [],
+    maxClaimLetters: 3,
     ...overrides,
   };
 }
@@ -91,7 +91,6 @@ describe('ClaimLetterLetterDetailsService', () => {
   let parent: Record<string, unknown>;
   let batchModel: { findOne: jest.Mock; findOneAndUpdate: jest.Mock; findById: jest.Mock };
   let formJson: { loadFormConfig: jest.Mock };
-  let activeBatch: { resolveBlockingBatchNumber: jest.Mock; assertActive: jest.Mock };
   let exemptionResolver: { resolveDiscretionary: jest.Mock };
   let service: ClaimLetterLetterDetailsService;
 
@@ -114,10 +113,6 @@ describe('ClaimLetterLetterDetailsService', () => {
       findById: jest.fn(() => q({ currentFormStatus: 2, isAbandoned: false })),
     };
     formJson = { loadFormConfig: jest.fn().mockResolvedValue(formConfig()) };
-    activeBatch = {
-      resolveBlockingBatchNumber: jest.fn().mockResolvedValue(null),
-      assertActive: jest.fn().mockResolvedValue(undefined),
-    };
     exemptionResolver = { resolveDiscretionary: jest.fn().mockResolvedValue(null) };
     const hydrator = {
       hydrate: (questions: FieldConfig[], saved: Record<string, unknown>) =>
@@ -127,7 +122,6 @@ describe('ClaimLetterLetterDetailsService', () => {
       formJson as unknown as ClaimLetterFormJsonService,
       new DynamicFormValidationService({} as never),
       hydrator as unknown as FormQuestionHydratorService,
-      activeBatch as unknown as ClaimLetterActiveBatchService,
       exemptionResolver as unknown as ExemptionResolverService,
       batchModel as never,
     );
@@ -158,12 +152,6 @@ describe('ClaimLetterLetterDetailsService', () => {
       expect(data!.missingFields).toEqual(['ATR date']);
       expect(data!.canEdit).toBe(true);
       expect(data!.previous).toBeNull();
-    });
-
-    it('is read-only while another batch is the active one', async () => {
-      activeBatch.resolveBlockingBatchNumber.mockResolvedValue(1);
-      const { data } = await service.get(claimLetterId, editor);
-      expect(data!.canEdit).toBe(false);
     });
 
     it('offers the latest other batch as prefill, minus skip-prefill and unconfigured keys', async () => {
@@ -316,14 +304,6 @@ describe('ClaimLetterLetterDetailsService', () => {
       batchModel.findOneAndUpdate.mockReturnValue(q(null));
       const err = await caught(service.save(claimLetterId, { data: { letterNo: 'B/2' } }, editor));
       expect((err.getResponse() as { code: string }).code).toBe(LETTER_DETAILS_CHANGED);
-    });
-
-    it('refuses edits while another batch is the active one', async () => {
-      activeBatch.assertActive.mockRejectedValue(new ConflictException('Batch 1 is still in progress'));
-      await expect(service.save(claimLetterId, { data: { letterNo: 'B/2' } }, editor)).rejects.toThrow(
-        'Batch 1 is still in progress',
-      );
-      expect(batchModel.findOneAndUpdate).not.toHaveBeenCalled();
     });
 
     it('refuses edits once the batch is no longer editable', async () => {

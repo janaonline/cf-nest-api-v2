@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
+import { CLAIM_LETTER_MAX_LETTERS_LIMIT } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import {
   ClaimLetterFinalPdf,
   ClaimLetterFinalPdfSchema,
@@ -9,9 +10,9 @@ import {
 } from './claim-letter-batch.schema';
 
 /**
- * Brain §16.5's action-source vocabulary. Only 'DIRECT_STATE_REVIEW' is written in V1 (create
- * draft, submit, abandon) — the others are reserved for the future MoHUA-review phase so this
- * schema doesn't need to change when that work lands.
+ * Brain §16.5's action-source vocabulary: 'DIRECT_STATE_REVIEW' (create, submit, abandon), 'DIRECT_MOHUA_REVIEW' (SO
+ * approve), 'CLAIM_LETTER_REJECTION' (SO return) and 'DEPENDENCY_INVALIDATION' (a letter returned with another
+ * letter's State form, ADR 0009). 'CLAIM_LETTER_APPROVAL' is reserved for MoHUA's final step.
  */
 export type ClaimLetterHistoryActionSource =
   | 'DIRECT_STATE_REVIEW'
@@ -80,7 +81,7 @@ export class ClaimLetterBatchHistory {
   @Prop({ type: Number, enum: [1, 2], required: true })
   installment!: ClaimLetterInstallment;
 
-  @Prop({ type: Number, enum: [1, 2, 3], required: true })
+  @Prop({ type: Number, min: 1, max: CLAIM_LETTER_MAX_LETTERS_LIMIT, required: true })
   batchNumber!: ClaimLetterBatchNumber;
 
   @Prop({ type: Number, required: true })

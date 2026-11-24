@@ -10,12 +10,11 @@ Each decision below is cited from several files; read the ADR, not just the loca
 
 - [docs/adr/0001-idempotent-retry.md](docs/adr/0001-idempotent-retry.md) - retry safety for create,
   edit and submit, and the concurrency model of each later mutation.
-- [docs/adr/0002-batching-and-locks.md](docs/adr/0002-batching-and-locks.md) - the 3 batch slots,
+- [docs/adr/0002-batching-and-locks.md](docs/adr/0002-batching-and-locks.md) - the batch slots (up to the cap),
   per-ULB locks, the build stages, stale-`BUILDING` recovery and the edit-lock lease.
 - [docs/adr/0003-workflow-transitions.md](docs/adr/0003-workflow-transitions.md) - which mutations
   write history, when the signed letter is cleared, and the submit preconditions.
-- [docs/adr/0004-one-active-batch.md](docs/adr/0004-one-active-batch.md) - one batch in progress per
-  State/year/installment, and why lifting it brings back stale letters.
+- [docs/adr/0004-one-active-batch.md](docs/adr/0004-one-active-batch.md) - superseded by ADR 0009; history only.
 - [docs/adr/0005-exemptions-under-review.md](docs/adr/0005-exemptions-under-review.md) - an exemption
   request under MoHUA review or approved counts; how the claim follows a later decision.
 - [docs/adr/0006-claim-amount-switch.md](docs/adr/0006-claim-amount-switch.md) - the claim is the
@@ -24,6 +23,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
   and return: the fresh re-check, exemptions in the letter's transaction, frozen rows, form history, emails.
 - [docs/adr/0008-ref-no-after-a-return.md](docs/adr/0008-ref-no-after-a-return.md) - a letter built in a slot a
   returned letter held gets `-R<n>` in its Ref No and file names (`resubmissionNumber`).
+- [docs/adr/0009-parallel-claim-letters.md](docs/adr/0009-parallel-claim-letters.md) - several letters in draft and under
+  review at once, up to formjson 26 `meta.maxClaimLetters`; what a State form return does to the other letters; the
+  last-letter rule; one State's submits and SO decisions one at a time.
 
 ## Layout
 
@@ -38,7 +40,8 @@ Each decision below is cited from several files; read the ADR, not just the loca
   totals. Its cached `*ForDisplay` methods serve read-only display paths only; create, edit, submit
   and the letter always evaluate fresh.
 - `services/main/claim-letter.service.ts` - read paths (eligibility summary, claim context, detail,
-  history) and the signed-file upload.
+  history) and the signed-file upload. The history filters by Status (in the State's terms) and batch, and sorts by
+  column (`helpers/claim-letter-history.helpers.ts`); Last activity, newest first, by default.
 - `services/ulb-options/` - the ULB picker: every expected ULB with its ineligibility reason. A ULB
   locked in another batch carries that batch's number (`claimedInBatch`), whatever its eligibility;
   order is eligible, ineligible, then in another batch. `limit` goes up to `CLAIM_LETTER_MAX_ULBS`
@@ -51,7 +54,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
   first) and its checks (ADR 0003).
 - `services/form-status/` - `ClaimLetterFormStatusService`, called by the SO's approve (mohua/claim-letters): in the
   caller's transaction it moves the letter's forms to 5. State forms (and the selected ULBs' Elected Body / FC Unspent rows, plus their Devolution
-  rows: `rowStatus` is null until this move, then 5)  come from the
+  rows: `rowStatus` is null until this move, then 5) come from the
   evidence frozen on the letter, from 15; each selected ULB's forms (Annual Accounts, Bank Account, SLB, DUR) are found
   live from 8 through the enabled ULB-level form-json sources, so a letter built before a ULB form became a condition
   still moves it (a ULB the letter recorded as exempt for a form is skipped). One conditional `updateMany` per
@@ -73,8 +76,9 @@ Each decision below is cited from several files; read the ADR, not just the loca
   rows' 16 back to null (no PMU row review there). The returned letter itself is closed: status 16 plus
   `isAbandoned: true`, so its batch slot and ULB locks are free and the State builds a new letter; MoHUA still lists
   it, and the State summary labels it by status, not "Abandoned". Each reopened form or row is in the history row's
-  `rejectedSourceRefs`.
-- `services/active-batch/` - the one-active-batch rule (ADR 0004); no other file decides it.
+  `rejectedSourceRefs`. The State's `getDetail` turns them into `returnSummary` (State forms, returned ULBs with
+  their forms and remark; `buildReturnSummary`) for a letter the SO returned itself, never for one returned with
+  another letter (`returnedWith`). Form names: `CLAIM_LETTER_FORM_NAMES`, shared with the MoHUA return emails.
 - `services/history/` - the only writer of `ClaimLetterBatchHistory` (ADR 0003).
 - `services/recovery/` - the hourly stale-`BUILDING` cleanup (cron) and `detectAnomalies`, a
   read-only report.
@@ -87,8 +91,7 @@ Each decision below is cited from several files; read the ADR, not just the loca
 - `services/letter-details/` - the State-entered letter details (see "Letter details").
 - `services/final-pdf/` - the final claim letter that goes to MoHUA (see "Final claim letter").
 - `services/form-json/` - this feature's own formjson (formId 26, `CLAIM_LETTER_FORM_ID`): the
-  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR
-  0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
+  `signedClaimFile` field, the claim-amount switch `meta.claimAmountEditable` (off unless `true`; ADR 0006) with its claimed-vs-allocated band (`meta.varianceLowerPercent` / `varianceUpperPercent`, else
   `CLAIM_LETTER_VARIANCE_*_PERCENT`, used only while the switch is on), `meta.letterDetailKeys`,
   `meta.letterDetailSkipPrefill` and `meta.mergeDocuments`. Invalid entries are logged and skipped.
   `loadFormConfig` fetches the document once per call and derives all of it; never add a second
@@ -169,7 +172,7 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   never stored) and blocks Submit (400 `FINAL_PDF_INCOMPLETE`, naming the document and its form). An
   unreadable one is a 422 naming the form to fix.
 - Both GETs need only VIEW_STATE_FORMS; a viewer may trigger a build, since it is only a cache. A
-  submitted batch serves its stored copy, with no rebuild and no active-batch guard.
+  submitted batch serves its stored copy, with no rebuild.
 - Submit sends the key the page showed and gets 409 `FINAL_PDF_OUTDATED` when it is stale, also
   when an older merge replaced the reviewed one after the check (the update filter pins the key). The
   summary's `finalClaimLetterStage` (DRAFT / SUBMITTED / null) tells the UI which copy to show.
@@ -177,9 +180,14 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
 
 ## Invariants worth knowing before you change adjacent code
 
-- At most `CLAIM_LETTER_MAX_BATCH_NUMBER` (3) logical batches per (state, year, installment), and
-  each ULB locked into one batch; both are enforced by unique indexes, not just application checks
-  (ADR 0002).
+- At most formjson 26 `meta.maxClaimLetters` (default 3, at most `CLAIM_LETTER_MAX_LETTERS_LIMIT` 10) open letters
+  per (state, year, installment), and each ULB locked into one letter; uniqueness is enforced by unique indexes,
+  the cap by `allocateBatchNumber` and the schema's `batchNumber` bounds (ADR 0002, ADR 0009).
+- Several letters may be drafts or under review at once (ADR 0009). They share the State forms only: an SO return
+  that reopens one (SFC, GTC, or a ULB's Elected Body / FC Unspent / Devolution row) returns every other letter at
+  15 in the same transaction and clears the drafts' signed letters (`stateFormReturnNotice`); SFC and GTC are
+  returnable only at 15. A draft's download and signed upload wait while the State gate fails
+  (`assertStateConditionsMet`), and `getDetail` reports it as `blockedReason`.
 - A frozen claim version is immutable: `createNewVersion` builds a new parent rather than mutating a
   READY one (ADR 0002, ADR 0003).
 - The claimed amount is decided only in `resolveClaimedAmount` (ADR 0006). Switch off (the default):
@@ -202,12 +210,16 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   `appliedExemptionIds` is the child's own requests (ADR 0005).
 - Exemption notes (`perUlbExemptionNotes`: under review, or rejected and now failing) feed the ULB row
   badges and the detail summary's `exemptionUnderReviewUlbCount`; they are display-only.
-- Submit's checks all run before its transaction and are listed in ADR 0003; the update filter also
-  pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read.
+- Submit's checks run before its transaction and are listed in ADR 0003; the update filter also
+  pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read. Inside the
+  transaction it writes the per-State guard (`touchClaimUndoGuard`, as the SO's approve and return do) and
+  re-checks its State forms (`assertStateFormsStillReady`); a lost race is a 409 (`toClaimLetterBusyConflict`).
+  The signed-letter upload writes the same way (guard, State-form re-check, then the write), so an SO return
+  never slips between its gate check and its write (ADR 0009).
 - Abandon only sets `isAbandoned` (the status stays `IN_PROGRESS`) and releases the locks, so every
   path that acts on a batch checks the flag itself: preview, .docx, signed-file upload and submit
-  reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and the one-active-batch rule ignores an abandoned
-  batch (ADR 0004). Users see it as "Discard" (button, messages, the "Discarded" status label);
+  reply 409 `CLAIM_LETTER_ABANDONED_MESSAGE`, and an abandoned batch frees its place under the cap.
+  Users see it as "Discard" (button, messages, the "Discarded" status label);
   code, the `/abandon` route and the `isAbandoned` field keep "abandon".
 - An edit never frees a removed ULB before it succeeds: validation first, added locks next, removed
   locks released in the final write's transaction (ADR 0002).

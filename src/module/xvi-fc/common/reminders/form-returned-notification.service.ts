@@ -18,6 +18,10 @@ const STATE_TEMPLATE_SLUG = 'state-form-returned-notification';
 const CLAIM_LETTER_STATE_TEMPLATE_SLUG = 'claim-letter-returned-state';
 const CLAIM_LETTER_ULB_TEMPLATE_SLUG = 'claim-letter-returned-ulb';
 
+/** "A", "A and B", "A, B and C". */
+const joinWithAnd = (items: readonly string[]): string =>
+  items.length <= 1 ? (items[0] ?? '') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+
 /** Shared look of the two claim-letter return emails (the same palette as the form-returned ones). */
 const RETURN_EMAIL_STYLE = `
     body { margin: 0; padding: 0; background-color: #f4f6f9; font-family: Arial, sans-serif; }
@@ -478,11 +482,13 @@ export class FormReturnedNotificationService {
   async notifyClaimLetterReturned(params: {
     stateId: Types.ObjectId;
     refNo: string;
+    /** The State's other letters under SO review returned with it, because they relied on a reopened State form. */
+    alsoReturned?: { refNos: string[]; formNames: string[] } | null;
     stateRemark: string | null;
     stateItems: string[];
     ulbs: ClaimLetterReturnedUlbNotice[];
   }): Promise<void> {
-    const { stateId, refNo, stateRemark, stateItems, ulbs } = params;
+    const { stateId, refNo, alsoReturned, stateRemark, stateItems, ulbs } = params;
     let ulbNames = new Map<string, string>();
     try {
       const docs = ulbs.length
@@ -521,7 +527,13 @@ export class FormReturnedNotificationService {
           returnReasonBlock: stateRemark
             ? `<div class="reason-box"><p><strong>Reviewer's remarks:</strong> ${escapeHtml(stateRemark)}</p></div>`
             : '',
-          returnedItemsBlock: `<ul class="items">${lines.join('')}</ul>`,
+          returnedItemsBlock:
+            `<ul class="items">${lines.join('')}</ul>` +
+            (alsoReturned?.refNos.length
+              ? `<p>${escapeHtml(joinWithAnd(alsoReturned.refNos))} ${alsoReturned.refNos.length > 1 ? 'were' : 'was'} ` +
+                `also returned because ${alsoReturned.refNos.length > 1 ? 'they' : 'it'} relied on ` +
+                `${escapeHtml(joinWithAnd(alsoReturned.formNames))}.</p>`
+              : ''),
           loginLink: loginUrl,
         };
         const queued = await this.queueToEach(

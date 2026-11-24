@@ -2,13 +2,15 @@ import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
 import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import { FileInfo, FileInfoSchema } from 'src/schemas/common/file.schema';
+import { CLAIM_LETTER_MAX_LETTERS_LIMIT } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import {
   ClaimLetterEligibilitySourceSnapshot,
   ClaimLetterEligibilitySourceSnapshotSchema,
 } from './claim-letter-eligibility-source-snapshot.schema';
 
 export type ClaimLetterInstallment = 1 | 2;
-export type ClaimLetterBatchNumber = 1 | 2 | 3;
+/** 1 to formjson 26 `meta.maxClaimLetters` (ADR 0009). */
+export type ClaimLetterBatchNumber = number;
 export type ClaimLetterAssemblyStatus = 'BUILDING' | 'READY';
 
 export type ClaimLetterBatchDocument = HydratedDocument<ClaimLetterBatch>;
@@ -81,6 +83,37 @@ export class ClaimLetterFinalPdf {
 
 export const ClaimLetterFinalPdfSchema = SchemaFactory.createForClass(ClaimLetterFinalPdf);
 
+/** A State form the SO returned with another letter of the same State (ADR 0009). Names are stored as shown. */
+@Schema({ _id: false })
+export class ClaimLetterStateFormReturn {
+  // The letter the SO returned.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ClaimLetterBatch', required: true })
+  claimLetter!: Types.ObjectId;
+
+  // "Claim Letter 2" or "Claim Letter 2-R1".
+  @Prop({ type: String, required: true })
+  letterName!: string;
+
+  // Its file base name, as MoHUA's screens show letters (e.g. CF_TR_2026-27_1-2).
+  @Prop({ type: String, required: true })
+  letterRef!: string;
+
+  @Prop({ type: [Number], default: [] })
+  formIds!: number[];
+
+  @Prop({ type: [String], default: [] })
+  formNames!: string[];
+
+  // Drafts only: the uploaded signed letter was removed.
+  @Prop({ type: Boolean, default: false })
+  signedFileRemoved!: boolean;
+
+  @Prop({ type: Date, required: true })
+  at!: Date;
+}
+
+export const ClaimLetterStateFormReturnSchema = SchemaFactory.createForClass(ClaimLetterStateFormReturn);
+
 /**
  * Parent claim document (brain §14.2) — one immutable version of one logical batch slot per
  * State/year/installment. `assemblyStatus` is an internal build guard, not a workflow status;
@@ -104,7 +137,7 @@ export class ClaimLetterBatch {
   @Prop({ type: Number, enum: [1, 2], required: true })
   installment!: ClaimLetterInstallment;
 
-  @Prop({ type: Number, enum: [1, 2, 3], required: true })
+  @Prop({ type: Number, min: 1, max: CLAIM_LETTER_MAX_LETTERS_LIMIT, required: true })
   batchNumber!: ClaimLetterBatchNumber;
 
   /** Returned letters (16 or 6) that held this slot before, counted at create: above 0 adds `-R<n>` to the Ref No
@@ -229,6 +262,14 @@ export class ClaimLetterBatch {
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', default: null })
   abandonedBy?: Types.ObjectId | null;
+
+  // Set on a letter under SO review that was returned because another letter's State form was returned.
+  @Prop({ type: ClaimLetterStateFormReturnSchema, default: null })
+  returnedWith?: ClaimLetterStateFormReturn | null;
+
+  // Set on a draft when another letter's State form was returned; cleared by its next signed upload.
+  @Prop({ type: ClaimLetterStateFormReturnSchema, default: null })
+  stateFormReturnNotice?: ClaimLetterStateFormReturn | null;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   createdBy!: Types.ObjectId;

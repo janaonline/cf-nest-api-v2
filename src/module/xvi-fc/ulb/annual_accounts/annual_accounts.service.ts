@@ -94,6 +94,10 @@ import {
   isUploadBlocked,
   UPLOAD_BLOCKED_MESSAGE,
 } from './annual-account-status-access.util';
+import {
+  nextPassedReplacements,
+  PASSED_REPLACEMENTS_EXHAUSTED_MESSAGE,
+} from 'src/common/utils/manual-review-cooldown.util';
 
 /** 'auditedData' | 'unauditedData' section keys as they appear in DTOs/query params, mapped to
  *  the physical-document discriminator (XviFcAnnualAccount.sectionType) below. */
@@ -254,7 +258,12 @@ export class AnnualAccountsService implements OnModuleInit {
     userAgent: string | null = null,
   ) {
     await this.validateUploadPermission(user, dto as unknown as UploadDocumentDto);
-    await this.assertCanUlbUpload(dto.ulbId, dto.designYearId, dto.section as AnnualAccountSectionKey, dto.docId);
+    const passedReplacementsUsed = await this.assertCanUlbUpload(
+      dto.ulbId,
+      dto.designYearId,
+      dto.section as AnnualAccountSectionKey,
+      dto.docId,
+    );
 
     const isNoOcrDoc = NO_OCR_DOC_IDS.has(dto.docId);
     const expectedDocType = isNoOcrDoc ? null : DOC_TYPE_MAP[dto.docId];
@@ -342,6 +351,7 @@ export class AnnualAccountsService implements OnModuleInit {
       currentUpload,
       user,
       initialProcessingStatus,
+      passedReplacementsUsed,
     );
 
     await this.uploadHistoryModel.create({
@@ -1173,6 +1183,7 @@ export class AnnualAccountsService implements OnModuleInit {
               }
             : null,
           postRejectionAttemptsUsed: d.postRejectionAttemptsUsed ?? 0,
+          passedReplacementsUsed: d.passedReplacementsUsed ?? 0,
           manualReviewRejectionCount: d.manualReviewRejectionCount ?? 0,
           uploadBlockedUntil: d.uploadBlockedUntil ?? null,
         })),
@@ -1261,6 +1272,8 @@ export class AnnualAccountsService implements OnModuleInit {
       throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
 
+    const passedReplacementsUsed = this.passedReplacementsAfterDiscard(docSlot);
+
     await this.annualAccountModel.updateOne(
       { _id: sectionDoc._id, 'documents.docId': docId },
       {
@@ -1268,6 +1281,7 @@ export class AnnualAccountsService implements OnModuleInit {
           'documents.$.currentUpload': null,
           'documents.$.uploadStatus': 'NOT_UPLOADED',
           'documents.$.processingStatus': 'NOT_STARTED',
+          ...(passedReplacementsUsed !== null ? { 'documents.$.passedReplacementsUsed': passedReplacementsUsed } : {}),
           updatedAt: new Date(),
         },
       },
@@ -1964,6 +1978,7 @@ export class AnnualAccountsService implements OnModuleInit {
     currentUpload: Record<string, unknown>,
     user: AuthUser,
     processingStatus: string = 'PROCESSING',
+    passedReplacementsUsed: number | null = null,
   ) {
     const { section, docId, yearId, year } = dto;
     const wantType = SECTION_KEY_TO_TYPE[section as AnnualAccountSectionKey];
@@ -2050,6 +2065,7 @@ export class AnnualAccountsService implements OnModuleInit {
           'documents.$.currentUpload': currentUpload,
           'documents.$.uploadStatus': 'UPLOADED',
           'documents.$.processingStatus': processingStatus,
+          ...(passedReplacementsUsed !== null ? { 'documents.$.passedReplacementsUsed': passedReplacementsUsed } : {}),
           updatedAt: new Date(),
         },
       },
@@ -2094,14 +2110,16 @@ export class AnnualAccountsService implements OnModuleInit {
 
   /**
    * Two-layer upload gate: the section must be ULB-editable (shared FORM_STATUS gate), and
-   * this specific document must not already be individually APPROVED by STATE.
+   * this specific document must not already be individually APPROVED by STATE. Uploading over a
+   * PASSED document also counts against its replacement cap; the returned number is the slot's new
+   * `passedReplacementsUsed` (null = unchanged), for the caller to write with the new upload.
    */
   async assertCanUlbUpload(
     ulbId: string,
     designYearId: string,
     section: AnnualAccountSectionKey,
     docId: string,
-  ): Promise<void> {
+  ): Promise<number | null> {
     const ulbOid = new Types.ObjectId(ulbId);
     const designYearOid = new Types.ObjectId(designYearId);
 
@@ -2117,7 +2135,7 @@ export class AnnualAccountsService implements OnModuleInit {
       })
       .lean()
       .exec();
-    if (!sectionDoc) return;
+    if (!sectionDoc) return null;
 
     if (!canUlbEditForm(sectionDoc.form_status_id)) {
       throw new ForbiddenException(`This section cannot be edited while its status is ${sectionDoc.form_status}.`);
@@ -2142,6 +2160,21 @@ export class AnnualAccountsService implements OnModuleInit {
     if (isUploadBlocked(docSlot?.uploadBlockedUntil)) {
       throw new ForbiddenException(UPLOAD_BLOCKED_MESSAGE);
     }
+
+    return this.passedReplacementsAfterDiscard(docSlot);
+  }
+
+  /**
+   * Throwing away this slot's current upload (remove, or upload over it): refuses once a PASSED
+   * document has used its MAX_PASSED_REPLACEMENTS, else returns the new `passedReplacementsUsed`
+   * (null when the upload had not passed, so nothing is counted). A document the State or SO
+   * returned is always replaceable and starts the count again.
+   */
+  private passedReplacementsAfterDiscard(docSlot: any): number | null {
+    const next = nextPassedReplacements(docSlot, this.resolveEffectiveDecision(docSlot ?? {})?.status === 'RETURNED');
+    if (!next) return null;
+    if (!next.allowed) throw new ConflictException(PASSED_REPLACEMENTS_EXHAUSTED_MESSAGE);
+    return next.value;
   }
 
   /**

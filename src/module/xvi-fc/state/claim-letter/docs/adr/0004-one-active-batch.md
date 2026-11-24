@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (2026-10-27). Meant to be lifted later; see Consequences.
+Superseded by ADR 0009 (2026-11-18): letters are now prepared and submitted in parallel. Kept for history.
 
 ## Context
 
