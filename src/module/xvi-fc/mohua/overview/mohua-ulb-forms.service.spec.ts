@@ -19,14 +19,14 @@ describe('MohuaUlbFormsService.get', () => {
     const { forms } = await service.get('ulb1', 'year1');
 
     expect(progress.loadUlbFormStatuses).toHaveBeenCalledWith('year1', 'ulb1');
-    expect(forms.audited).toEqual({ statusCode: 3, statusLabel: 'Under Review by State', submitted: true });
+    expect(forms.audited).toEqual({ statusCode: 3, statusLabel: 'Under Review by State', submitted: false });
     expect(forms.unaudited).toMatchObject({ statusLabel: 'In Progress', submitted: false });
     expect(forms.pfms.submitted).toBe(true);
     expect(forms.slb.submitted).toBe(true);
     expect(forms.dur).toEqual({ statusCode: null, statusLabel: 'Not started', submitted: false });
   });
 
-  it('counts SLB as submitted only at Approved by State (or exempt), unlike the other forms', async () => {
+  it('counts any form as submitted only once the State approved it (8 or later), SLB included', async () => {
     const { service } = build({
       audited: null,
       unaudited: null,
@@ -37,7 +37,7 @@ describe('MohuaUlbFormsService.get', () => {
 
     const { forms } = await service.get('ulb1', 'year1');
 
-    expect(forms.pfms.submitted).toBe(true);
+    expect(forms.pfms.submitted).toBe(false);
     expect(forms.slb.submitted).toBe(false);
   });
 });
