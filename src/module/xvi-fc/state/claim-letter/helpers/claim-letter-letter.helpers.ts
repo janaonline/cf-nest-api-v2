@@ -148,7 +148,7 @@ export const TIED_COLUMN: ClaimLetterColumn = { header: `Tied grant Allocation (
 export const UNTIED_COLUMN: ClaimLetterColumn = { header: `Untied grant allocation (₹${NBSP}lakh)`, kind: 'amount' };
 
 /** A discretionary exemption's cell text: under MoHUA review or approved; null for none or rejected. */
-function discretionaryExemptionText(status: number | undefined): string | null {
+export function discretionaryExemptionText(status: number | undefined): string | null {
   if (status === FORM_STATUS.UNDER_REVIEW_BY_MOHUA) return EXEMPTION_REQUESTED;
   if (status === FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA) return EXEMPTED;
   return null;

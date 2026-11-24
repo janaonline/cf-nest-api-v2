@@ -131,9 +131,13 @@ src/
 │   │                    # decoupled from its own STATE-side module — mirrors fc-unspent's own split)
 │   │                    # claim-letters (read-only Claims & Submissions screens: GET xvi-fc/mohua/claim-letters/:yearId/:installment — every
 │   │                    # state's first-claim status, installment allocation (half of basic + performance from grantAllocation) and amount claimed, plus a national `overview` (total allocation; claims submitted / under SO review / approved = 5+7 / returned, each with claims, states and amount — released isn't tracked yet); .../state/:stateId/:yearId/:installment — one
-│   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs. Lists letters at status 15 (under SO review), 16 (returned by the SO),
+│   │                    # state's letters; .../letter/:id and .../letter/:id/ulbs; .../ulb-eligibility/:stateId/:yearId/:installment — every ULB of a
+│   │                    # State, live: the letter's condition columns (a failed ULB form shows its own status), Eligible / Ineligible (a failed
+│   │                    # ULB condition or no devolution allocation; a failed State condition is a banner) and the letter holding it. The
+│   │                    # condition check is cached 15 min in Redis (`mohuaUlbEligibility:*`, refresh=true rebuilds once the copy is over a minute old; Redis errors fall back to no cache); locks and letters are read
+│   │                    # live; search, filters and paging run in memory (MohuaUlbEligibilityService). Lists letters at status 15 (under SO review), 16 (returned by the SO),
 │   │                    # 5 (under MoHUA review), 6 (returned by MoHUA) and 7 (acknowledged, read-only) that are READY, not abandoned and not superseded — MOHUA_CLAIM_LETTERS_LISTED_STATUSES;
-│   │                    # each letter row carries its `batchNumber` (1 to formjson 26 `meta.maxClaimLetters`, default 3) and `returnedWith` (the letter whose State-form return also returned it, ADR 0009). A state's letters response also carries a
+│   │                    # each letter row and the letter detail carry its `batchNumber` (1 to formjson 26 `meta.maxClaimLetters`, default 3) and `returnedWith` (the letter whose State-form return also returned it, ADR 0009). A state's letters response also carries a
 │   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
 │   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/PMU (read-only, for the national dashboard)/ADMIN only; the State-side
 │   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a

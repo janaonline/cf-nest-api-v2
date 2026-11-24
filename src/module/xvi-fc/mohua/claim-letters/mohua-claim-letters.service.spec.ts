@@ -461,6 +461,7 @@ describe('MohuaClaimLettersService', () => {
         submittedUlbs: 9,
       });
       expect(detail.state).toEqual({ id: String(tripura._id), name: 'Tripura' });
+      expect(detail.batchNumber).toBe(1);
     });
 
     it("under SO review, offers SFC and GTC as the dialog shows them and lists the State's other letters there", async () => {

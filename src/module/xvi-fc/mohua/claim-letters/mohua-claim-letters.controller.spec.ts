@@ -13,6 +13,7 @@ describe('MohuaClaimLettersController', () => {
     getClaimLetterUlbs: jest.Mock;
     approve: jest.Mock;
   };
+  let ulbEligibility: { getUlbEligibility: jest.Mock };
   let controller: MohuaClaimLettersController;
 
   beforeEach(() => {
@@ -23,23 +24,35 @@ describe('MohuaClaimLettersController', () => {
       getClaimLetterUlbs: jest.fn().mockResolvedValue({ items: [] }),
       approve: jest.fn().mockResolvedValue({ id: 'c1' }),
     };
-    controller = new MohuaClaimLettersController(service as never);
+    ulbEligibility = { getUlbEligibility: jest.fn().mockResolvedValue({ items: [] }) };
+    controller = new MohuaClaimLettersController(service as never, ulbEligibility as never);
   });
 
   it.each([Scope.MOHUA, Scope.DOE, Scope.PMU, Scope.ADMIN])('lets %s read every screen', async (scope) => {
     await expect(controller.listStates('y1', 1, user(scope))).resolves.toMatchObject({ success: true });
-    await expect(controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).resolves.toMatchObject({ success: true });
+    await expect(controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).resolves.toMatchObject({
+      success: true,
+    });
     await expect(controller.getClaimLetter('c1', user(scope))).resolves.toMatchObject({ success: true });
     await expect(controller.getClaimLetterUlbs('c1', {}, user(scope))).resolves.toMatchObject({ success: true });
+    await expect(controller.getUlbEligibility('s1', 'y1', 1, {}, user(scope))).resolves.toMatchObject({
+      success: true,
+    });
   });
 
   it.each([Scope.STATE, Scope.ULB])('refuses %s on every screen before reading anything', async (scope) => {
     await expect(() => controller.listStates('y1', 1, user(scope))).rejects.toThrow(ForbiddenException);
-    await expect(() => controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).rejects.toThrow(ForbiddenException);
+    await expect(() => controller.listStateClaimLetters('s1', 'y1', 1, user(scope))).rejects.toThrow(
+      ForbiddenException,
+    );
     await expect(() => controller.getClaimLetter('c1', user(scope))).rejects.toThrow(ForbiddenException);
     await expect(() => controller.getClaimLetterUlbs('c1', {}, user(scope))).rejects.toThrow(ForbiddenException);
+    await expect(() => controller.getUlbEligibility('s1', 'y1', 1, {}, user(scope))).rejects.toThrow(
+      ForbiddenException,
+    );
     expect(service.listStates).not.toHaveBeenCalled();
     expect(service.getClaimLetter).not.toHaveBeenCalled();
+    expect(ulbEligibility.getUlbEligibility).not.toHaveBeenCalled();
   });
 
   it.each([Scope.MOHUA, Scope.ADMIN])('lets %s approve a claim letter', async (scope) => {

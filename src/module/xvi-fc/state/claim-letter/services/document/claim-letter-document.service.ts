@@ -479,8 +479,9 @@ export class ClaimLetterDocumentService {
     ];
   }
 
-  /** Whole unspent rupees per ULB from the State's FC Unspent declaration; no form = empty map. */
-  private async resolveUnspentAmounts(state: Types.ObjectId, year: Types.ObjectId): Promise<Map<string, number>> {
+  /** Whole unspent rupees per ULB from the State's FC Unspent declaration; no form = empty map. MoHUA's ULB
+   *  Eligibility page reuses it. */
+  async resolveUnspentAmounts(state: Types.ObjectId, year: Types.ObjectId): Promise<Map<string, number>> {
     const form = await this.unspentFormModel
       .findOne({ state, year, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false })
       .select('_id')
