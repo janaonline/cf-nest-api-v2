@@ -114,11 +114,13 @@ export interface OmHistoryRow {
   stateName: string;
   stateCode: string;
   ulbCount: number;
+  /** The amount claimed in the letter the OM covers (whole rupees). */
   totalAmount: number;
+  /** The State's allocation for this installment (basic + performance, halved; whole rupees); null when not set. */
+  allocation: number | null;
+  /** The OM's "Dated" (YYYY-MM-DD), once the signed copy is uploaded (Issued); null while only Generated. */
   issuedOn: string | null;
   status: OmStatus;
-  /** DoE tracking is not built yet; always PENDING for now. */
-  doeStatus: 'PENDING';
   signedFile: OmSignedFileView | null;
 }
 
