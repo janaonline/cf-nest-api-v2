@@ -82,7 +82,11 @@ export class DataCollectionController {
   @Patch('modify-financial-data')
   @ApiOperation({
     summary: 'Modify financial data',
-    description: 'Updates an existing data collection record by merging new line item values.',
+    description:
+      'Updates an existing data collection record by merging new line item values. ' +
+      'If no submitted value differs from the stored one, nothing is saved: the response is 200 with ' +
+      'data.meta.changed = false and the stored updatedAt (data.meta.changed = true when the record was saved). ' +
+      'Returns 409 with code CONCURRENT_MODIFICATION if another request changed the same record at the same time; retry the request.',
   })
   @Scopes(DATA_COLLECTION_SCOPES.FINANCIAL_DATA_MODIFY)
   @SkipThrottle()

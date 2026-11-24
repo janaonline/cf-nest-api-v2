@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
-import { Types } from 'mongoose';
+import { Error as MongooseError, Types } from 'mongoose';
 import type { User } from 'src/module/auth/enum/role.enum';
 import type { ApiClientContext } from 'src/module/auth/types/api-client-context.type';
 import { LineItemsLegendService } from 'src/module/line-items-legends/line-items-legend.service';
@@ -232,14 +232,54 @@ const mockLineItemsLegendService = {
   getActiveLegendsForValidation: jest.fn().mockResolvedValue([]),
 };
 
+type LegendLike = { nmamCode: string; isComputed?: boolean };
+
+/**
+ * The service rejects a template without a formula legend for each computed total. Most tests do not
+ * care about totals, so the provided legend service adds a neutral computed legend (no operands, total 0)
+ * for any key a test did not supply. Tests about missing computed legends set fillComputedLegends = false.
+ */
+let fillComputedLegends = true;
+const withComputedLegends = (legends: LegendLike[]): LegendLike[] => {
+  if (!fillComputedLegends) return legends;
+  const present = new Set(legends.filter((l) => l.isComputed === true).map((l) => l.nmamCode));
+  const neutral = ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue']
+    .filter((key) => !present.has(`computed.${key}`))
+    .map((key) => ({
+      nmamCode: `computed.${key}`,
+      name: `Neutral ${key}`,
+      accountHead: 'COMPUTED',
+      level: 1,
+      parentCode: null,
+      isComputed: true,
+      rules: [{ type: 'formula', operation: 'sum', operands: [] }],
+    }));
+  return [...legends, ...neutral];
+};
+
+const legendServiceProvider = {
+  getFinancialDataTemplate: (query?: unknown) =>
+    mockLineItemsLegendService.getFinancialDataTemplate(query) as Promise<unknown>,
+  getActiveLegendsForValidation: async (templateVersion: string) =>
+    withComputedLegends(
+      (await mockLineItemsLegendService.getActiveLegendsForValidation(templateVersion)) as LegendLike[],
+    ),
+};
+
 const mockAuditLogService = {
   logSubmitted: jest.fn().mockResolvedValue(undefined),
   logModified: jest.fn().mockResolvedValue(undefined),
+  logNoChange: jest.fn().mockResolvedValue(undefined),
+  logModifyConflict: jest.fn().mockResolvedValue(undefined),
   logValidationFailed: jest.fn().mockResolvedValue(undefined),
   logDuplicateSubmit: jest.fn().mockResolvedValue(undefined),
   logModifyNotFound: jest.fn().mockResolvedValue(undefined),
   logReversed: jest.fn().mockResolvedValue(undefined),
 };
+
+/** Real Mongoose VersionError, as save() throws when optimistic concurrency loses a race. */
+const makeVersionError = (id: Types.ObjectId) =>
+  new MongooseError.VersionError({ _doc: { _id: id } } as never, 0, ['lineItems']);
 
 const expectNoRemovedAuditFields = (arg: Record<string, unknown>) => {
   for (const field of removedAuditFields) {
@@ -297,6 +337,7 @@ describe('DataCollectionService', () => {
   beforeEach(async () => {
     dcModel = mockDataCollectionModel();
     defaultUlbChain = makeUlbChain();
+    fillComputedLegends = true;
     jest.clearAllMocks();
     mockUlbModel.find.mockReturnValue(defaultUlbChain);
     mockYearModel.find.mockReturnValue({ lean: jest.fn().mockResolvedValue([]) });
@@ -325,7 +366,7 @@ describe('DataCollectionService', () => {
         { provide: getModelToken(Ulb.name), useValue: mockUlbModel },
         { provide: getModelToken(Year.name), useValue: mockYearModel },
         { provide: DataCollectionAuthorizationService, useValue: mockAuthorizationService },
-        { provide: LineItemsLegendService, useValue: mockLineItemsLegendService },
+        { provide: LineItemsLegendService, useValue: legendServiceProvider },
         { provide: DataCollectionReferenceResolverService, useValue: mockReferenceResolverService },
         { provide: DataCollectionAuditLogService, useValue: mockAuditLogService },
       ],
@@ -1540,8 +1581,10 @@ describe('DataCollectionService', () => {
     });
 
     it('modify success audit log includes dataCollectionId', async () => {
-      const savedId = new Types.ObjectId();
+      // save() resolves to the same document, so the id is the record's own
+      const docId = new Types.ObjectId();
       const existingDoc = {
+        _id: docId,
         templateVersion: '2026.1',
         stateId: new Types.ObjectId(validStateId),
         yearCode: validYearCode,
@@ -1549,17 +1592,17 @@ describe('DataCollectionService', () => {
           ['120', 1],
           ['210', 1],
         ]),
-        save: jest.fn().mockResolvedValue({ ...makeDocSaveResult(), _id: savedId }),
+        save: jest.fn().mockResolvedValue({ ...makeDocSaveResult(), _id: docId }),
       };
       dcModel.findOne.mockReturnValue(existingDoc);
       mockLegendsFor();
       await service.update(basePayload as never, stateClient);
       expect(mockAuditLogService.logModified).toHaveBeenCalledWith(
-        expect.objectContaining({ dataCollectionId: savedId }),
+        expect.objectContaining({ dataCollectionId: docId }),
       );
     });
 
-    it('response message says Financial data updated successfully', async () => {
+    it('response says Financial data updated successfully with meta.changed true', async () => {
       const existingDoc = {
         templateVersion: '2026.1',
         stateId: new Types.ObjectId(validStateId),
@@ -1575,6 +1618,7 @@ describe('DataCollectionService', () => {
 
       const result = (await service.update(basePayload as never, stateClient)) as Record<string, unknown>;
       expect(result['message']).toBe('Financial data updated successfully.');
+      expect(result['meta']).toEqual({ changed: true });
     });
 
     // ─── Audit logging ─────────────────────────────────────────────────────
@@ -1607,6 +1651,8 @@ describe('DataCollectionService', () => {
       expect(arg['lineItemCount']).toBe(1);
       expectNoRemovedAuditFields(arg);
       expect(arg).not.toHaveProperty('lineItems');
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
     });
 
     it('calls logModified on successful update', async () => {
@@ -1635,6 +1681,7 @@ describe('DataCollectionService', () => {
           templateVersion: '2026.1',
           lineItemCount: 1,
           changedLineItemCodes: ['110'],
+          changedLineItems: [{ code: '110', oldValue: null, newValue: 500 }],
           validationStatus: 'VALID',
         }),
       );
@@ -1658,15 +1705,16 @@ describe('DataCollectionService', () => {
       await service.update(basePayload as never, stateClient);
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
       expect(arg['changedLineItemCodes']).toContain('110');
+      expect(arg['changedLineItems']).toEqual([{ code: '110', oldValue: 999, newValue: 500 }]);
     });
 
-    it('changedLineItemCodes omits keys whose values are unchanged', async () => {
+    it('changedLineItems keeps 0 as a real oldValue', async () => {
       const existingDoc = {
         templateVersion: '2026.1',
         stateId: new Types.ObjectId(validStateId),
         yearCode: validYearCode,
         lineItems: new Map<string, number>([
-          ['110', 500],
+          ['110', 0],
           ['120', 1],
           ['210', 1],
         ]),
@@ -1676,8 +1724,136 @@ describe('DataCollectionService', () => {
       mockLegendsFor();
       await service.update(basePayload as never, stateClient);
       const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
-      expect(arg['changedLineItemCodes']).toEqual([]);
+      expect(arg['changedLineItems']).toEqual([{ code: '110', oldValue: 0, newValue: 500 }]);
     });
+
+    it('changedLineItems lists changed and new codes, skips unchanged ones', async () => {
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([
+          ['110', 999],
+          ['120', 1],
+          ['210', 1],
+        ]),
+        save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      const payload = { ...basePayload, lineItems: { '110': 500, '120': 1, '130': 50 } };
+      await service.update(payload as never, stateClient);
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItemCodes']).toEqual(['110', '130']);
+      expect(arg['changedLineItems']).toEqual([
+        { code: '110', oldValue: 999, newValue: 500 },
+        { code: '130', oldValue: null, newValue: 50 },
+      ]);
+    });
+
+    // Stored record already holding basePayload's value; computed zeros match mockLegendsFor()
+    const storedAt = new Date('2026-11-01T00:00:00.000Z');
+    const makeUnchangedDoc = (overrides: Record<string, unknown> = {}) => ({
+      _id: new Types.ObjectId(),
+      templateVersion: '2026.1',
+      validationStatus: 'VALID',
+      status: 'ACTIVE',
+      stateId: new Types.ObjectId(validStateId),
+      yearCode: validYearCode,
+      lineItems: new Map<string, number>([
+        ['110', 500],
+        ['120', 1],
+        ['210', 1],
+      ]),
+      computed: { totIncome: 0, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
+      createdAt: storedAt,
+      updatedAt: storedAt,
+      save: jest.fn().mockResolvedValue(makeDocSaveResult({ lineItems: new Map([['110', 500]]) })),
+      ...overrides,
+    });
+
+    it('skips the save and logs NO_CHANGE when no value changed', async () => {
+      const existingDoc = makeUnchangedDoc();
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      const result = (await service.update(basePayload as never, stateClient)) as {
+        message: string;
+        data: { updatedAt: Date; lineItems: Record<string, number> };
+        meta: { changed: boolean };
+      };
+
+      expect(result.meta).toEqual({ changed: false });
+      expect(existingDoc.save).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logNoChange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dataCollectionId: existingDoc._id,
+          lineItemCount: 1,
+          validationStatus: 'VALID',
+          templateVersion: '2026.1',
+        }),
+      );
+      const arg = (mockAuditLogService.logNoChange.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg).not.toHaveProperty('changedLineItems');
+      expect(arg).not.toHaveProperty('changedLineItemCodes');
+      expect(result.message).toBe('No changes detected. Financial data is already up to date.');
+      expect(result.data.updatedAt).toBe(storedAt);
+      expect(result.data.lineItems).toEqual({ '110': 500, '120': 1, '210': 1 });
+    });
+
+    it('returns 409 and logs MODIFY_CONFLICT when save loses a race (VersionError)', async () => {
+      const existingDoc = makeUnchangedDoc({ lineItems: new Map<string, number>([['110', 999]]) });
+      existingDoc.save.mockRejectedValueOnce(makeVersionError(existingDoc._id));
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+
+      const err = await service.update(basePayload as never, stateClient).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: 'CONCURRENT_MODIFICATION' });
+      expect(mockAuditLogService.logModifyConflict).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+    });
+
+    it('still saves and logs MODIFIED with changedComputed when only the computed totals differ', async () => {
+      const existingDoc = makeUnchangedDoc({
+        computed: { totIncome: 9, totExpenditure: 0, totRevenue: 0, totOwnRevenue: 0 },
+      });
+      dcModel.findOne.mockReturnValue(existingDoc);
+      mockLegendsFor();
+      const result = (await service.update(basePayload as never, stateClient)) as { meta: { changed: boolean } };
+
+      expect(existingDoc.save).toHaveBeenCalledTimes(1);
+      expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
+      const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+      expect(arg['changedLineItemCodes']).toEqual([]);
+      expect(arg['changedLineItems']).toEqual([]);
+      expect(arg['changedComputed']).toEqual([{ code: 'totIncome', oldValue: 9, newValue: 0 }]);
+      expect(result.meta).toEqual({ changed: true });
+    });
+
+    it.each([['computed'], ['stateId'], ['yearCode']])(
+      'still saves when an old record is missing %s',
+      async (field) => {
+        const existingDoc = makeUnchangedDoc({ [field]: undefined });
+        dcModel.findOne.mockReturnValue(existingDoc);
+        mockLegendsFor();
+        await service.update(basePayload as never, stateClient);
+
+        expect(existingDoc.save).toHaveBeenCalledTimes(1);
+        expect(mockAuditLogService.logNoChange).not.toHaveBeenCalled();
+        const arg = (mockAuditLogService.logModified.mock.calls[0] as unknown[])[0] as Record<string, unknown>;
+        const expectedComputed =
+          field === 'computed'
+            ? ['totIncome', 'totExpenditure', 'totRevenue', 'totOwnRevenue'].map((code) => ({
+                code,
+                oldValue: null,
+                newValue: 0,
+              }))
+            : [];
+        expect(arg['changedComputed']).toEqual(expectedComputed);
+      },
+    );
 
     it('does not pass full merged lineItems to logModified', async () => {
       const existingDoc = {
@@ -1747,6 +1923,19 @@ describe('DataCollectionService', () => {
       const err = await service.reverseSubmission(reversePayload, adminUser).catch((e: unknown) => e);
       expect((err as NotFoundException).message).toContain(validUlbCode);
       expect((err as NotFoundException).message).toContain(validYearCode);
+    });
+
+    it('returns 409 without an audit row when reversal loses a race (VersionError)', async () => {
+      const doc = makeActiveDoc();
+      doc.save.mockRejectedValueOnce(makeVersionError(doc._id));
+      dcModel.findOne.mockReturnValue(doc);
+
+      const err = await service.reverseSubmission(reversePayload, adminUser).catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(ConflictException);
+      expect((err as ConflictException).getResponse()).toMatchObject({ code: 'CONCURRENT_MODIFICATION' });
+      expect(mockAuditLogService.logReversed).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModifyConflict).not.toHaveBeenCalled();
     });
 
     it('marks the record as reversed', async () => {
@@ -2550,11 +2739,66 @@ describe('DataCollectionService', () => {
       expect(issue?.expectedCondition).toBeDefined();
     });
 
-    it('no computed validation runs when no computed legends are in the active template', async () => {
-      // makeComputedSourceLegends() has no isComputed: true legends → no computed validation
+    it('rejects create with a configuration error when the template has no computed legends', async () => {
+      fillComputedLegends = false;
       mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(makeComputedSourceLegends());
-      const result = await service.create(baseComputedPayload({ '110': 100 }) as never, stateClient);
-      expect(result).not.toBeInstanceOf(BadRequestException);
+      const err = await service
+        .create(baseComputedPayload({ '110': 100 }) as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      const configErrors = body.errors.filter((e) => e.message.startsWith('Configuration error: no computed legend'));
+      expect(configErrors.map((e) => e.lineItemCode)).toEqual([
+        'computed.totIncome',
+        'computed.totExpenditure',
+        'computed.totRevenue',
+        'computed.totOwnRevenue',
+      ]);
+      expect(mockSave).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logValidationFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects update and saves nothing when a computed legend is missing (no silent zero totals)', async () => {
+      fillComputedLegends = false;
+      const withoutRevenue = makeFullLegendSet().filter((l) => l.nmamCode !== 'computed.totRevenue');
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(withoutRevenue);
+      const existingDoc = {
+        templateVersion: '2026.1',
+        stateId: new Types.ObjectId(validStateId),
+        yearCode: validYearCode,
+        lineItems: new Map<string, number>([
+          ['110', 100],
+          ['210', 200],
+        ]),
+        save: jest.fn(),
+      };
+      dcModel.findOne.mockReturnValue(existingDoc);
+
+      const err = await service
+        .update({ ulbCode: validUlbCode, yearCode: validYearCode, lineItems: { '110': 150 } } as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.map((e) => e.lineItemCode)).toEqual(['computed.totRevenue']);
+      expect(existingDoc.save).not.toHaveBeenCalled();
+      expect(mockAuditLogService.logModified).not.toHaveBeenCalled();
+    });
+
+    it('treats a computed legend without a formula rule as missing', async () => {
+      fillComputedLegends = false;
+      const legends = makeFullLegendSet().map((l) =>
+        l.nmamCode === 'computed.totIncome' ? { ...l, rules: l.rules.filter((r) => r.type !== 'formula') } : l,
+      );
+      mockLineItemsLegendService.getActiveLegendsForValidation.mockResolvedValueOnce(legends);
+      const err = await service
+        .create(baseComputedPayload({ '110': 100, '210': 200 }) as never, stateClient)
+        .catch((e: unknown) => e);
+
+      expect(err).toBeInstanceOf(BadRequestException);
+      const body = (err as BadRequestException).getResponse() as { errors: DataCollectionValidationIssue[] };
+      expect(body.errors.some((e) => e.message.includes('no computed legend for computed.totIncome'))).toBe(true);
     });
 
     it('computed validation passes when all four totals satisfy DB comparison rules', async () => {

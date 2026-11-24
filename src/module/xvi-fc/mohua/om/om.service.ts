@@ -32,6 +32,8 @@ import { buildOmContent, todayIso } from './om-content.builder';
 import { OmPdfService } from './om-pdf.service';
 import type { SaveOmDraftDto } from './om-draft.dto';
 import { copyClaimLetterUlbsToOm } from './om-ulbs.helper';
+import { allocationRupees } from '../overview/mohua-overview.util';
+import { MOHUA_CLAIM_LETTERS_INSTALLMENTS_PER_YEAR } from '../claim-letters/mohua-claim-letters.constants';
 import {
   OM_FIELDS,
   OM_NUMBER_MAX_LENGTH,
@@ -58,6 +60,7 @@ type LeanOm = {
   _id: Types.ObjectId;
   claimLetter: Types.ObjectId;
   state: Types.ObjectId;
+  year: Types.ObjectId;
   status: OmStatus;
   omNumber: string | null;
   omDate: string | null;
@@ -229,7 +232,8 @@ export class OmService {
         .exec();
     } catch (err) {
       // The upsert hits the one-OM-per-letter index only when the OM is no longer a draft.
-      if (isDuplicateKey(err)) throw new ConflictException('This OM has already been generated and can no longer be edited.');
+      if (isDuplicateKey(err))
+        throw new ConflictException('This OM has already been generated and can no longer be edited.');
       throw err;
     }
     return this.getEditor(claimLetterId);
@@ -256,7 +260,8 @@ export class OmService {
       this.loadYear(letter.year),
     ]);
     const sequence =
-      (await this.omModel.countDocuments({ state: letter.state, year: letter.year, sequence: { $type: 'number' } })) + 1;
+      (await this.omModel.countDocuments({ state: letter.state, year: letter.year, sequence: { $type: 'number' } })) +
+      1;
     const refNo = `OM/${state?.code ?? 'NA'}/${year.year}/${sequence}`;
     const userOid = new Types.ObjectId(user._id);
     const now = new Date();
@@ -267,7 +272,7 @@ export class OmService {
 
       const ulbRows = await copyClaimLetterUlbsToOm(this.batchUlbModel, this.omUlbModel, letter._id, session);
       if (ulbRows !== letter.ulbCount) {
-        throw new ConflictException('The claim letter\'s ULBs do not match its OM rows. Reload and try again.');
+        throw new ConflictException("The claim letter's ULBs do not match its OM rows. Reload and try again.");
       }
 
       const om = await this.omModel
@@ -303,7 +308,16 @@ export class OmService {
       }
 
       await this.omLogModel.create(
-        [{ om: om._id, action: 'GENERATED', changedBy: userOid, changedAt: now, ipAddress: ip ?? null, userAgent: userAgent ?? null }],
+        [
+          {
+            om: om._id,
+            action: 'GENERATED',
+            changedBy: userOid,
+            changedAt: now,
+            ipAddress: ip ?? null,
+            userAgent: userAgent ?? null,
+          },
+        ],
         { session },
       );
       await session.commitTransaction();
@@ -407,7 +421,9 @@ export class OmService {
    * stored final PDF is the signed letter followed by them, so they are its pages after the signed letter's. Null for
    * a letter submitted before the final PDF existed.
    */
-  private async loadAnnexures(claimLetter: Types.ObjectId): Promise<{ doc: PDFDocument; pageIndices: number[] } | null> {
+  private async loadAnnexures(
+    claimLetter: Types.ObjectId,
+  ): Promise<{ doc: PDFDocument; pageIndices: number[] } | null> {
     const batch = await this.batchModel
       .findById(claimLetter)
       .select('finalClaimPdf.file.path signedClaimFile.path')
@@ -416,7 +432,9 @@ export class OmService {
     const finalPath = batch?.finalClaimPdf?.file?.path;
     const signedPath = batch?.signedClaimFile?.path;
     if (!finalPath || !signedPath) {
-      this.logger.warn(`Claim letter ${String(claimLetter)} has no stored final PDF; the OM is issued without annexures.`);
+      this.logger.warn(
+        `Claim letter ${String(claimLetter)} has no stored final PDF; the OM is issued without annexures.`,
+      );
       return null;
     }
     try {
@@ -428,15 +446,22 @@ export class OmService {
       return { doc, pageIndices: doc.getPageIndices().slice(signed.getPageCount()) };
     } catch (err) {
       this.logger.error(`Claim letter ${String(claimLetter)} annexures could not be read: ${String(err)}`);
-      throw new UnprocessableEntityException("The claim letter's annexures could not be read, so the OM cannot be downloaded.");
+      throw new UnprocessableEntityException(
+        "The claim letter's annexures could not be read, so the OM cannot be downloaded.",
+      );
     }
   }
 
   private async toHistoryRows(oms: LeanOm[]): Promise<OmHistoryRow[]> {
-    const states = await this.loadStates([...new Set(oms.map((om) => String(om.state)))]);
+    const stateIds = [...new Set(oms.map((om) => String(om.state)))];
+    const [states, allocations] = await Promise.all([
+      this.loadStates(stateIds),
+      this.loadInstallmentAllocations(oms.map((om) => ({ state: om.state, year: om.year }))),
+    ]);
     return oms.map((om) => {
       const state = states.get(String(om.state));
       const file = om.signedFile;
+      const signed = om.status === OM_STATUS.SIGNED_UPLOADED;
       return {
         omId: String(om._id),
         refNo: om.refNo ?? '',
@@ -448,9 +473,10 @@ export class OmService {
         stateCode: state?.code ?? '',
         ulbCount: om.ulbCount,
         totalAmount: om.totalAmount,
-        issuedOn: om.generatedAt ? new Date(om.generatedAt).toISOString() : null,
+        allocation: allocations.get(`${String(om.state)}:${String(om.year)}`) ?? null,
+        // Issued = the signed OM is back; its date is the "Dated" printed on it, which MoHUA typed in the OM.
+        issuedOn: signed ? om.omDate : null,
         status: om.status,
-        doeStatus: 'PENDING',
         signedFile: file?.path
           ? {
               name: file.originalName || file.name || 'signed-om.pdf',
@@ -462,7 +488,32 @@ export class OmService {
     });
   }
 
-  private async buildContent(letter: VerifiedLetter, omNumber: string | null, omDate: string | null): Promise<OmContent> {
+  /**
+   * `<stateId>:<yearId>` -> the State's allocation for one installment (basic + performance, split evenly), the same
+   * figure the Claims & Submissions screens show.
+   */
+  private async loadInstallmentAllocations(
+    keys: readonly { state: Types.ObjectId; year: Types.ObjectId }[],
+  ): Promise<Map<string, number>> {
+    if (!keys.length) return new Map();
+    const rows = await this.grantAllocationModel
+      .find({ $or: keys.map((k) => ({ stateId: k.state, yearId: k.year })) })
+      .select('stateId yearId basic performance')
+      .lean<{ stateId: Types.ObjectId; yearId: Types.ObjectId; basic: number; performance: number }[]>()
+      .exec();
+    return new Map(
+      rows.map((row) => [
+        `${String(row.stateId)}:${String(row.yearId)}`,
+        Math.round(allocationRupees(row) / MOHUA_CLAIM_LETTERS_INSTALLMENTS_PER_YEAR),
+      ]),
+    );
+  }
+
+  private async buildContent(
+    letter: VerifiedLetter,
+    omNumber: string | null,
+    omDate: string | null,
+  ): Promise<OmContent> {
     const [full, allocation] = await Promise.all([
       this.documentService.buildFullDocument(letter),
       this.grantAllocationModel
@@ -537,4 +588,3 @@ function verifiedFilter() {
 function isDuplicateKey(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: unknown }).code === DUPLICATE_KEY;
 }
-

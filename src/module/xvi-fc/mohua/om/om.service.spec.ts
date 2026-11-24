@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  NotFoundException,
+  UnprocessableEntityException,
+} from '@nestjs/common';
 import { Types } from 'mongoose';
 import { PDFDocument } from 'pdf-lib';
 import { OM_STATUS } from 'src/schemas/xvi-fc/mohua/om.schema';
@@ -54,25 +59,40 @@ const fullDocument = {
 };
 
 describe('OmService', () => {
-  let omModel: { findOne: jest.Mock; find: jest.Mock; findOneAndUpdate: jest.Mock; updateOne: jest.Mock; countDocuments: jest.Mock };
+  let omModel: {
+    findOne: jest.Mock;
+    find: jest.Mock;
+    findOneAndUpdate: jest.Mock;
+    updateOne: jest.Mock;
+    countDocuments: jest.Mock;
+  };
   let omLogModel: { create: jest.Mock };
   let omUlbModel: { countDocuments: jest.Mock; insertMany: jest.Mock; updateMany: jest.Mock };
   let batchModel: { findOne: jest.Mock; find: jest.Mock; findById: jest.Mock };
   let batchUlbModel: { find: jest.Mock };
   let stateModel: { findById: jest.Mock; find: jest.Mock };
   let yearModel: { findById: jest.Mock };
-  let grantAllocationModel: { findOne: jest.Mock };
+  let grantAllocationModel: { findOne: jest.Mock; find: jest.Mock };
   let documentService: { buildFullDocument: jest.Mock };
   let pdfService: { render: jest.Mock };
   let s3Service: { getPdfBufferFromS3: jest.Mock };
   let normalizer: { normalizeInboundFileInfo: jest.Mock };
   let fileTokens: { signFileUrlForSession: jest.Mock };
-  let session: { startTransaction: jest.Mock; commitTransaction: jest.Mock; abortTransaction: jest.Mock; endSession: jest.Mock };
+  let session: {
+    startTransaction: jest.Mock;
+    commitTransaction: jest.Mock;
+    abortTransaction: jest.Mock;
+    endSession: jest.Mock;
+  };
   let service: OmService;
 
   beforeEach(async () => {
     omModel = {
-      findOne: jest.fn().mockReturnValue(q({ _id: omId, claimLetter: letterId, status: OM_STATUS.DRAFT, omNumber: 'F-1/2026', omDate: '2026-11-04' })),
+      findOne: jest
+        .fn()
+        .mockReturnValue(
+          q({ _id: omId, claimLetter: letterId, status: OM_STATUS.DRAFT, omNumber: 'F-1/2026', omDate: '2026-11-04' }),
+        ),
       find: jest.fn().mockReturnValue(q([])),
       findOneAndUpdate: jest.fn().mockReturnValue(q({ _id: omId })),
       updateOne: jest.fn().mockReturnValue(q({ matchedCount: 1 })),
@@ -88,14 +108,19 @@ describe('OmService', () => {
       findOne: jest.fn().mockReturnValue(q(letter())),
       find: jest.fn().mockReturnValue(q([])),
       // The stored final claim PDF: the 1-page signed letter followed by 2 annexure pages.
-      findById: jest.fn().mockReturnValue(
-        q({ finalClaimPdf: { file: { path: 'final.pdf' } }, signedClaimFile: { path: 'signed.pdf' } }),
-      ),
+      findById: jest
+        .fn()
+        .mockReturnValue(
+          q({ finalClaimPdf: { file: { path: 'final.pdf' } }, signedClaimFile: { path: 'signed.pdf' } }),
+        ),
     };
     batchUlbModel = { find: jest.fn().mockReturnValue(q([])) };
     stateModel = { findById: jest.fn().mockReturnValue(q({ code: 'TR' })), find: jest.fn().mockReturnValue(q([])) };
     yearModel = { findById: jest.fn().mockReturnValue(q({ year: '2026-27' })) };
-    grantAllocationModel = { findOne: jest.fn().mockReturnValue(q({ basic: 650_000_000 })) };
+    grantAllocationModel = {
+      findOne: jest.fn().mockReturnValue(q({ basic: 650_000_000 })),
+      find: jest.fn().mockReturnValue(q([])),
+    };
     documentService = { buildFullDocument: jest.fn().mockResolvedValue(fullDocument) };
     pdfService = { render: jest.fn().mockResolvedValue(await pdf(2)) };
     const files: Record<string, Buffer> = { 'final.pdf': await pdf(3), 'signed.pdf': await pdf(1) };
@@ -130,7 +155,10 @@ describe('OmService', () => {
     it('numbers the OM, freezes its content and stamps every ULB of the letter, in one transaction', async () => {
       const file = await service.generate(String(letterId), user, '1.2.3.4', 'jest');
 
-      const [filter, update] = omModel.findOneAndUpdate.mock.calls[0] as [Record<string, unknown>, { $set: Record<string, unknown> }];
+      const [filter, update] = omModel.findOneAndUpdate.mock.calls[0] as [
+        Record<string, unknown>,
+        { $set: Record<string, unknown> },
+      ];
       expect(filter).toEqual({ claimLetter: letterId, status: OM_STATUS.DRAFT });
       expect(update.$set).toMatchObject({
         status: OM_STATUS.GENERATED,
@@ -140,8 +168,14 @@ describe('OmService', () => {
         ulbCount: 2,
         totalAmount: 60_000_000,
       });
-      expect(omUlbModel.updateMany).toHaveBeenCalledWith({ claimLetter: letterId, om: null }, { $set: { om: omId } }, { session });
-      expect(omLogModel.create).toHaveBeenCalledWith([expect.objectContaining({ om: omId, action: 'GENERATED' })], { session });
+      expect(omUlbModel.updateMany).toHaveBeenCalledWith(
+        { claimLetter: letterId, om: null },
+        { $set: { om: omId } },
+        { session },
+      );
+      expect(omLogModel.create).toHaveBeenCalledWith([expect.objectContaining({ om: omId, action: 'GENERATED' })], {
+        session,
+      });
       expect(session.commitTransaction).toHaveBeenCalled();
       expect(file.fileName).toMatch(/\.pdf$/);
     });
@@ -186,7 +220,7 @@ describe('OmService', () => {
       expect(session.startTransaction).not.toHaveBeenCalled();
     });
 
-    it('aborts when some of the letter\'s ULBs are already in another OM', async () => {
+    it("aborts when some of the letter's ULBs are already in another OM", async () => {
       omUlbModel.updateMany.mockReturnValue(q({ modifiedCount: 1 }));
 
       await expect(service.generate(String(letterId), user)).rejects.toThrow(ConflictException);
@@ -205,7 +239,14 @@ describe('OmService', () => {
 
   describe('uploadSignedFile', () => {
     it('saves the signed PDF and marks the OM signed', async () => {
-      const issued = { _id: omId, claimLetter: letterId, state: stateId, status: OM_STATUS.GENERATED, content: {}, signedFile: null };
+      const issued = {
+        _id: omId,
+        claimLetter: letterId,
+        state: stateId,
+        status: OM_STATUS.GENERATED,
+        content: {},
+        signedFile: null,
+      };
       omModel.findOne.mockReturnValue(q(issued));
       normalizer.normalizeInboundFileInfo.mockReturnValue({ file: { path: 'oms/signed.pdf' }, errors: [] });
 
@@ -227,6 +268,47 @@ describe('OmService', () => {
       normalizer.normalizeInboundFileInfo.mockReturnValue({ file: null, errors: [{ message: 'PDF only' }] });
 
       await expect(service.uploadSignedFile(String(omId), {} as never, user)).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('history', () => {
+    const yearOid = new Types.ObjectId();
+    const om = (status: string) => ({
+      _id: omId,
+      claimLetter: letterId,
+      state: stateId,
+      year: yearOid,
+      status,
+      omNumber: '1234',
+      omDate: '2026-11-12',
+      refNo: 'OM/TR/2026-27/1',
+      ulbCount: 4,
+      totalAmount: 130_000_000,
+      content: { claimLetterRefNo: 'CL/TR/2026-27/1-1' },
+      signedFile: null,
+      generatedAt: new Date('2026-11-10T05:00:00Z'),
+    });
+
+    it("shows the State's installment allocation next to the amount claimed, and no DoE status", async () => {
+      omModel.find.mockReturnValue(q([om(OM_STATUS.GENERATED)]));
+      grantAllocationModel.find.mockReturnValue(
+        q([{ stateId, yearId: yearOid, basic: 600_000_000, performance: 400_000_000 }]),
+      );
+
+      const [row] = await service.history(String(yearOid), 1);
+
+      expect(row).toMatchObject({ totalAmount: 130_000_000, allocation: 500_000_000 });
+      expect(row).not.toHaveProperty('doeStatus');
+    });
+
+    it('dates an OM issued only once its signed copy is back, with the "Dated" printed on it', async () => {
+      omModel.find.mockReturnValue(q([om(OM_STATUS.GENERATED), om(OM_STATUS.SIGNED_UPLOADED)]));
+
+      const [generated, issued] = await service.history(String(yearOid), 1);
+
+      expect(generated.issuedOn).toBeNull();
+      expect(issued.issuedOn).toBe('2026-11-12');
+      expect(issued.allocation).toBeNull();
     });
   });
 });

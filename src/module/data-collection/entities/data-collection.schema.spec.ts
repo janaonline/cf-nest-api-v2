@@ -38,6 +38,10 @@ describe('DataCollectionSchema', () => {
     });
   });
 
+  it('uses optimistic concurrency so a lost race throws VersionError', () => {
+    expect(DataCollectionSchema.get('optimisticConcurrency')).toBe(true);
+  });
+
   describe('unique index is partial on isActive', () => {
     it('has a partial unique index for ulbId + yearId scoped to isActive: true', () => {
       const indexes = DataCollectionSchema.indexes();
