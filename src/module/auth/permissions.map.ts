@@ -48,31 +48,33 @@ export const XVIFC_STATE_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
 // REVIEW_STATE_SUBMISSIONS_PMU gives every MoHUA subrole READ access to the PMU review GETs (state forms, view only).
 // Approve/reject need APPROVE_STATE_SUBMISSIONS_PMU, which MoHUA never holds, so its review permissions
 // come back canApprove/canReject = false.
+/** Every MoHUA action on the review work: claim letters (approve / return / mark ULBs), FC Unspent, exemptions,
+ *  MoHUA-stage ULB decisions, OMs and the final submit to DoE. Admin and reviewer both hold all of it. */
+const MOHUA_REVIEW_PERMISSIONS: Permission[] = [
+  Permission.VIEW_STATUS_REPORTS,
+  Permission.VIEW_DASHBOARDS,
+  Permission.REVIEW_STATE_SUBMISSIONS_PMU,
+  Permission.REVIEW_STATE_SUBMISSIONS,
+  Permission.SEND_REMINDERS_TO_STATES,
+  Permission.REQUEST_INFO_FROM_STATES,
+  Permission.APPROVE_STATE_SUBMISSIONS,
+  Permission.ISSUE_OFFICE_MEMORANDUM,
+  Permission.FINAL_SUBMIT_TO_DOE,
+];
+
 export const XVIFC_MOHUA_PERMISSIONS: Record<XviFcSubrole, Permission[]> = {
+  // The admin is also the team's Submitter: only it manages the MoHUA team (users.service enforces that too).
   admin: [
-    Permission.VIEW_STATUS_REPORTS,
-    Permission.VIEW_DASHBOARDS,
-    Permission.REVIEW_STATE_SUBMISSIONS_PMU,
-    Permission.REVIEW_STATE_SUBMISSIONS,
-    Permission.SEND_REMINDERS_TO_STATES,
-    Permission.REQUEST_INFO_FROM_STATES,
-    Permission.APPROVE_STATE_SUBMISSIONS,
-    Permission.ISSUE_OFFICE_MEMORANDUM,
-    Permission.FINAL_SUBMIT_TO_DOE,
+    ...MOHUA_REVIEW_PERMISSIONS,
     Permission.MANAGE_USERS,
     Permission.VIEW_MANAGED_USERS,
     Permission.CREATE_MANAGED_USER,
     Permission.UPDATE_MANAGED_USER,
     Permission.DELETE_MANAGED_USER,
   ],
-  reviewer: [
-    Permission.VIEW_STATUS_REPORTS,
-    Permission.VIEW_DASHBOARDS,
-    Permission.REVIEW_STATE_SUBMISSIONS_PMU,
-    Permission.REVIEW_STATE_SUBMISSIONS,
-    Permission.SEND_REMINDERS_TO_STATES,
-    Permission.REQUEST_INFO_FROM_STATES,
-  ],
+  // A reviewer can do every review action the admin can; only team management stays with the admin.
+  // Mirrored in the UI's core/auth/permission.map.ts.
+  reviewer: [...MOHUA_REVIEW_PERMISSIONS],
   viewer: [Permission.VIEW_STATUS_REPORTS, Permission.VIEW_DASHBOARDS, Permission.REVIEW_STATE_SUBMISSIONS_PMU],
 };
 
