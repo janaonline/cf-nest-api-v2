@@ -53,6 +53,29 @@ describe('DurValidationResultWriter', () => {
     );
   });
 
+  it('counts an explicit FAIL toward the failed uploads in a row', async () => {
+    await writer.writeCompleted(durId, docId, uploadId, {
+      job_id: 'dur-job-1',
+      status: 'completed',
+      result: { checks: { overall_valid: false } as any },
+    });
+
+    expect(durModel.findOne).toHaveBeenCalled();
+    expect(durModel.updateOne.mock.calls[0][1].$set).toMatchObject({
+      'documents.$.failedUploadsInARow': 1,
+      'documents.$.lastFailedUploadId': uploadId,
+    });
+  });
+
+  it('does not count a response without a verdict toward the failed uploads in a row', async () => {
+    await writer.writeCompleted(durId, docId, uploadId, { job_id: 'dur-job-1', status: 'completed' } as any);
+
+    expect(durModel.findOne).not.toHaveBeenCalled();
+    const set = durModel.updateOne.mock.calls[0][1].$set;
+    expect(set['documents.$.processingStatus']).toBe('FAILED');
+    expect(set).not.toHaveProperty('documents.$.failedUploadsInARow');
+  });
+
   it('writes FAILED with failed_checks and extraction notes when checks.overall_valid is false — real API shape', async () => {
     await writer.writeCompleted(durId, docId, uploadId, {
       job_id: 'dur-job-1',
@@ -105,7 +128,10 @@ describe('DurValidationResultWriter', () => {
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
       { uploadId },
       expect.objectContaining({
-        $set: expect.objectContaining({ processingStatus: 'FAILED', 'ocrInfo.validationDetails': 'Gemini upload timed out' }),
+        $set: expect.objectContaining({
+          processingStatus: 'FAILED',
+          'ocrInfo.validationDetails': 'Gemini upload timed out',
+        }),
       }),
     );
   });
@@ -135,7 +161,8 @@ describe('DurValidationResultWriter', () => {
     });
 
     const call = durModel.updateOne.mock.calls.find(
-      ([, update]: [unknown, { $set?: Record<string, unknown> }]) => update?.$set?.['documents.$.processingStatus'] !== undefined,
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+        update?.$set?.['documents.$.processingStatus'] !== undefined,
     );
     const set = call?.[1]?.$set as Record<string, unknown>;
     expect(set['documents.$.postRejectionAttemptsUsed']).toBe(3);
@@ -165,7 +192,8 @@ describe('DurValidationResultWriter', () => {
     });
 
     const call = durModel.updateOne.mock.calls.find(
-      ([, update]: [unknown, { $set?: Record<string, unknown> }]) => update?.$set?.['documents.$.processingStatus'] !== undefined,
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+        update?.$set?.['documents.$.processingStatus'] !== undefined,
     );
     const set = call?.[1]?.$set as Record<string, unknown>;
     expect(set['documents.$.postRejectionAttemptsUsed']).toBe(1);

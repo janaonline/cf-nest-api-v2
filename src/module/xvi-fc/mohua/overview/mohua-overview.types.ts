@@ -9,7 +9,10 @@ export interface MohuaOverviewForm {
   status: string;
   statusCode: number;
   statusLabel: string;
+  /** Submitted onward (13 or later): what the Overview stages count. */
   completed: boolean;
+  /** Approved by PMU or later (15, 5, 7): the "approved" tick on the State page's condition cards. */
+  approved: boolean;
   /** Whether MoHUA may open this form's read-only screen (same status gate as PMU's review pages). */
   canView: boolean;
 }

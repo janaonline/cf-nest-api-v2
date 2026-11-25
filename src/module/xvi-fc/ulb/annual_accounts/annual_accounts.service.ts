@@ -1173,6 +1173,7 @@ export class AnnualAccountsService implements OnModuleInit {
               }
             : null,
           postRejectionAttemptsUsed: d.postRejectionAttemptsUsed ?? 0,
+          failedUploadsInARow: d.failedUploadsInARow ?? 0,
           manualReviewRejectionCount: d.manualReviewRejectionCount ?? 0,
           uploadBlockedUntil: d.uploadBlockedUntil ?? null,
         })),

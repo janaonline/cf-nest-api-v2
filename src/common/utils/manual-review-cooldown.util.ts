@@ -23,13 +23,41 @@ export const UPLOAD_BLOCKED_MESSAGE =
   `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_HOURS} hours. ` +
   `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
 
-/** Manual review is for a document the ULB already tried to fix: retried more than once on the same
- *  file, or re-uploaded (version 2+). Mirrors the UI's isEligibleForManualReview. */
-export function isPastFirstAttempt(upload: { retryValidationCount?: number | null; version?: number | null }): boolean {
-  return (upload.retryValidationCount ?? 0) > 1 || (upload.version ?? 1) > 1;
+/** Manual review is a last resort: a document must have failed this many uploads in a row (the first upload and 3
+ *  re-uploads) before the ULB can ask for one. Retries of the same file don't count; a pass starts again from 0. */
+export const MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW = 4;
+
+/** A document slot's run of failed uploads, as `failedUploadsInARow` and the upload that last added to it. */
+interface FailedUploadRun {
+  failedUploadsInARow?: number | null;
+  lastFailedUploadId?: string | null;
 }
 
-export const FIRST_ATTEMPT_MESSAGE = 'Please retry or re-upload the document before requesting a manual review.';
+/**
+ * The slot fields to write once an upload gets a verdict (`$set` paths under `documents.$`). A pass resets the run.
+ * A real FAIL adds one, counted once per upload: a retry keeps its uploadId, so retrying the same file never adds
+ * again, while a re-upload has a new uploadId. Returns {} when there is nothing to change.
+ */
+export function failedUploadRunUpdate(
+  slot: FailedUploadRun | null | undefined,
+  uploadId: string,
+  passed: boolean,
+): Record<string, unknown> {
+  if (passed) return { 'documents.$.failedUploadsInARow': 0, 'documents.$.lastFailedUploadId': null };
+  if (slot?.lastFailedUploadId === uploadId) return {};
+  return {
+    'documents.$.failedUploadsInARow': (slot?.failedUploadsInARow ?? 0) + 1,
+    'documents.$.lastFailedUploadId': uploadId,
+  };
+}
+
+/** True once the slot has failed MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW uploads in a row. Mirrors the UI's
+ *  isEligibleForManualReview. */
+export function hasEnoughFailedUploads(slot: FailedUploadRun | null | undefined): boolean {
+  return (slot?.failedUploadsInARow ?? 0) >= MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW;
+}
+
+export const FIRST_ATTEMPT_MESSAGE = `Please re-upload a corrected document before requesting a manual review: it can be requested after ${MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row.`;
 
 /** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
 export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {

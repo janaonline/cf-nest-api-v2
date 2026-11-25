@@ -31,6 +31,7 @@ import { XviFcBankAccount, XviFcBankAccountSchema } from '../../schemas/xvi-fc/u
 import { SlbForm, SlbFormSchema } from '../../schemas/xvi-fc/ulb/slb-form.schema';
 import { XviFcDur, XviFcDurSchema } from '../../schemas/xvi-fc/dur.schema';
 import { XviFcSfcStatus, XviFcSfcStatusSchema } from '../../schemas/xvi-fc/state/sfc-status.schema';
+import { XviFcGtc, XviFcGtcSchema } from '../../schemas/xvi-fc/state/gtc-form.schema';
 import {
   ElectedUrbanLocalBodiesForm,
   ElectedUrbanLocalBodiesFormSchema,
@@ -91,6 +92,8 @@ import { StateFormHistoryModule } from './common/form-history/state-form-history
       { name: SlbForm.name, schema: SlbFormSchema },
       { name: XviFcDur.name, schema: XviFcDurSchema },
       { name: XviFcSfcStatus.name, schema: XviFcSfcStatusSchema },
+      // GTC: only its status, for UlbStateConditionsService's "all 5 State forms approved" gate.
+      { name: XviFcGtc.name, schema: XviFcGtcSchema },
       { name: ElectedUrbanLocalBodiesForm.name, schema: ElectedUrbanLocalBodiesFormSchema },
       { name: ElectedUrbanLocalBodiesRow.name, schema: ElectedUrbanLocalBodiesRowSchema },
       { name: DevolutionFormulaForm.name, schema: DevolutionFormulaFormSchema },

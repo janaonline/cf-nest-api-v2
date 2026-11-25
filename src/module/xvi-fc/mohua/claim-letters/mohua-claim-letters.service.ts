@@ -160,7 +160,11 @@ export class MohuaClaimLettersService {
         .exec(),
       this.batchModel
         .find(this.listedFilter({ year: new Types.ObjectId(yearId), installment }))
-        .select('state batchNumber ulbCount currentFormStatus financialSummary.currentSelectedClaim')
+        .select(
+          'state fileBaseName batchNumber submittedAt ulbCount currentFormStatus financialSummary.currentSelectedClaim',
+        )
+        // Newest first, as the State page lists them; each row's `claimLetters` keeps this order.
+        .sort({ submittedAt: -1, _id: -1 })
         .lean<LeanBatch[]>()
         .exec(),
       this.loadInstallmentAllocations(yearId),
@@ -169,8 +173,10 @@ export class MohuaClaimLettersService {
     ]);
 
     const claimedByState = new Map<string, { amount: number; ulbs: number; count: number; latest: number }>();
+    const lettersByState = new Map<string, MohuaClaimLetterListItem[]>();
     for (const batch of batches) {
       const key = String(batch.state);
+      lettersByState.set(key, [...(lettersByState.get(key) ?? []), toListItem(batch)]);
       const current = claimedByState.get(key) ?? { amount: 0, ulbs: 0, count: 0, latest: 0 };
       // A returned letter's amount and ULBs are not claimed (same rule as the State-side claimed totals): its ULBs
       // are freed and go into the replacement letter, so counting them here would count them twice.
@@ -199,6 +205,7 @@ export class MohuaClaimLettersService {
         totalUlbs: expectedUlbIdsByState.get(id)?.length ?? 0,
         claimLetterCount: claimed?.count ?? 0,
         latestClaimNumber: claimed?.latest || null,
+        claimLetters: lettersByState.get(id) ?? [],
       };
     });
 
@@ -258,18 +265,7 @@ export class MohuaClaimLettersService {
       state: { id: stateId, name: state.name },
       installment,
       summary: await this.buildSummary(stateId, yearId, installment, batches),
-      claimLetters: batches.map(
-        (batch): MohuaClaimLetterListItem => ({
-          id: String(batch._id),
-          number: batch.fileBaseName,
-          batchNumber: batch.batchNumber,
-          receivedOn: batch.submittedAt ? new Date(batch.submittedAt).toISOString() : null,
-          ulbCount: batch.ulbCount ?? 0,
-          amount: batch.financialSummary?.currentSelectedClaim ?? 0,
-          status: batch.currentFormStatus,
-          statusLabel: getFormStatusLabel(batch.currentFormStatus),
-        }),
-      ),
+      claimLetters: batches.map(toListItem),
     };
   }
 
@@ -1044,6 +1040,20 @@ export class MohuaClaimLettersService {
       ]),
     );
   }
+}
+
+/** One listed claim letter as the States table (expanded row) and a State's page show it. */
+function toListItem(batch: LeanBatch): MohuaClaimLetterListItem {
+  return {
+    id: String(batch._id),
+    number: batch.fileBaseName,
+    batchNumber: batch.batchNumber,
+    receivedOn: batch.submittedAt ? new Date(batch.submittedAt).toISOString() : null,
+    ulbCount: batch.ulbCount ?? 0,
+    amount: batch.financialSummary?.currentSelectedClaim ?? 0,
+    status: batch.currentFormStatus,
+    statusLabel: getFormStatusLabel(batch.currentFormStatus),
+  };
 }
 
 function toSoDecision(decision: ClaimLetterSoDecision): MohuaClaimLetterSoDecision {

@@ -39,7 +39,7 @@ import {
 } from './dto/manual-review-history-stats-query.dto';
 import { AnnualAccountsService, AnnualAccountSectionKey, SECTION_LABELS } from './annual_accounts.service';
 import { getPortalUrl } from 'src/core/utils/portal-urls.util';
-import { FIRST_ATTEMPT_MESSAGE, isPastFirstAttempt } from 'src/common/utils/manual-review-cooldown.util';
+import { FIRST_ATTEMPT_MESSAGE, hasEnoughFailedUploads } from 'src/common/utils/manual-review-cooldown.util';
 import {
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
@@ -112,7 +112,7 @@ export class AnnualAccountManualReviewService {
     if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed OCR validation.');
     }
-    if (!isPastFirstAttempt(docSlot.currentUpload)) {
+    if (!hasEnoughFailedUploads(docSlot)) {
       throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
@@ -264,6 +264,9 @@ export class AnnualAccountManualReviewService {
             'documents.$.processingStatus': 'PASSED',
             'documents.$.postRejectionAttemptsUsed': 0,
             'documents.$.uploadBlockedUntil': null,
+            // An approved document has passed, so its run of failed uploads starts again from 0.
+            'documents.$.failedUploadsInARow': 0,
+            'documents.$.lastFailedUploadId': null,
           };
 
     // $elemMatch binds both conditions to the same element, so of two concurrent calls only one matches.

@@ -253,6 +253,18 @@ export class DocumentItem {
    */
   @Prop({ type: Date, default: null })
   uploadBlockedUntil!: Date | null;
+
+  /**
+   * Uploads of this document that failed in a row (a real FAIL verdict). Counted once per upload, so retries of the
+   * same file don't add; a pass resets it to 0. "Request Manual Review" needs MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW
+   * (common/utils/manual-review-cooldown.util.ts). Shared by DUR, which reuses this sub-schema.
+   */
+  @Prop({ default: 0 })
+  failedUploadsInARow!: number;
+
+  /** The upload that last added to failedUploadsInARow, so a retry of it is not counted twice. */
+  @Prop({ type: String, default: null })
+  lastFailedUploadId!: string | null;
 }
 
 export const DocumentItemSchema = SchemaFactory.createForClass(DocumentItem);
