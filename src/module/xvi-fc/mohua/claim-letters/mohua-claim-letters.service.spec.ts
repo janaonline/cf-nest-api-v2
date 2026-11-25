@@ -217,6 +217,10 @@ describe('MohuaClaimLettersService', () => {
         claimLetterCount: 2,
         latestClaimNumber: 2,
       });
+      // Each state carries its own letters (the expanded row and the card filters read them); none for Kerala.
+      expect(states[0].claimLetters.map((l) => l.batchNumber)).toEqual([1, 2]);
+      expect(states[0].claimLetters[1]).toMatchObject({ ulbCount: 6, amount: 50_000_000 });
+      expect(states[1].claimLetters).toEqual([]);
     });
 
     it('gives each state its total expected ULBs from one grouped query, 0 when it has none', async () => {

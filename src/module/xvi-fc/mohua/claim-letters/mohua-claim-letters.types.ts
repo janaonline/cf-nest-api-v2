@@ -20,6 +20,8 @@ export interface MohuaClaimLettersStateRow {
   claimLetterCount: number;
   /** The highest claim letter number the state has submitted (1, 2, 3...), null when none. */
   latestClaimNumber: number | null;
+  /** Every listed letter of the state, newest first: the expanded row and the summary-card filters read these. */
+  claimLetters: MohuaClaimLetterListItem[];
 }
 
 /** Claim letters at one stage: how many, from how many States, and their amount (whole Rupees). */
