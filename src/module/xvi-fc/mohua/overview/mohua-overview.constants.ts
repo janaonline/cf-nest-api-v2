@@ -13,6 +13,17 @@ export const MOHUA_OVERVIEW_COMPLETED_FORM_STATUSES: ReadonlySet<number> = new S
 ]);
 
 /**
+ * A state-condition form counts as **approved** on the State page's "State Form Completion" cards once PMU has
+ * approved it (under SO review, 15) and through every later step (under MoHUA review 5, acknowledged 7). Stricter than
+ * MOHUA_OVERVIEW_COMPLETED_FORM_STATUSES, which also counts a form still with PMU (13) and drives the Overview stages.
+ */
+export const MOHUA_STATE_FORM_APPROVED_STATUSES: ReadonlySet<number> = new Set<number>([
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+]);
+
+/**
  * The one set of labels shown for state-condition forms, whatever the form: not started / in
  * progress / under review. Statuses not listed fall back to the standard FORM_STATUS label.
  */

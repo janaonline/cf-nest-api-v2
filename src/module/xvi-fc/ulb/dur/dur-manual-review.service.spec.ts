@@ -1,6 +1,7 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DurManualReviewService } from './dur-manual-review.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
+import { FIRST_ATTEMPT_MESSAGE } from 'src/common/utils/manual-review-cooldown.util';
 
 /** Mimics a Mongoose query chain — `.select()`/`.lean()` are no-ops that return the same
  *  chain object, `.exec()` resolves to the given value, regardless of call order. */
@@ -52,7 +53,9 @@ describe('DurManualReviewService.getManualReviewQueue', () => {
       total: 1,
       page: 1,
       pageSize: 20,
-      rows: [{ durId: 'dur-1', ulbName: 'Test ULB', docId: 'tiedGrant', fileUrl: 'https://signed.example.com/s3/path.pdf' }],
+      rows: [
+        { durId: 'dur-1', ulbName: 'Test ULB', docId: 'tiedGrant', fileUrl: 'https://signed.example.com/s3/path.pdf' },
+      ],
     });
   });
 
@@ -158,7 +161,12 @@ describe('DurManualReviewService.decideManualReview', () => {
     mockDurModel.findById.mockReturnValue(mockQuery(durWithDocSlot()));
     mockDurModel.updateOne.mockResolvedValue({ matchedCount: 1, modifiedCount: 1 });
 
-    await service.decideManualReview(DUR_ID, 'tiedGrant' as any, { decision: 'RETURNED', note: 'Wrong file' } as any, adminUser);
+    await service.decideManualReview(
+      DUR_ID,
+      'tiedGrant' as any,
+      { decision: 'RETURNED', note: 'Wrong file' } as any,
+      adminUser,
+    );
 
     expect(mockUploadHistoryModel.updateOne).not.toHaveBeenCalled();
   });
@@ -178,7 +186,8 @@ describe('DurManualReviewService.requestManualReview', () => {
     ulb: '507f1f77bcf86cd799439011',
   } as AuthUser;
 
-  const durWithUpload = (upload: Record<string, unknown>) => ({
+  // 4 failed uploads in a row unless a test says otherwise: enough for a manual review request.
+  const durWithUpload = (upload: Record<string, unknown>, failedUploadsInARow = 4) => ({
     _id: DUR_ID,
     ulb: '507f1f77bcf86cd799439011',
     design_year: '507f1f77bcf86cd799439013',
@@ -188,6 +197,7 @@ describe('DurManualReviewService.requestManualReview', () => {
         docId: 'tiedGrant',
         currentUpload: { uploadId: 'upload-1', ocrInfo: { validationStatus: 'FAIL' }, ...upload },
         manualReviewDecision: null,
+        failedUploadsInARow,
       },
     ],
   });
@@ -213,11 +223,11 @@ describe('DurManualReviewService.requestManualReview', () => {
     );
   });
 
-  it('rejects a first-attempt FAIL (v1, retried at most once), same rule as the UI', async () => {
-    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 1, retryValidationCount: 1 })));
+  it('rejects a FAIL before 4 failed uploads in a row, however often the same file was retried', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 3, retryValidationCount: 5 }, 3)));
 
     await expect(service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser)).rejects.toThrow(
-      'Please retry or re-upload the document before requesting a manual review.',
+      FIRST_ATTEMPT_MESSAGE,
     );
     expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
   });
@@ -233,12 +243,15 @@ describe('DurManualReviewService.requestManualReview', () => {
     expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
   });
 
-  it('creates the request for a re-uploaded (v2) FAIL on an editable form', async () => {
+  it('creates the request after 4 failed uploads in a row on an editable form', async () => {
     mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 2 })));
 
     await service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser);
 
-    expect(mockDurService.assertCanUlbUpload).toHaveBeenCalledWith(expect.objectContaining({ _id: DUR_ID }), 'tiedGrant');
+    expect(mockDurService.assertCanUlbUpload).toHaveBeenCalledWith(
+      expect.objectContaining({ _id: DUR_ID }),
+      'tiedGrant',
+    );
     expect(mockManualReviewRequestModel.create).toHaveBeenCalledWith(
       expect.objectContaining({ docId: 'tiedGrant', uploadId: 'upload-1', status: 'PENDING' }),
     );
@@ -428,7 +441,11 @@ describe('DurManualReviewService.getDocumentDownload', () => {
 
       const result = await service.getDocumentDownload(DUR_ID, 'tiedGrant' as any, undefined, adminUser, REQUEST_ID);
 
-      expect(mockUploadHistoryModel.findOne).toHaveBeenCalledWith({ durId: expect.anything(), docId: 'tiedGrant', uploadId: 'upload-7' });
+      expect(mockUploadHistoryModel.findOne).toHaveBeenCalledWith({
+        durId: expect.anything(),
+        docId: 'tiedGrant',
+        uploadId: 'upload-7',
+      });
       expect(result.key).toBe('s3/key/tiedGrant.pdf');
     });
 
@@ -490,9 +507,9 @@ describe('DurManualReviewService manual-review history', () => {
 
   describe('listManualReviewRequestHistory', () => {
     it('rejects non-ADMIN users', async () => {
-      await expect(
-        service.listManualReviewRequestHistory({ page: 1, pageSize: 20 } as any, stateUser),
-      ).rejects.toThrow('Only ADMIN users may view the manual-review history');
+      await expect(service.listManualReviewRequestHistory({ page: 1, pageSize: 20 } as any, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
     });
 
     it('returns the paginated shape, signing filePath into a fileUrl', async () => {
@@ -506,7 +523,12 @@ describe('DurManualReviewService manual-review history', () => {
         page: 1,
         pageSize: 20,
         rows: [
-          { durId: 'dur-1', ulbName: 'Test ULB', docId: 'tiedGrant', fileUrl: 'https://signed.example.com/s3/path.pdf' },
+          {
+            durId: 'dur-1',
+            ulbName: 'Test ULB',
+            docId: 'tiedGrant',
+            fileUrl: 'https://signed.example.com/s3/path.pdf',
+          },
         ],
       });
     });
@@ -560,9 +582,9 @@ describe('DurManualReviewService manual-review history', () => {
 
   describe('dumpManualReviewHistoryToExcel', () => {
     it('rejects non-ADMIN users', async () => {
-      await expect(
-        service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 } as any, stateUser),
-      ).rejects.toThrow('Only ADMIN users may view the manual-review history');
+      await expect(service.dumpManualReviewHistoryToExcel({ page: 1, pageSize: 20 } as any, stateUser)).rejects.toThrow(
+        'Only ADMIN users may view the manual-review history',
+      );
     });
 
     it('builds the workbook with a signed file link and a portal OCR-log link', async () => {
