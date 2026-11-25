@@ -2,11 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { XviFcDur, XviFcDurDocument } from 'src/schemas/xvi-fc/dur.schema';
+import { XviFcDurUploadHistory, XviFcDurUploadHistoryDocument } from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import {
-  XviFcDurUploadHistory,
-  XviFcDurUploadHistoryDocument,
-} from 'src/schemas/xvi-fc/dur-upload-history.schema';
-import { nextPostRejectionAttempts, computeUploadBlockedUntil } from 'src/common/utils/manual-review-cooldown.util';
+  computeUploadBlockedUntil,
+  failedUploadRunUpdate,
+  nextPostRejectionAttempts,
+} from 'src/common/utils/manual-review-cooldown.util';
 import type { DurJobResultResponse } from './dur-validation-api.service';
 
 /**
@@ -43,7 +44,9 @@ export class DurValidationResultWriter {
     const extraction = resp.result?.extraction;
     const validationDetails = extraction?.extraction_notes ?? null;
 
-    this.logger.log(`writeCompleted — durId=${durId} docId=${docId} uploadId=${uploadId} processingStatus=${processingStatus}`);
+    this.logger.log(
+      `writeCompleted — durId=${durId} docId=${docId} uploadId=${uploadId} processingStatus=${processingStatus}`,
+    );
 
     const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, processingStatus);
 
@@ -136,6 +139,7 @@ export class DurValidationResultWriter {
         'documents.$.postRejectionAttemptsUsed': 0,
         'documents.$.manualReviewRejectionCount': 0,
         'documents.$.uploadBlockedUntil': null,
+        ...failedUploadRunUpdate(null, uploadId, true),
       };
     }
 
@@ -147,7 +151,9 @@ export class DurValidationResultWriter {
       .lean()
       .exec();
     const docSlot = doc?.documents?.[0];
-    if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
+    // Every real FAIL counts toward the failed uploads before "Request Manual Review" (once per upload).
+    const failedRun = failedUploadRunUpdate(docSlot, uploadId, false);
+    if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return failedRun;
 
     // A previously-set uploadBlockedUntil can only mean the ULB already served out a full 24h lock
     // before this retry/re-upload was ever allowed to start (assertCanUlbUpload blocks while one is
@@ -155,8 +161,8 @@ export class DurValidationResultWriter {
     // batch that triggered the old lock. Without this, the ULB would get only one attempt per
     // cycle after the first lock instead of a full fresh 3.
     const startingFreshBatch = docSlot.uploadBlockedUntil != null;
-    const attemptsUsed = nextPostRejectionAttempts(startingFreshBatch ? 0 : docSlot.postRejectionAttemptsUsed ?? 0);
-    const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
+    const attemptsUsed = nextPostRejectionAttempts(startingFreshBatch ? 0 : (docSlot.postRejectionAttemptsUsed ?? 0));
+    const update: Record<string, unknown> = { ...failedRun, 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     const uploadBlockedUntil = computeUploadBlockedUntil(attemptsUsed);
     if (uploadBlockedUntil) {
       update['documents.$.uploadBlockedUntil'] = uploadBlockedUntil;

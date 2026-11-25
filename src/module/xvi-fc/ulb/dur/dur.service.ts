@@ -451,6 +451,7 @@ export class DurService {
         stateDecision: d.stateDecision,
         manualReviewDecision: d.manualReviewDecision,
         postRejectionAttemptsUsed: d.postRejectionAttemptsUsed,
+        failedUploadsInARow: d.failedUploadsInARow ?? 0,
         manualReviewRejectionCount: d.manualReviewRejectionCount,
         uploadBlockedUntil: d.uploadBlockedUntil,
       })),

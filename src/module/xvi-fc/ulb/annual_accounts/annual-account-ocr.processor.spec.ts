@@ -193,7 +193,10 @@ describe('AnnualAccountOcrProcessor', () => {
       expect.objectContaining({ ulb: ulbObjId, design_year: yearObjId, sectionType: 'unaudited' }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
-      expect.objectContaining({ _id: siblingId, documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } } }),
+      expect.objectContaining({
+        _id: siblingId,
+        documents: { $elemMatch: { docId: 'doc-1', 'currentUpload.uploadId': 'upload-1' } },
+      }),
       expect.anything(),
     );
   });
@@ -209,7 +212,11 @@ describe('AnnualAccountOcrProcessor', () => {
     expect(uploadHistoryModel.updateOne).toHaveBeenCalledWith(
       { uploadId: 'upload-1', processingStatus: 'PROCESSING' },
       expect.objectContaining({
-        $set: expect.objectContaining({ processingStatus: 'FAILED', error: 'OCR engine error', 'queue.status': 'failed' }),
+        $set: expect.objectContaining({
+          processingStatus: 'FAILED',
+          error: 'OCR engine error',
+          'queue.status': 'failed',
+        }),
       }),
     );
     expect(annualAccountModel.updateOne).toHaveBeenCalledWith(
@@ -245,6 +252,52 @@ describe('AnnualAccountOcrProcessor', () => {
       result: { basic_validation: { validation_status: 'FAIL' } },
     });
   };
+
+  /** The `$set` written to the document slot (the update that carries its processingStatus). */
+  const slotSet = () =>
+    annualAccountModel.updateOne.mock.calls.find(
+      ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+        update?.$set?.['documents.$.processingStatus'] !== undefined,
+    )?.[1]?.$set as Record<string, unknown>;
+
+  const runOnce = async () => {
+    const processPromise = processor.process(makeJob());
+    await jest.advanceTimersByTimeAsync(5000);
+    await processPromise;
+  };
+
+  it('counts a real FAIL of a new upload toward the failed uploads before manual review', async () => {
+    annualAccountModel.findOne.mockReturnValue(
+      findByIdChain({ documents: [{ failedUploadsInARow: 2, lastFailedUploadId: 'an-older-upload' }] }),
+    );
+    mockRealFail();
+
+    await runOnce();
+
+    expect(slotSet()).toMatchObject({
+      'documents.$.failedUploadsInARow': 3,
+      'documents.$.lastFailedUploadId': 'upload-1',
+    });
+  });
+
+  it('does not count a retry of an upload that already failed', async () => {
+    annualAccountModel.findOne.mockReturnValue(
+      findByIdChain({ documents: [{ failedUploadsInARow: 2, lastFailedUploadId: 'upload-1' }] }),
+    );
+    mockRealFail();
+
+    await runOnce();
+
+    expect(slotSet()).not.toHaveProperty(['documents.$.failedUploadsInARow']);
+  });
+
+  it('does not count a crashed OCR job toward the failed uploads', async () => {
+    ocrApi.getJobStatus.mockResolvedValue({ job_id: 'ocr-job-1', status: 'failed', message: 'OCR engine error' });
+
+    await runOnce();
+
+    expect(slotSet()).not.toHaveProperty(['documents.$.failedUploadsInARow']);
+  });
 
   it('does not count a crashed OCR job as a strike, even inside a rejection cycle', async () => {
     annualAccountModel.findOne.mockReturnValue(
@@ -344,7 +397,10 @@ describe('AnnualAccountOcrProcessor', () => {
       const call = annualAccountModel.updateOne.mock.calls
         .slice()
         .reverse()
-        .find(([, update]: [unknown, { $set?: Record<string, unknown> }]) => update?.$set?.['documents.$.processingStatus'] !== undefined);
+        .find(
+          ([, update]: [unknown, { $set?: Record<string, unknown> }]) =>
+            update?.$set?.['documents.$.processingStatus'] !== undefined,
+        );
       return (call?.[1] as { $set?: Record<string, unknown> })?.$set as Record<string, unknown>;
     };
     const runFailure = async () => {
@@ -398,6 +454,9 @@ describe('AnnualAccountOcrProcessor', () => {
           'documents.$.postRejectionAttemptsUsed': 0,
           'documents.$.manualReviewRejectionCount': 0,
           'documents.$.uploadBlockedUntil': null,
+          // A pass also starts the failed uploads before manual review again from 0.
+          'documents.$.failedUploadsInARow': 0,
+          'documents.$.lastFailedUploadId': null,
         }),
       }),
     );

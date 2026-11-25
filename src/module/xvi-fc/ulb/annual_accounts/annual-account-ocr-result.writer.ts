@@ -8,6 +8,7 @@ import {
 } from '../../../../schemas/xvi-fc/annual-account-upload-history.schema';
 import { OcrBasicValidation, OcrResultResponse } from './annual-account-ocr-api.service';
 import { MAX_POST_REJECTION_ATTEMPTS, POST_REJECTION_COOLDOWN_HOURS } from './annual-account-status-access.util';
+import { failedUploadRunUpdate } from 'src/common/utils/manual-review-cooldown.util';
 
 export interface OcrCtx {
   uploadId: string;
@@ -174,12 +175,15 @@ export class AnnualAccountOcrResultWriter {
         'documents.$.postRejectionAttemptsUsed': 0,
         'documents.$.manualReviewRejectionCount': 0,
         'documents.$.uploadBlockedUntil': null,
+        ...failedUploadRunUpdate(null, ctx.uploadId, true),
       };
     }
 
     const doc = await this.annualAccountModel.findOne(this.slotFilter(ctx), { 'documents.$': 1 }).lean().exec();
     const docSlot = doc?.documents?.[0];
-    if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return {};
+    // Every real FAIL counts toward the failed uploads before "Request Manual Review" (once per upload).
+    const failedRun = failedUploadRunUpdate(docSlot, ctx.uploadId, false);
+    if (docSlot?.manualReviewDecision?.status !== 'RETURNED') return failedRun;
 
     // A previously-set uploadBlockedUntil can only mean the ULB already served out a full cooldown
     // before this retry/re-upload was ever allowed to start (the upload-blocked guard rejects while
@@ -187,12 +191,13 @@ export class AnnualAccountOcrResultWriter {
     // the batch that triggered the old lock. Without this, the ULB would get only one attempt per
     // cycle after the first lock instead of a full fresh MAX_POST_REJECTION_ATTEMPTS.
     const startingFreshBatch = docSlot.uploadBlockedUntil != null;
-    const attemptsUsed = Math.min((startingFreshBatch ? 0 : docSlot.postRejectionAttemptsUsed ?? 0) + 1, MAX_POST_REJECTION_ATTEMPTS);
-    const update: Record<string, unknown> = { 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
+    const attemptsUsed = Math.min(
+      (startingFreshBatch ? 0 : (docSlot.postRejectionAttemptsUsed ?? 0)) + 1,
+      MAX_POST_REJECTION_ATTEMPTS,
+    );
+    const update: Record<string, unknown> = { ...failedRun, 'documents.$.postRejectionAttemptsUsed': attemptsUsed };
     if (attemptsUsed >= MAX_POST_REJECTION_ATTEMPTS) {
-      update['documents.$.uploadBlockedUntil'] = new Date(
-        Date.now() + POST_REJECTION_COOLDOWN_HOURS * 60 * 60 * 1000,
-      );
+      update['documents.$.uploadBlockedUntil'] = new Date(Date.now() + POST_REJECTION_COOLDOWN_HOURS * 60 * 60 * 1000);
     } else if (startingFreshBatch) {
       update['documents.$.uploadBlockedUntil'] = null;
     }
