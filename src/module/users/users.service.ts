@@ -23,6 +23,7 @@ import { Permission, Scope, UserRole } from 'src/module/auth/enum/roles-xvi-fc.e
 import { Role } from 'src/module/auth/enum/role.enum';
 import {
   XVIFC_DOE_PERMISSIONS,
+  XVIFC_MOHUA_PERMISSIONS,
   MOHUA_PMU_PERMISSIONS,
   getEffectivePermissions,
 } from 'src/module/auth/permissions.map';
@@ -127,63 +128,22 @@ const STATE_MATRIX: PermissionMatrixRow[] = [
   { label: 'Manage users', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
 ];
 
-const MOHUA_MATRIX: PermissionMatrixRow[] = [
-  {
-    label: 'View status and reports',
-    permissionKey: Permission.VIEW_STATUS_REPORTS,
-    admin: true,
-    reviewer: true,
-    viewer: true,
-  },
-  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS, admin: true, reviewer: true, viewer: true },
-  {
-    label: 'Review state submissions',
-    permissionKey: Permission.REVIEW_ULB_SUBMISSIONS,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  {
-    label: 'Send reminders to states',
-    permissionKey: Permission.MESSAGE_USERS,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  {
-    label: 'Request information from states',
-    permissionKey: Permission.MESSAGE_USERS,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  {
-    label: 'Approve / Reject submissions',
-    permissionKey: Permission.APPROVE_ULB_SUBMISSIONS,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  {
-    label: 'Issue Office Memorandum (OM)',
-    permissionKey: Permission.ISSUE_OFFICE_MEMORANDUM,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  {
-    label: 'Final submit to DoE',
-    permissionKey: Permission.FINAL_SUBMIT_TO_MOHUA,
-    admin: true,
-    reviewer: true,
-    viewer: false,
-  },
-  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS, admin: true, reviewer: false, viewer: false },
-];
+// Derived from XVIFC_MOHUA_PERMISSIONS like PMU/DoE below, so a row can only ever show what the API enforces.
+const MOHUA_MATRIX: PermissionMatrixRow[] = buildPermissionMatrix(XVIFC_MOHUA_PERMISSIONS, [
+  { label: 'View status and reports', permissionKey: Permission.VIEW_STATUS_REPORTS },
+  { label: 'View dashboards', permissionKey: Permission.VIEW_DASHBOARDS },
+  { label: 'Review state submissions', permissionKey: Permission.REVIEW_STATE_SUBMISSIONS },
+  { label: 'Send reminders to states', permissionKey: Permission.SEND_REMINDERS_TO_STATES },
+  { label: 'Request information from states', permissionKey: Permission.REQUEST_INFO_FROM_STATES },
+  { label: 'Approve / Reject submissions', permissionKey: Permission.APPROVE_STATE_SUBMISSIONS },
+  { label: 'Issue Office Memorandum (OM)', permissionKey: Permission.ISSUE_OFFICE_MEMORANDUM },
+  { label: 'Final submit to DoE', permissionKey: Permission.FINAL_SUBMIT_TO_DOE },
+  { label: 'Manage team', permissionKey: Permission.MANAGE_USERS },
+]);
 
 /**
  * Display rows derived from the real permission table, so the matrix shown on the "People and Roles" page
- * can never drift from what the API actually enforces (the hand-written STATE/MoHUA matrices above can).
+ * can never drift from what the API actually enforces (the hand-written STATE matrix above can).
  */
 function buildPermissionMatrix(
   table: Record<'admin' | 'reviewer' | 'viewer', Permission[]>,

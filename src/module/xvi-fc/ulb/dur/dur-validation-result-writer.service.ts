@@ -48,7 +48,12 @@ export class DurValidationResultWriter {
       `writeCompleted — durId=${durId} docId=${docId} uploadId=${uploadId} processingStatus=${processingStatus}`,
     );
 
-    const postRejectionUpdate = await this.computePostRejectionUpdate(durId, docId, uploadId, processingStatus);
+    // Only a real verdict (overall_valid true or false) counts as a pass or a fail; a response without one is
+    // stored as FAILED but must not add to the failed uploads or the attempt cooldown. Same rule as the annual-account writer.
+    const hasVerdict = typeof checks?.overall_valid === 'boolean';
+    const postRejectionUpdate = hasVerdict
+      ? await this.computePostRejectionUpdate(durId, docId, uploadId, processingStatus)
+      : {};
 
     const [result] = await Promise.all([
       this.durModel.updateOne(

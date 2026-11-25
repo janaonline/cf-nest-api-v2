@@ -187,15 +187,16 @@ describe('MohuaClaimLettersService', () => {
     });
 
     it('marks a state Received with its claimed total and ULBs, and every other state Pending', async () => {
+      // In the order the database returns them for { submittedAt: -1, _id: -1 }: the newer batch 2 first.
       batchModel.find.mockReturnValue(
         q([
-          batch(),
           batch({
             _id: new Types.ObjectId(),
             batchNumber: 2,
             ulbCount: 6,
             financialSummary: { currentSelectedClaim: 50_000_000 },
           }),
+          batch(),
         ]),
       );
 
@@ -217,9 +218,11 @@ describe('MohuaClaimLettersService', () => {
         claimLetterCount: 2,
         latestClaimNumber: 2,
       });
-      // Each state carries its own letters (the expanded row and the card filters read them); none for Kerala.
-      expect(states[0].claimLetters.map((l) => l.batchNumber)).toEqual([1, 2]);
-      expect(states[0].claimLetters[1]).toMatchObject({ ulbCount: 6, amount: 50_000_000 });
+      // Each state carries its own letters, newest first (the expanded row and the stage chips read them); none for Kerala.
+      expect(states[0].claimLetters.map((l) => l.batchNumber)).toEqual([2, 1]);
+      expect(states[0].claimLetters[0]).toMatchObject({ ulbCount: 6, amount: 50_000_000 });
+      const query = batchModel.find.mock.results[0].value as { sort: jest.Mock };
+      expect(query.sort).toHaveBeenCalledWith({ submittedAt: -1, _id: -1 });
       expect(states[1].claimLetters).toEqual([]);
     });
 
