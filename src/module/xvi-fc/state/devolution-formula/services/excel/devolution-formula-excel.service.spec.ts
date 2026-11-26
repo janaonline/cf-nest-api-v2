@@ -1201,7 +1201,7 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     const built = totalValidation.buildValidation(2, new Map([['totalGrantAllocation', 'E']]));
     const [formula] = built['formulae'] as string[];
 
-    expect(built['errorStyle']).toBe('error');
+    expect(built['errorStyle']).toBe('stop');
     expect(formula).toContain('MOD(E2,1)=0');
     expect(formula).toContain('E2>=0');
     expect(formula).toContain('E2<=');

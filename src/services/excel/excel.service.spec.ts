@@ -59,7 +59,7 @@ describe('ExcelService', () => {
           allowBlank: false,
           formulae: ['"Active,Inactive,Pending"'],
           showErrorMessage: true,
-          errorStyle: 'error',
+          errorStyle: 'stop',
           errorTitle: 'Invalid',
           error: 'Pick a valid status.',
         },
@@ -91,7 +91,7 @@ describe('ExcelService', () => {
             allowBlank: false,
             formulae: [`=OR($${statusLetter}${row}<>"Active",ISNUMBER(${notesLetter}${row}))`],
             showErrorMessage: true,
-            errorStyle: 'error',
+            errorStyle: 'stop',
             errorTitle: 'Notes',
             error: 'Required when Active.',
           };
@@ -162,7 +162,7 @@ describe('ExcelService', () => {
           type: 'custom',
           prompt: 'Calculated automatically.',
           error: 'Calculated automatically.',
-          errorStyle: 'error',
+          errorStyle: 'stop',
         }),
       );
       // A cell styled only by the column's number format reads back as "no fill" ({ pattern: 'none' }).

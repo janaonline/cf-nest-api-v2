@@ -27,7 +27,7 @@ function readOnlyValidation(note?: string): ExcelJS.DataValidation {
     promptTitle: 'Read-only',
     prompt: text,
     showErrorMessage: true,
-    errorStyle: 'error',
+    errorStyle: 'stop',
     errorTitle: 'Read-only',
     error: text,
   };
