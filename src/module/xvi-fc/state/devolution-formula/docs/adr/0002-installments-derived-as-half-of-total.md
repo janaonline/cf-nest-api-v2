@@ -21,7 +21,7 @@ applied across all ULBs, and 45 of one state's 76 ULBs had odd Totals.
   every write path: Excel upload (`parseDataRow`), revalidate Case A, and portal row edit
   (`updateRow`). Uploaded instalment cells are ignored and the columns are optional (old templates
   still work). Number-like text in the Total cell ("1000" from a text-formatted cell) splits like a
-  number, matching how the validator reads it.
+  number, matching how the validator reads it; a TRUE / FALSE cell is a row error.
 - **Rows a claim letter holds keep their stored split.** A ULB with an open or acknowledged
   `ClaimLetterUlbLock`, or a row frozen at 5 / 7, is never re-derived or flagged: the State can't edit
   it, and changing it would split it from the `allocatedAmount` that letter claimed (the SO's approval
@@ -66,5 +66,6 @@ applied across all ULBs, and 45 of one state's 76 ULBs had odd Totals.
   final-submit guard). A submitted form that is never returned keeps its old split, and claim letters
   built from it use those stored amounts. A ULB a claim letter holds keeps its old split even on a
   reopened form, and final submit doesn't count it.
-- If `claimAmountEditable` is ever turned on, the claim input (`ClaimLetterUlbSelectionDto`,
-  `@IsInt()`) must accept .50, or a State could not claim exactly its allocation.
+- The claim request accepts a .50 amount, and with the switch off it must equal the allocation. If
+  `claimAmountEditable` is ever turned on, its whole-Rupee rule (`resolveClaimedAmount`) and the UI's
+  decimal check must accept .50 too, or a State could not claim exactly its allocation.

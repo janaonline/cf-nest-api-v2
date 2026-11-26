@@ -316,6 +316,16 @@ describe('DevolutionFormulaValidator', () => {
     expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'number')).toBe(true);
   });
 
+  // Number(true) is 1, which would pass every Total check while its instalments derive as 0 / 0.
+  it.each([true, false])('validateRow returns number error for a Boolean %p Total', (total) => {
+    const errors = validator.validateRow({ ...baseRow(), totalGrantAllocation: total }, 250);
+    expect(errors).toEqual([expect.objectContaining({ field: 'totalGrantAllocation', code: 'number' })]);
+  });
+
+  it('validateRow accepts number-like text in the Total cell', () => {
+    expect(validator.validateRow({ ...baseRow(), totalGrantAllocation: '400000' }, 250)).toHaveLength(0);
+  });
+
   it('validateRow returns 0 errors for a fully valid row', () => {
     const errors = validator.validateRow(baseRow(), 250);
     expect(errors).toHaveLength(0);
