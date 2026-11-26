@@ -201,8 +201,9 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   `docs/adr/0002-installments-derived-as-half-of-total.md`). Multiples of 0.5 add exactly, so
   `helpers/claim-letter-financial.helpers.ts` stays exact with plain arithmetic; the variance band
   cross-multiplies instead of dividing. The letter's amount in words uses `amountToIndianWords`.
-  `claimedAmount` on the request stays `@IsInt()`, used only while `claimAmountEditable` is on (off
-  today); turning it on needs that input to accept .50.
+  `claimedAmount` on the request may carry 50 paise: with the switch off it must equal the allocation,
+  with it on it must be whole Rupees within the band (`resolveClaimedAmount`). Accepting .50 with the
+  switch on is still open (that resolver rule and the UI's decimal check).
 - Each child's `eligibilitySources` holds one snapshot per ULB condition, all already fetched: each
   `FORM_AND_ROW` source (Elected Body, FC Unspent) as its State-level result plus this ULB's row
   evidence (`rowEvidenceByFormId`), and each ULB-owned form (`perCriterion[].formEvidence`). The
