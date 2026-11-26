@@ -225,7 +225,7 @@ describe('FcUnspentMohuaReviewService', () => {
       });
     });
 
-    it('withholds mutation permissions for a reviewer-subrole MoHUA user (REVIEW_STATE_SUBMISSIONS only)', async () => {
+    it('gives a reviewer-subrole MoHUA user the same review actions as the admin', async () => {
       const reviewerUser = {
         _id: userOid.toString(),
         scope: Scope.MOHUA,
@@ -234,10 +234,22 @@ describe('FcUnspentMohuaReviewService', () => {
       const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), reviewerUser);
       expect(result.data!.permissions).toEqual({
         canView: true,
-        canApproveForm: false,
-        canRejectForm: false,
-        canReviewRows: false,
+        canApproveForm: true,
+        canRejectForm: true,
+        canReviewRows: true,
       });
+    });
+
+    it('withholds mutation permissions for a viewer-subrole MoHUA user', async () => {
+      const viewerUser = {
+        _id: userOid.toString(),
+        scope: Scope.MOHUA,
+        xviFcSubrole: 'viewer',
+      } as unknown as AuthUser;
+      const result = await service.getReviewMetadata(stateOid.toString(), yearOid.toString(), viewerUser);
+      expect(result.data!.permissions.canApproveForm).toBe(false);
+      expect(result.data!.permissions.canRejectForm).toBe(false);
+      expect(result.data!.permissions.canReviewRows).toBe(false);
     });
 
     it('withholds mutation permissions once the form is acknowledged (read-only terminal state)', async () => {

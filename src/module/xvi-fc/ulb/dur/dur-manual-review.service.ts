@@ -21,10 +21,7 @@ import {
   XviFcDurManualReviewRequest,
   XviFcDurManualReviewRequestDocument,
 } from 'src/schemas/xvi-fc/dur-manual-review-request.schema';
-import {
-  XviFcDurUploadHistory,
-  XviFcDurUploadHistoryDocument,
-} from 'src/schemas/xvi-fc/dur-upload-history.schema';
+import { XviFcDurUploadHistory, XviFcDurUploadHistoryDocument } from 'src/schemas/xvi-fc/dur-upload-history.schema';
 import { Scope } from 'src/module/auth/enum/roles-xvi-fc.enum';
 import { buildDecisionRecord, resolveDeciderName } from 'src/module/xvi-fc/common/utils/xvi-fc-decision.util';
 import { escapeRegex } from 'src/common/utils/regex.util';
@@ -43,7 +40,7 @@ import {
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
-  isPastFirstAttempt,
+  hasEnoughFailedUploads,
   isUploadBlocked,
 } from 'src/common/utils/manual-review-cooldown.util';
 import { ManualReviewDecisionDto } from 'src/module/xvi-fc/ulb/annual_accounts/dto/manual-review-decision.dto';
@@ -120,7 +117,7 @@ export class DurManualReviewService {
     if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed validation.');
     }
-    if (!isPastFirstAttempt(docSlot.currentUpload)) {
+    if (!hasEnoughFailedUploads(docSlot)) {
       throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
@@ -218,6 +215,9 @@ export class DurManualReviewService {
             'documents.$.processingStatus': 'PASSED',
             'documents.$.postRejectionAttemptsUsed': 0,
             'documents.$.uploadBlockedUntil': null,
+            // An approved document has passed, so its run of failed uploads starts again from 0.
+            'documents.$.failedUploadsInARow': 0,
+            'documents.$.lastFailedUploadId': null,
           };
 
     // $elemMatch (not two separate 'documents.x' filters) so both conditions bind to the same
@@ -422,7 +422,14 @@ export class DurManualReviewService {
       throw new ForbiddenException('Only ADMIN users may download manual-review documents');
     }
 
-    type DocSlot = { currentUpload?: { uploadId: string; file: { path: string; originalName?: string | null; mimeType?: string | null } } | null } | undefined;
+    type DocSlot =
+      | {
+          currentUpload?: {
+            uploadId: string;
+            file: { path: string; originalName?: string | null; mimeType?: string | null };
+          } | null;
+        }
+      | undefined;
     let docSlot: DocSlot;
     let docSlotLoaded = false;
     const loadDocSlot = async (): Promise<DocSlot> => {
@@ -555,10 +562,7 @@ export class DurManualReviewService {
                       input: { $ifNull: [{ $arrayElemAt: ['$durDoc.documents', 0] }, []] },
                       as: 'd',
                       cond: {
-                        $and: [
-                          { $eq: ['$$d.docId', '$docId'] },
-                          { $eq: ['$$d.currentUpload.uploadId', '$uploadId'] },
-                        ],
+                        $and: [{ $eq: ['$$d.docId', '$docId'] }, { $eq: ['$$d.currentUpload.uploadId', '$uploadId'] }],
                       },
                     },
                   },

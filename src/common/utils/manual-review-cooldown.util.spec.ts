@@ -1,11 +1,14 @@
 import {
   MAX_POST_REJECTION_ATTEMPTS,
+  MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW,
   POST_REJECTION_COOLDOWN_HOURS,
   computeUploadBlockedUntil,
   isAwaitingManualReviewDecision,
   isUploadBlocked,
   nextPassedReplacements,
   nextPostRejectionAttempts,
+  failedUploadRunUpdate,
+  hasEnoughFailedUploads,
 } from './manual-review-cooldown.util';
 
 describe('nextPassedReplacements', () => {
@@ -96,5 +99,31 @@ describe('isAwaitingManualReviewDecision', () => {
 
   it('is false once a decision has been recorded', () => {
     expect(isAwaitingManualReviewDecision(true, { status: 'RETURNED' })).toBe(false);
+  });
+});
+
+describe('failedUploadRunUpdate / hasEnoughFailedUploads', () => {
+  it('adds one per failed upload, but not again for a retry of the same upload', () => {
+    expect(failedUploadRunUpdate(null, 'u1', false)).toEqual({
+      'documents.$.failedUploadsInARow': 1,
+      'documents.$.lastFailedUploadId': 'u1',
+    });
+    expect(failedUploadRunUpdate({ failedUploadsInARow: 1, lastFailedUploadId: 'u1' }, 'u1', false)).toEqual({});
+    expect(failedUploadRunUpdate({ failedUploadsInARow: 1, lastFailedUploadId: 'u1' }, 'u2', false)).toMatchObject({
+      'documents.$.failedUploadsInARow': 2,
+    });
+  });
+
+  it('resets on a pass', () => {
+    expect(failedUploadRunUpdate({ failedUploadsInARow: 3, lastFailedUploadId: 'u3' }, 'u4', true)).toEqual({
+      'documents.$.failedUploadsInARow': 0,
+      'documents.$.lastFailedUploadId': null,
+    });
+  });
+
+  it(`allows a manual review only from ${MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row`, () => {
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 3 })).toBe(false);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 4 })).toBe(true);
+    expect(hasEnoughFailedUploads(undefined)).toBe(false);
   });
 });

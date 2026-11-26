@@ -15,21 +15,26 @@ import {
   XviFcUnspentStateForm,
 } from 'src/schemas/xvi-fc/state/fc-unspent-state-form.schema';
 import { XviFcUnspentStateFormRow } from 'src/schemas/xvi-fc/state/fc-unspent-state-form-row.schema';
+import { XviFcGtc } from 'src/schemas/xvi-fc/state/gtc-form.schema';
 import { SFC_FORM_ID, SFC_STATUS_FORM_TYPE, XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
+import { ExemptionResolverService } from './common/services/exemption-resolver.service';
 import { DF_FORM_TYPE } from './state/devolution-formula/constants/devolution-formula.constants';
-import { MOHUA_OVERVIEW_INSTALMENT } from './mohua/overview/mohua-overview.constants';
+import { resolveSfcExemptionStatus } from './state/claim-letter/helpers/claim-letter-sfc-exemption.helpers';
+import {
+  MOHUA_OVERVIEW_INSTALMENT,
+  MOHUA_STATE_FORM_APPROVED_STATUSES,
+} from './mohua/overview/mohua-overview.constants';
 
 /**
- * State-form statuses at which the State's data is shown to its ULBs. Deliberately one list: widening
- * it is the only change needed. Until a form reaches
- * one of these (with PMU, under MoHUA review, or acknowledged) the ULB keeps seeing "Awaiting State
- * Upload", so a draft or a PMU-returned value never reaches the browser.
+ * State-form statuses that count as "approved by PMU": PMU approved it (under SO review, 15) or it went further (under
+ * MoHUA review 5, acknowledged 7). The ULB sees the State's data only once **all five** State forms (SFC, Elected
+ * Body, Devolution, FC Unspent, GTC) are here; until then every value reads "Awaiting State Upload", so nothing PMU
+ * hasn't approved reaches the browser. A whole-State SFC exemption (under review or approved) counts as SFC done.
  */
-export const ULB_VISIBLE_STATE_FORM_STATUSES: readonly number[] = [
-  FORM_STATUS.UNDER_REVIEW_BY_PMU,
-  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
-];
+export const ULB_VISIBLE_STATE_FORM_STATUSES: readonly number[] = [...MOHUA_STATE_FORM_APPROVED_STATUSES];
+
+/** Shown as the SFC value when the State is exempt from SFC rather than filing it. */
+const SFC_EXEMPTED_VALUE = 'Exempted';
 
 /** One State-supplied condition as the ULB sees it. `value`/`amount` are null unless `visible`. */
 export interface UlbStateCondition {
@@ -55,7 +60,8 @@ type LeanSfc = { currentFormStatus?: number; data?: Record<string, unknown> };
 /**
  * What the State has filed for one ULB — SFC, Elected Body, FC Unspent and the ULB-wise allocation —
  * for the ULB's "Conditions" page. Read-only; every row lookup is scoped to the one ULB so no other
- * ULB's figure is ever returned.
+ * ULB's figure is ever returned. All four show together, and only once PMU has approved all five
+ * State forms (see ULB_VISIBLE_STATE_FORM_STATUSES).
  */
 @Injectable()
 export class UlbStateConditionsService {
@@ -67,27 +73,66 @@ export class UlbStateConditionsService {
     @InjectModel(DevolutionFormulaRow.name) private readonly dfRowModel: Model<DevolutionFormulaRow>,
     @InjectModel(XviFcUnspentStateForm.name) private readonly unspentFormModel: Model<XviFcUnspentStateForm>,
     @InjectModel(XviFcUnspentStateFormRow.name) private readonly unspentRowModel: Model<XviFcUnspentStateFormRow>,
+    @InjectModel(XviFcGtc.name) private readonly gtcModel: Model<XviFcGtc>,
     private readonly formJsonService: FormJsonService,
+    private readonly exemptionResolver: ExemptionResolverService,
   ) {}
 
   async resolve(stateId: Types.ObjectId, ulbId: Types.ObjectId, yearId: Types.ObjectId): Promise<UlbStateConditions> {
+    const live = { state: stateId, year: yearId };
+    const [sfcForm, ebForm, dfForm, unspentForm, gtcForm, sfcExemption] = await Promise.all([
+      this.sfcModel
+        .findOne({ ...live, formType: SFC_STATUS_FORM_TYPE, isActive: true, isDeleted: { $ne: true } })
+        .select('currentFormStatus data')
+        .lean<LeanSfc>()
+        .exec(),
+      this.findForm(this.ebFormModel, { ...live, formType: EULB_FORM_TYPE, isActive: true, isDeleted: { $ne: true } }),
+      this.findForm(this.dfFormModel, {
+        ...live,
+        installment: MOHUA_OVERVIEW_INSTALMENT,
+        formType: DF_FORM_TYPE,
+        isActive: true,
+      }),
+      this.findForm(this.unspentFormModel, { ...live, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false }),
+      this.findForm(this.gtcModel, {
+        ...live,
+        installment: MOHUA_OVERVIEW_INSTALMENT,
+        isActive: true,
+        isDeleted: { $ne: true },
+      }),
+      resolveSfcExemptionStatus(this.exemptionResolver, stateId, yearId),
+    ]);
+
+    const approved = (status: number | undefined) =>
+      status !== undefined && ULB_VISIBLE_STATE_FORM_STATUSES.includes(status);
+    const sfcExempt = sfcExemption !== null;
+    // One gate for all four values: every State form approved by PMU (SFC may be exempt instead).
+    const visible =
+      (approved(sfcForm?.currentFormStatus) || sfcExempt) &&
+      approved(ebForm?.currentFormStatus) &&
+      approved(dfForm?.currentFormStatus) &&
+      approved(unspentForm?.currentFormStatus) &&
+      approved(gtcForm?.currentFormStatus);
+
     const [sfcStatus, electedBody, devolution, fcUnspent] = await Promise.all([
-      this.sfc(stateId, yearId),
-      this.electedBody(stateId, ulbId, yearId),
-      this.devolution(stateId, ulbId, yearId),
-      this.fcUnspent(stateId, ulbId, yearId),
+      this.sfc(sfcForm, yearId, visible, sfcExempt),
+      this.electedBody(ebForm, ulbId, visible),
+      this.devolution(dfForm, ulbId, visible),
+      this.fcUnspent(unspentForm, ulbId, visible),
     ]);
     return { sfcStatus, electedBody, devolution, fcUnspent };
   }
 
-  private async sfc(stateId: Types.ObjectId, yearId: Types.ObjectId): Promise<UlbStateCondition> {
-    const form = await this.sfcModel
-      .findOne({ state: stateId, year: yearId, formType: SFC_STATUS_FORM_TYPE, isActive: true, isDeleted: { $ne: true } })
-      .select('currentFormStatus data')
-      .lean<LeanSfc>()
-      .exec();
-    const condition = this.base(form?.currentFormStatus);
-    if (!condition.visible) return condition;
+  private async sfc(
+    form: LeanSfc | null,
+    yearId: Types.ObjectId,
+    visible: boolean,
+    exempt: boolean,
+  ): Promise<UlbStateCondition> {
+    const condition = this.base(form?.currentFormStatus, visible);
+    if (!visible) return condition;
+    // An exempt State has no SFC answer to show (or one it filed before asking for the exemption).
+    if (exempt && !approvedSfcAnswer(form)) return { ...condition, value: SFC_EXEMPTED_VALUE };
 
     const raw = form?.data?.['isActiveSfc'];
     return { ...condition, value: typeof raw === 'string' && raw ? await this.sfcLabel(yearId, raw) : null };
@@ -106,19 +151,12 @@ export class UlbStateConditionsService {
   }
 
   private async electedBody(
-    stateId: Types.ObjectId,
+    form: LeanForm | null,
     ulbId: Types.ObjectId,
-    yearId: Types.ObjectId,
+    visible: boolean,
   ): Promise<UlbStateCondition> {
-    const form = await this.findForm(this.ebFormModel, {
-      state: stateId,
-      year: yearId,
-      formType: EULB_FORM_TYPE,
-      isActive: true,
-      isDeleted: { $ne: true },
-    });
-    const condition = this.base(form?.currentFormStatus);
-    if (!form || !condition.visible) return condition;
+    const condition = this.base(form?.currentFormStatus, visible);
+    if (!form || !visible) return condition;
 
     const row = await this.ebRowModel
       .findOne({ form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true, ulbId })
@@ -128,20 +166,9 @@ export class UlbStateConditionsService {
     return { ...condition, value: row?.electedBodyStatus || null };
   }
 
-  private async devolution(
-    stateId: Types.ObjectId,
-    ulbId: Types.ObjectId,
-    yearId: Types.ObjectId,
-  ): Promise<UlbStateCondition> {
-    const form = await this.findForm(this.dfFormModel, {
-      state: stateId,
-      year: yearId,
-      installment: MOHUA_OVERVIEW_INSTALMENT,
-      formType: DF_FORM_TYPE,
-      isActive: true,
-    });
-    const condition = this.base(form?.currentFormStatus);
-    if (!form || !condition.visible) return condition;
+  private async devolution(form: LeanForm | null, ulbId: Types.ObjectId, visible: boolean): Promise<UlbStateCondition> {
+    const condition = this.base(form?.currentFormStatus, visible);
+    if (!form || !visible) return condition;
 
     const row = await this.dfRowModel
       .findOne({ form: form._id, datasetVersion: form.activeDatasetVersion ?? 0, isActive: true, ulbId })
@@ -151,19 +178,9 @@ export class UlbStateConditionsService {
     return { ...condition, amount: typeof row?.totalGrantAllocation === 'number' ? row.totalGrantAllocation : null };
   }
 
-  private async fcUnspent(
-    stateId: Types.ObjectId,
-    ulbId: Types.ObjectId,
-    yearId: Types.ObjectId,
-  ): Promise<UlbStateCondition> {
-    const form = await this.findForm(this.unspentFormModel, {
-      state: stateId,
-      year: yearId,
-      formType: FC_UNSPENT_STATE_FORM_TYPE,
-      isDeleted: false,
-    });
-    const condition = this.base(form?.currentFormStatus);
-    if (!form || !condition.visible) return condition;
+  private async fcUnspent(form: LeanForm | null, ulbId: Types.ObjectId, visible: boolean): Promise<UlbStateCondition> {
+    const condition = this.base(form?.currentFormStatus, visible);
+    if (!form || !visible) return condition;
 
     const row = await this.unspentRowModel
       .findOne({ form: form._id, isActive: true, ulbId })
@@ -178,14 +195,23 @@ export class UlbStateConditionsService {
   }
 
   /** Status fields plus `visible`; no form yet reads as NO_STATUS, i.e. "Awaiting State Upload". */
-  private base(statusCode: number | undefined): UlbStateCondition {
+  private base(statusCode: number | undefined, visible: boolean): UlbStateCondition {
     const status = statusCode ?? FORM_STATUS.NO_STATUS;
     return {
       form_status: getFormStatusKey(status),
       form_status_id: status,
-      visible: ULB_VISIBLE_STATE_FORM_STATUSES.includes(status),
+      visible,
       value: null,
       amount: null,
     };
   }
+}
+
+/** True when the State filed an SFC answer that PMU approved, so it can be shown rather than "Exempted". */
+function approvedSfcAnswer(form: LeanSfc | null): boolean {
+  return (
+    form?.currentFormStatus !== undefined &&
+    ULB_VISIBLE_STATE_FORM_STATUSES.includes(form.currentFormStatus) &&
+    typeof form.data?.['isActiveSfc'] === 'string'
+  );
 }

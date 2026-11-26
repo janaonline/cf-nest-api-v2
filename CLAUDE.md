@@ -85,8 +85,8 @@ src/
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   │                    # `GET xvi-fc/form-status/:ulbId/:yearId` also returns `stateConditions` — the State-filed SFC answer, Elected
 │   │                    # Body status, FC Unspent balance and ULB-wise allocation for that one ULB (`ulb-state-conditions.service.ts`). Each
-│   │                    # entry is `visible: false` with no value until its State form is in `ULB_VISIBLE_STATE_FORM_STATUSES` (currently
-│   │                    # 13, 5 and 7 — PMU review, MoHUA review, acknowledged); a ULB user may only read its own ULB
+│   │                    # entry is `visible: false` with no value until PMU has approved all 5 State forms (each in `ULB_VISIBLE_STATE_FORM_STATUSES`:
+│   │                    # 15, 5 and 7; a whole-State SFC exemption counts for SFC); a ULB user may only read its own ULB
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,
 │   │                    # notifications (read-only feed for the State navbar bell + sidebar dots: the 5 State
 │   │                    # forms' raw status via MohuaStateConditionsService + a count of ULB forms awaiting
@@ -140,7 +140,7 @@ src/
 │   │                    # each letter row and the letter detail carry its `batchNumber` (1 to formjson 26 `meta.maxClaimLetters`, default 3) and `returnedWith` (the letter whose State-form return also returned it, ADR 0009). A state's letters response also carries a
 │   │                    # `summary` band (ULBs claimed/pending, ULBs per status, amount claimed, balance) that reuses the State-side
 │   │                    # ClaimLetterEligibilityService (status buckets, ULB locks); a returned letter's amount is not "claimed". MoHUA/DoE/PMU (read-only, for the national dashboard)/ADMIN only; the State-side
-│   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin = the Section Officer: APPROVE_STATE_SUBMISSIONS) is the SO step: it moves a
+│   │                    # claim-letter reads are State/ADMIN only, so MoHUA has its own module. POST .../letter/:id/approve (MoHUA admin or reviewer = the Section Officer: APPROVE_STATE_SUBMISSIONS; team management stays admin-only) is the SO step: it moves a
 │   │                    # letter under SO review (UNDER_REVIEW_BY_SO, 15) to UNDER_REVIEW_BY_MOHUA (5) and logs it in one transaction,
 │   │                    # pinned on the status + `revision` the page showed. It first re-runs the letter's conditions fresh, as submit
 │   │                    # does (409 naming the ULBs that no longer hold; the SO returns instead). It also moves the letter's State/ULB forms

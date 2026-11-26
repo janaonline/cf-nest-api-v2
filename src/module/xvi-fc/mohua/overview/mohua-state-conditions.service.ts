@@ -15,7 +15,12 @@ import { XviFcGtc } from 'src/schemas/xvi-fc/state/gtc-form.schema';
 import { SFC_STATUS_FORM_TYPE, XviFcSfcStatus } from 'src/schemas/xvi-fc/state/sfc-status.schema';
 import { DF_FORM_TYPE } from 'src/module/xvi-fc/state/devolution-formula/constants/devolution-formula.constants';
 import { canPmuViewForm } from 'src/module/xvi-fc/common/utils/xvi-fc-form-status-access.util';
-import { MOHUA_OVERVIEW_FORMS, MOHUA_OVERVIEW_INSTALMENT, MOHUA_OVERVIEW_STAGE } from './mohua-overview.constants';
+import {
+  MOHUA_OVERVIEW_FORMS,
+  MOHUA_OVERVIEW_INSTALMENT,
+  MOHUA_OVERVIEW_STAGE,
+  MOHUA_STATE_FORM_APPROVED_STATUSES,
+} from './mohua-overview.constants';
 import { deriveStage, getStateFormStatusLabel, isFormCompleted } from './mohua-overview-stage.util';
 import type { MohuaOverviewForm, MohuaOverviewStage } from './mohua-overview.types';
 
@@ -79,6 +84,7 @@ export class MohuaStateConditionsService {
             statusCode,
             statusLabel: getStateFormStatusLabel(statusCode),
             completed: isFormCompleted(statusCode),
+            approved: MOHUA_STATE_FORM_APPROVED_STATUSES.has(statusCode),
             canView: canPmuViewForm(statusCode),
           };
         });
