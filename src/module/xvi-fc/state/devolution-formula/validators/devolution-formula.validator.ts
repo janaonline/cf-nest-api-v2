@@ -1,5 +1,4 @@
 import { Injectable } from '@nestjs/common';
-import type { DfInstallment } from '../constants/devolution-formula.constants';
 import type { DfRowError, DfValidationSummary } from '../types/devolution-formula.types';
 import { amountsAreEqual } from '../helpers/devolution-formula-tolerance.helpers';
 
@@ -8,15 +7,14 @@ export interface DfParsedExcelRow {
   censusCode: string;
   ulbName: string;
   totalGrantAllocation: unknown;
+  /** Derived as Total / 2 (splitTotalIntoInstallments), never read from the upload or validated here. */
   installment1Amount: unknown;
   installment2Amount: unknown;
   devolutionFormula: string;
 }
 
-// Amounts are whole Rupees only — no decimals. A proportional split across many ULBs essentially
-// never divides evenly, so this validator rejects a fractional amount rather than rounding it;
-// apportioning into whole-Rupee shares that sum exactly is the State's responsibility. See
-// devolution-formula-tolerance.helpers.ts for the one remaining (non-decimal) tolerance backstop.
+// The Total is whole Rupees only - a fractional Total is rejected, not rounded; apportioning into
+// whole-Rupee shares that sum exactly is the State's job. Instalments aren't checked (docs/adr/0002).
 
 function isFiniteNumber(v: unknown): v is number {
   return typeof v === 'number' && isFinite(v);
@@ -37,7 +35,6 @@ export class DevolutionFormulaValidator {
    */
   validateRow(
     parsed: DfParsedExcelRow,
-    installment: DfInstallment,
     maxFormulaLength: number,
     context?: { totalMoHUAAllocation?: number },
   ): DfRowError[] {
@@ -54,20 +51,6 @@ export class DevolutionFormulaValidator {
     ) {
       errors.push({ field: 'totalGrantAllocation', code: 'required', message: 'Total Grant Allocation is required.' });
     }
-    if (
-      parsed.installment1Amount === '' ||
-      parsed.installment1Amount === null ||
-      parsed.installment1Amount === undefined
-    ) {
-      errors.push({ field: 'installment1Amount', code: 'required', message: 'Installment 1 Amount is required.' });
-    }
-    if (
-      parsed.installment2Amount === '' ||
-      parsed.installment2Amount === null ||
-      parsed.installment2Amount === undefined
-    ) {
-      errors.push({ field: 'installment2Amount', code: 'required', message: 'Installment 2 Amount is required.' });
-    }
     if (!parsed.devolutionFormula || !String(parsed.devolutionFormula).trim()) {
       errors.push({ field: 'devolutionFormula', code: 'required', message: 'Allocation Formula is required.' });
     } else if (String(parsed.devolutionFormula).trim().length > maxFormulaLength) {
@@ -81,10 +64,10 @@ export class DevolutionFormulaValidator {
 
     if (errors.length > 0) return errors;
 
-    // 2. Type / format checks
-    const total = Number(parsed.totalGrantAllocation);
-    const inst1 = Number(parsed.installment1Amount);
-    const inst2 = Number(parsed.installment2Amount);
+    // 2. Type / format checks (the instalments are derived from the Total, so only the Total is checked).
+    // Only a number or number-like text counts: Number(true) is 1, and a TRUE cell would get 0 / 0 instalments.
+    const rawTotal = parsed.totalGrantAllocation;
+    const total = typeof rawTotal === 'number' || typeof rawTotal === 'string' ? Number(rawTotal) : NaN;
 
     if (!isFiniteNumber(total)) {
       errors.push({
@@ -116,105 +99,19 @@ export class DevolutionFormulaValidator {
       });
     }
 
-    if (!isFiniteNumber(inst1)) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'number',
-        message: 'Installment 1 Amount must be a valid number.',
-        value: parsed.installment1Amount,
-      });
-    } else if (!isWholeNumber(inst1)) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'notWholeNumber',
-        message: 'Installment 1 Amount must be a whole number of Rupees (no decimals).',
-        value: inst1,
-      });
-    } else if (inst1 < 0) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'min',
-        message: 'Installment 1 Amount must be ≥ 0.',
-        value: inst1,
-      });
-    } else if (isFiniteNumber(total) && inst1 > total) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'max',
-        message: `Installment 1 Amount (${inst1}) cannot exceed Total Grant Allocation (${total}).`,
-        value: inst1,
-      });
-    }
-
-    if (!isFiniteNumber(inst2)) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'number',
-        message: 'Installment 2 Amount must be a valid number.',
-        value: parsed.installment2Amount,
-      });
-    } else if (!isWholeNumber(inst2)) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'notWholeNumber',
-        message: 'Installment 2 Amount must be a whole number of Rupees (no decimals).',
-        value: inst2,
-      });
-    } else if (inst2 < 0) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'min',
-        message: 'Installment 2 Amount must be ≥ 0.',
-        value: inst2,
-      });
-    } else if (isFiniteNumber(total) && inst2 > total) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'max',
-        message: `Installment 2 Amount (${inst2}) cannot exceed Total Grant Allocation (${total}).`,
-        value: inst2,
-      });
-    }
-
-    if (errors.length > 0) return errors;
-
-    // 3. Business rules
-    const allocationErrors = this.validateAllocations(inst1, inst2, total, installment);
-    errors.push(...allocationErrors);
-
-    return errors;
-  }
-
-  /**
-   * Validates that inst1 + inst2 === total exactly. If installment is 1, inst2 may be 0 (not yet
-   * disbursed). Both operands are already confirmed whole numbers by this point, so this is exact
-   * integer addition — no epsilon needed.
-   */
-  validateAllocations(inst1: number, inst2: number, total: number, _installment?: DfInstallment): DfRowError[] {
-    const errors: DfRowError[] = [];
-    if (inst1 + inst2 !== total) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'allocationMismatch',
-        message: `Installment 1 Amount (${inst1}) + Installment 2 Amount (${inst2}) must equal Total Grant Allocation (${total}).`,
-        value: { inst1, inst2, total, sum: inst1 + inst2 },
-      });
-    }
     return errors;
   }
 
   /**
    * Validates editable fields submitted via the portal row-edit endpoint.
    * Only validates what was provided; missing optional fields are not flagged.
+   * Instalment values in the request are ignored (always derived from the Total).
    */
   validatePortalRowEdit(
     dto: {
       totalGrantAllocation?: number;
-      installment1Amount?: number;
-      installment2Amount?: number;
       devolutionFormula?: string;
     },
-    _installment: DfInstallment,
     maxFormulaLength: number,
     context?: { totalMoHUAAllocation?: number },
   ): DfRowError[] {
@@ -234,8 +131,6 @@ export class DevolutionFormulaValidator {
     }
 
     const hasTotal = dto.totalGrantAllocation !== undefined;
-    const hasInst1 = dto.installment1Amount !== undefined;
-    const hasInst2 = dto.installment2Amount !== undefined;
 
     if ((hasTotal && !isFiniteNumber(dto.totalGrantAllocation)) || (hasTotal && dto.totalGrantAllocation! < 0)) {
       errors.push({
@@ -259,32 +154,6 @@ export class DevolutionFormulaValidator {
         field: 'totalGrantAllocation',
         code: 'max',
         message: `Total Grant Allocation cannot exceed the MoHUA grant allocation (₹${context.totalMoHUAAllocation}).`,
-      });
-    }
-    if (hasInst1 && (!isFiniteNumber(dto.installment1Amount) || dto.installment1Amount < 0)) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'number',
-        message: 'Installment 1 Amount must be a whole number ≥ 0.',
-      });
-    } else if (hasInst1 && isFiniteNumber(dto.installment1Amount) && !isWholeNumber(dto.installment1Amount)) {
-      errors.push({
-        field: 'installment1Amount',
-        code: 'notWholeNumber',
-        message: 'Installment 1 Amount must be a whole number of Rupees (no decimals).',
-      });
-    }
-    if (hasInst2 && (!isFiniteNumber(dto.installment2Amount) || dto.installment2Amount < 0)) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'number',
-        message: 'Installment 2 Amount must be a whole number ≥ 0.',
-      });
-    } else if (hasInst2 && isFiniteNumber(dto.installment2Amount) && !isWholeNumber(dto.installment2Amount)) {
-      errors.push({
-        field: 'installment2Amount',
-        code: 'notWholeNumber',
-        message: 'Installment 2 Amount must be a whole number of Rupees (no decimals).',
       });
     }
 

@@ -63,6 +63,10 @@ describe('resolveClaimedAmount', () => {
     ])('%s', (_label, requested, expected) => {
       expect(resolveClaimedAmount(allocated, requested, config)).toBe(expected);
     });
+
+    it('accepts an allocation ending in 50 paise (odd Devolution Total)', () => {
+      expect(resolveClaimedAmount(100_000.5, 100_000.5, config)).toBe(100_000.5);
+    });
   });
 
   describe('switch on (editable within the band)', () => {
@@ -73,6 +77,7 @@ describe('resolveClaimedAmount', () => {
       ['an amount inside the band', 105_000, 105_000],
       ['the band edge', 90_000, 90_000],
       ['an amount outside the band', 110_001, null],
+      ['a decimal amount inside the band', 105_000.5, null],
     ])('%s', (_label, requested, expected) => {
       expect(resolveClaimedAmount(allocated, requested, config)).toBe(expected);
     });

@@ -1,8 +1,8 @@
 /**
- * Float-equality backstop for totalAllocatedSum vs. totalMoHUAAllocation. Devolution Formula rows
+ * Float-equality backstop for totalAllocatedSum vs. totalMoHUAAllocation. Devolution Formula Totals
  * are whole Rupees (enforced by DevolutionFormulaValidator/`@IsInt()`), so totalAllocatedSum is
- * always an exact integer sum — the row-level `inst1 + inst2 === total` check uses plain `===`,
- * not this helper. totalMoHUAAllocation, however, comes from GrantAllocation, a collection this
+ * always an exact integer sum; the instalments are derived as Total / 2 and never summed here.
+ * totalMoHUAAllocation, however, comes from GrantAllocation, a collection this
  * codebase can't validate (external writer — see grant-allocation.schema.ts); Math.round() is
  * applied everywhere it's read, but amountsAreEqual stays as a last-resort backstop in case a
  * stray decimal ever slips through anyway.
@@ -21,7 +21,7 @@ export function amountsAreEqual(a: number, b: number, epsilon: number = FLOAT_EQ
 
 /**
  * Snaps a value to the nearest whole Rupee when it's within FLOAT_EQUALITY_EPSILON of one —
- * absorbs IEEE-754 float noise from spreadsheet formulas (e.g. a 50/50 installment split landing
+ * absorbs IEEE-754 float noise from spreadsheet formulas (e.g. a formula-computed Total landing
  * on 63579869.999999996 instead of 63579870, invisible in Excel's own display formatting) without
  * accepting a genuine fractional Rupee amount, which is always far larger than this epsilon.
  * Non-numeric, NaN, or Infinity input is returned unchanged so required-field and type checks
