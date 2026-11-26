@@ -32,6 +32,7 @@ import type { DfFormLeanDoc, DfRowError } from '../../types/devolution-formula.t
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
 import { assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
 import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
+import { splitTotalIntoInstallments } from '../../helpers/devolution-formula-installments.helpers';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
 import {
@@ -195,7 +196,7 @@ export class DevolutionFormulaRowService {
 
     const maxFormulaLength = await this.resolveMaxFormulaLength(yearId);
 
-    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, installment, maxFormulaLength, {
+    const fieldErrors = this.dfValidator.validatePortalRowEdit(dto, maxFormulaLength, {
       totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
     });
     if (fieldErrors.length > 0) {
@@ -205,21 +206,35 @@ export class DevolutionFormulaRowService {
 
     const updatedFields: Partial<{
       totalGrantAllocation: number;
-      installment1Amount: number;
-      installment2Amount: number;
       devolutionFormula: string;
       updatedBy: Types.ObjectId;
     }> = { updatedBy: new Types.ObjectId(user._id) };
 
     if (dto.totalGrantAllocation !== undefined) updatedFields.totalGrantAllocation = dto.totalGrantAllocation;
-    if (dto.installment1Amount !== undefined) updatedFields.installment1Amount = dto.installment1Amount;
-    if (dto.installment2Amount !== undefined) updatedFields.installment2Amount = dto.installment2Amount;
     if (dto.devolutionFormula !== undefined) updatedFields.devolutionFormula = dto.devolutionFormula;
 
+    const mergedTotal = updatedFields.totalGrantAllocation ?? row.totalGrantAllocation;
+    const installments = splitTotalIntoInstallments(mergedTotal);
+    // Instalments can't be set directly: a sent value other than Total / 2 is refused (docs/adr/0002).
+    const installmentErrors = (['installment1Amount', 'installment2Amount'] as const).flatMap((key, idx) =>
+      dto[key] !== undefined && dto[key] !== installments[key]
+        ? [
+            {
+              field: key,
+              code: 'installmentNotHalf',
+              message: `Installment ${idx + 1} Amount is always half of the Total Grant Allocation (₹${installments[key]}) and can't be set directly.`,
+              value: dto[key],
+            },
+          ]
+        : [],
+    );
+    if (installmentErrors.length > 0) {
+      throwXviFcValidationError(Object.fromEntries(installmentErrors.map((e) => [e.field, [e]])));
+    }
+
     const mergedValues = {
-      totalGrantAllocation: updatedFields.totalGrantAllocation ?? row.totalGrantAllocation,
-      installment1Amount: updatedFields.installment1Amount ?? row.installment1Amount,
-      installment2Amount: updatedFields.installment2Amount ?? row.installment2Amount,
+      totalGrantAllocation: mergedTotal,
+      ...installments,
       devolutionFormula: updatedFields.devolutionFormula ?? row.devolutionFormula,
     };
 
@@ -234,7 +249,7 @@ export class DevolutionFormulaRowService {
     if (!row.ulbId) {
       rowErrors.push({ field: 'censusCode', code: 'unknownUlb', message: 'ULB not found in registry.' });
     } else {
-      rowErrors = this.dfValidator.validateRow(parsed, installment, maxFormulaLength, {
+      rowErrors = this.dfValidator.validateRow(parsed, maxFormulaLength, {
         totalMoHUAAllocation: (formDoc['totalMoHUAAllocation'] as number | undefined) ?? undefined,
       });
     }

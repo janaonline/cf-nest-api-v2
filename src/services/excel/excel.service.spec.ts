@@ -125,5 +125,32 @@ describe('ExcelService', () => {
       const sheet = await loadSheet(buffer, 'TestSheet');
       expect(Object.keys(sheet.dataValidations.model)).toHaveLength(0);
     });
+
+    it('leaves the sheet unprotected and unformatted when no new options are passed', async () => {
+      const buffer = await service.generateExcel(HEADERS, [{ name: 'Alice', status: 'A', score: 1, notes: '' }], 'S');
+      const sheet = await loadSheet(buffer, 'S');
+      expect((sheet as unknown as { sheetProtection?: unknown }).sheetProtection).toBeFalsy();
+      expect(sheet.getCell(2, 3).numFmt).toBeUndefined();
+    });
+
+    it('locks only `locked` columns, protects without a password, and applies numFmt', async () => {
+      const headers = [
+        { label: 'Name', key: 'name' },
+        { label: 'Total', key: 'total' },
+        { label: 'Half', key: 'half', numFmt: '#,##0.00', locked: true },
+      ];
+      const rows = [{ name: 'Alice', total: 3, half: { formula: 'B2/2', result: 1.5 } }];
+      const buffer = await service.generateExcel(headers, rows, 'S', undefined, { protectLockedColumns: true });
+      const sheet = await loadSheet(buffer, 'S');
+
+      const protection = (sheet as unknown as { sheetProtection?: Record<string, unknown> }).sheetProtection;
+      expect(protection?.['sheet']).toBe(true);
+      expect(protection?.['hashValue']).toBeUndefined();
+      expect(sheet.getCell(2, 1).protection?.locked).toBe(false);
+      expect(sheet.getCell(2, 2).protection?.locked).toBe(false);
+      expect(sheet.getCell(2, 3).protection?.locked).not.toBe(false);
+      expect(sheet.getCell(2, 3).numFmt).toBe('#,##0.00');
+      expect(sheet.getCell(2, 3).value).toEqual({ formula: 'B2/2', result: 1.5 });
+    });
   });
 });

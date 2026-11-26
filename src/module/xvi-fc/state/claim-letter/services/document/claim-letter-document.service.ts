@@ -12,9 +12,9 @@ import { FORM_STATUS } from 'src/common/constants/form-status.constants';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
 import { assertStateAccess } from 'src/module/xvi-fc/common/utils/xvi-fc-state-access.util';
 import {
+  amountToIndianWords,
   formatHalfRupeesInLakh,
   formatRupeesInLakh,
-  rupeesToIndianWords,
 } from 'src/module/xvi-fc/common/utils/xvi-fc-amount-format.util';
 import { ClaimLetterBatch, ClaimLetterBatchDocument } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
 import {
@@ -666,7 +666,7 @@ export class ClaimLetterDocumentService {
         para(
           [
             t('The State Government hereby claims the release of '),
-            b(`₹${amountLakh} lakh (Rupees ${rupeesToIndianWords(annexure.totalClaim)} only)`),
+            b(`₹${amountLakh} lakh (Rupees ${amountToIndianWords(annexure.totalClaim)} only)`),
             t(
               ` towards basic grant (tied and untied) for the ${instalmentWord} instalment of FY ${fy}. The details of ` +
                 'the claim, including the amount claimed and the relevant compliance particulars, are furnished in the ' +

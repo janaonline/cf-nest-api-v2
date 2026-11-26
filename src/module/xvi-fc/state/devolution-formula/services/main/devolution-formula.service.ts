@@ -80,6 +80,23 @@ import type {
 } from '../../types/devolution-formula.types';
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
 import { amountsAreEqual } from '../../helpers/devolution-formula-tolerance.helpers';
+import { splitTotalIntoInstallments } from '../../helpers/devolution-formula-installments.helpers';
+import { DF_FROZEN_ROW_STATUSES } from '../../helpers/devolution-formula-frozen-rows.helpers';
+import {
+  ClaimLetterUlbLock,
+  type ClaimLetterLockState,
+  type ClaimLetterUlbLockDocument,
+} from 'src/schemas/xvi-fc/state/claim-letter-ulb-lock.schema';
+
+// A ULB is held by a claim letter while its lock is open or acknowledged (same rule as the row-edit lock check).
+const CLAIM_HOLDING_LOCK_STATES: ClaimLetterLockState[] = ['ACTIVE', 'ACKNOWLEDGED'];
+
+/** Rows still holding a split saved before instalments became Total / 2 that the State can fix. */
+interface DfOutdatedSplit {
+  rows: Array<{ ulbName: string }>;
+  /** Revalidate is refused while an approved claim letter holds rows, so the fix is editing each row. */
+  fixByRowEdit: boolean;
+}
 
 function formatINR(amount: number): string {
   const rounded = Math.round(amount);
@@ -109,6 +126,8 @@ export class DevolutionFormulaService {
     private readonly grantAllocationModel: Model<GrantAllocationDocument>,
     @InjectModel(Ulb.name)
     private readonly ulbModel: Model<UlbDocument>,
+    @InjectModel(ClaimLetterUlbLock.name)
+    private readonly claimLetterUlbLockModel: Model<ClaimLetterUlbLockDocument>,
     private readonly dfValidator: DevolutionFormulaValidator,
     private readonly xvifcFormActorsService: XvifcFormActorsService,
     private readonly excelService: ExcelService,
@@ -151,9 +170,15 @@ export class DevolutionFormulaService {
     );
 
     const eligibleUlbFilter = await this.ulbEligibilityService.getEligibleUlbFilter(stateOid, 'XVIFC');
-    const [grantAllocationSummary, computedActiveUlbCount] = await Promise.all([
+    const activeVersion = doc?.activeDatasetVersion ?? 0;
+    const noOutdatedSplit: DfOutdatedSplit = { rows: [], fixByRowEdit: false };
+    const [grantAllocationSummary, computedActiveUlbCount, outdatedSplit] = await Promise.all([
       this.resolveGrantAllocationSummary(stateOid, yearOid),
       this.ulbModel.countDocuments(eligibleUlbFilter),
+      // Only the State's editable view needs it: it drives the Revalidate button and badge.
+      doc && permissions.canEdit && activeVersion > 0
+        ? this.findOutdatedSplit(doc._id as Types.ObjectId, activeVersion, stateOid, yearOid, installment)
+        : Promise.resolve(noOutdatedSplit),
     ]);
     const validationSummary = this.buildValidationSummary(doc, grantAllocationSummary?.total ?? 0);
 
@@ -171,13 +196,12 @@ export class DevolutionFormulaService {
       yearId,
       computedActiveUlbCount,
       grantAllocationSummary,
+      outdatedSplit,
     );
     const grantMax = grantAllocationSummary?.total ?? null;
+    // Only the Total is editable; the instalments are derived (Total / 2).
     const rowEditFields = getDfFieldsByType(fields, 'DF_ROW_EDIT_FIELDS').map((field) => {
-      if (
-        grantMax !== null &&
-        ['totalGrantAllocation', 'installment1Amount', 'installment2Amount'].includes(field.key)
-      ) {
+      if (grantMax !== null && field.key === 'totalGrantAllocation') {
         return {
           ...field,
           validations: [
@@ -483,6 +507,16 @@ export class DevolutionFormulaService {
       });
     }
 
+    if (activeVersion > 0) {
+      await this.assertInstallmentsAreHalves(
+        form._id as Types.ObjectId,
+        activeVersion,
+        stateOid,
+        yearOid,
+        dto.installment,
+      );
+    }
+
     // PMU now reviews before MoHUA — see pmu/devolution-formula/CLAUDE.md for that hand-off.
     const toStatus = FORM_STATUS.UNDER_REVIEW_BY_PMU;
 
@@ -628,6 +662,73 @@ export class DevolutionFormulaService {
 
   // ─── Private helpers ──────────────────────────────────────────────────────
 
+  /** ULBs a claim letter holds for this installment; their rows keep the amounts that letter claimed. */
+  async findClaimHeldUlbIds(state: Types.ObjectId, year: Types.ObjectId, installment: number): Promise<Set<string>> {
+    const locks = await this.claimLetterUlbLockModel
+      .find({ state, year, installment, lockState: { $in: CLAIM_HOLDING_LOCK_STATES } })
+      .select('ulbId')
+      .lean()
+      .exec();
+    return new Set(locks.map((l) => String(l.ulbId)));
+  }
+
+  /**
+   * Rows off Total / 2 that the State can still fix (docs/adr/0002). Rows a claim letter holds or froze are left
+   * out: the State can't edit them, and changing them would split them from what that letter claimed.
+   */
+  private async findOutdatedSplit(
+    formId: Types.ObjectId,
+    datasetVersion: number,
+    state: Types.ObjectId,
+    year: Types.ObjectId,
+    installment: number,
+  ): Promise<DfOutdatedSplit> {
+    const [rows, heldUlbIds] = await Promise.all([
+      this.rowModel
+        .find({ form: formId, datasetVersion, isActive: true })
+        .select('ulbId ulbName rowStatus totalGrantAllocation installment1Amount installment2Amount')
+        .sort({ rowNumber: 1 })
+        .lean()
+        .exec(),
+      this.findClaimHeldUlbIds(state, year, installment),
+    ]);
+    const isFrozen = (rowStatus: number | null | undefined) =>
+      rowStatus != null && DF_FROZEN_ROW_STATUSES.includes(rowStatus);
+    const outdated = rows.filter((r) => {
+      if (isFrozen(r.rowStatus) || (r.ulbId && heldUlbIds.has(String(r.ulbId)))) return false;
+      const half = splitTotalIntoInstallments(r.totalGrantAllocation);
+      return r.installment1Amount !== half.installment1Amount || r.installment2Amount !== half.installment2Amount;
+    });
+    return { rows: outdated, fixByRowEdit: rows.some((r) => isFrozen(r.rowStatus)) };
+  }
+
+  private async assertInstallmentsAreHalves(
+    formId: Types.ObjectId,
+    datasetVersion: number,
+    state: Types.ObjectId,
+    year: Types.ObjectId,
+    installment: number,
+  ): Promise<void> {
+    const { rows, fixByRowEdit } = await this.findOutdatedSplit(formId, datasetVersion, state, year, installment);
+    if (rows.length === 0) return;
+
+    const names = rows
+      .slice(0, 5)
+      .map((r) => r.ulbName)
+      .join(', ');
+    const more = rows.length > 5 ? ` and ${rows.length - 5} more` : '';
+    const fix = fixByRowEdit ? 'Edit and save these rows' : 'Revalidate the Excel, or edit and save these rows';
+    throwXviFcValidationError({
+      excelFile: [
+        {
+          field: 'excelFile',
+          code: 'installmentSplitOutdated',
+          message: `Installment 1 and Installment 2 must each be half of the Total Grant Allocation. ${rows.length} ULB(s) still have an older split (${names}${more}). ${fix}, then submit.`,
+        },
+      ],
+    });
+  }
+
   /** Best-effort, non-transactional — see CLAUDE.md's "Form status history log" section. */
   private async recordFormHistory(entry: {
     formId: Types.ObjectId;
@@ -728,6 +829,7 @@ export class DevolutionFormulaService {
     yearId: string,
     computedActiveUlbCount: number,
     grantAllocationSummary: DfGrantAllocationSummary | null,
+    outdatedSplit: DfOutdatedSplit,
   ): HydratedFieldConfig[] {
     return questions.map((question) => {
       if (question.key === 'ulbCount') {
@@ -758,7 +860,13 @@ export class DevolutionFormulaService {
             ...question,
             folderPath: resolvedFolderPath,
             value,
-            supportingContent: this.buildExcelFileSupportingContent(doc, permissions, yearId, grantAllocationSummary),
+            supportingContent: this.buildExcelFileSupportingContent(
+              doc,
+              permissions,
+              yearId,
+              grantAllocationSummary,
+              outdatedSplit,
+            ),
           };
         }
 
@@ -774,6 +882,7 @@ export class DevolutionFormulaService {
     permissions: DfFormPermissions,
     yearId: string,
     grantAllocationSummary: DfGrantAllocationSummary | null,
+    outdatedSplit: DfOutdatedSplit = { rows: [], fixByRowEdit: false },
   ): FieldSupportingContent[] {
     const { canView, canEdit } = permissions;
     const hasDataset = (doc?.activeDatasetVersion ?? 0) > 0;
@@ -801,6 +910,9 @@ export class DevolutionFormulaService {
       newUlbCount > 0 ||
       duplicateUlbCount > 0 ||
       (hasDataset && !allocationBalanced);
+    const outdatedSplitCount = outdatedSplit.rows.length;
+    // Offer Revalidate for an older split only when it can run (no approved claim letter holds rows).
+    const revalidateFixesSplit = outdatedSplitCount > 0 && !outdatedSplit.fixByRowEdit;
 
     return [
       {
@@ -838,7 +950,10 @@ export class DevolutionFormulaService {
             label: 'Revalidate Excel',
             icon: 'bi bi-arrow-repeat',
             tone: 'primary' as const,
-            visible: canEdit && hasUploadedExcel && (validationStatus !== 'VALID' || hasWarningOrDangerBadge),
+            visible:
+              canEdit &&
+              hasUploadedExcel &&
+              (validationStatus !== 'VALID' || hasWarningOrDangerBadge || revalidateFixesSplit),
           },
           {
             id: DF_ACTION_REGISTER_ULB,
@@ -868,6 +983,12 @@ export class DevolutionFormulaService {
             visible: canEdit,
           }),
           {
+            // Saved before instalments became Total / 2; final submit refuses until fixed (docs/adr/0002).
+            label: `${outdatedSplitCount} ULB(s) need ${outdatedSplit.fixByRowEdit ? 'editing' : 'Revalidate'}: each instalment must be half of the Total`,
+            tone: 'warning' as const,
+            visible: canEdit && outdatedSplitCount > 0,
+          },
+          {
             label: `Allocated amount: ₹${formatINR(liveAllocatedAmount)}`,
             tone: 'secondary' as const,
             visible: canEdit,
@@ -886,7 +1007,7 @@ export class DevolutionFormulaService {
             label: 'All valid',
             icon: 'bi bi-check-circle-fill',
             tone: 'success' as const,
-            visible: canEdit && validationStatus === 'VALID',
+            visible: canEdit && validationStatus === 'VALID' && outdatedSplitCount === 0,
           },
         ],
         validationMessage: buildValidationIssuesMessage({
