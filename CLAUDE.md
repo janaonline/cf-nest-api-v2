@@ -124,7 +124,7 @@ src/
 │   │                    # page, each form as "Submitted" / "Not submitted"; in this table the allocation/unspent/elected-body
 │   │                    # cells show a value only while that State form is at 13/5/7 (PMU review, MoHUA review, acknowledged), else
 │   │                    # null — MOHUA_STATE_ULBS_VISIBLE_STATE_FORM_STATUSES in mohua-overview.constants.ts), and one ULB's form statuses GET xvi-fc/mohua/ulb/:ulbId/:yearId/forms (status
-│   │                    # text + `submitted`; the "submitted" rule — MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES, SLB at 8/12 only —
+│   │                    # text + `submitted`; the "submitted" rule — MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES: approved by State (8) or later, or exempt —
 │   │                    # lives only there, never in the UI). MoHUA also READS the PMU review GETs (view-only, see
 │   │                    # common/services/CLAUDE.md) and the per-ULB SLB / bank-account GETs (no stub writes for MOHUA), and
 │   │                    # fc-unspent-declaration and request-exemption review workflows (each a separate module,

@@ -80,7 +80,7 @@ Rules worth knowing:
   present and does not make a file consolidated. A file whose only content is unknown is a mismatch.
 - `data[]` (the old flow's parsed Excel rows) is **not** written. The extraction is read from FastAPI by job id.
 - The page shows a derived status: `not-digitized`, `queued`, `processing`, `digitized`, `failed`. A file is legacy when it is
-  `digitized`, has no `detectedDocTypes` and `ulbFile.createdAt` is before 1 September 2026 (`LEGACY_CUTOFF`): it shows as `digitized` with `digitization.isLegacy: true` and its old Excel link,
+  `digitized`, has no `detectedDocTypes` and `ulbFile.createdAt` is before 1 November 2026 (`LEGACY_CUTOFF`): it shows as `digitized` with `digitization.isLegacy: true` and its old Excel link,
   but is left out of the consolidated / mismatch filters (contents unknown). Queueing and the `afs_metrics` counters use
   the raw v3 status, so a legacy file can still be queued again.
 

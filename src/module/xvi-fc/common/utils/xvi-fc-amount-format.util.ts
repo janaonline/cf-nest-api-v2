@@ -1,4 +1,5 @@
-// Integer-only amount formatting for xvi-fc letters: whole rupees in, no floating-point rounding.
+// Amount formatting for xvi-fc letters: integer maths, no floating-point rounding. Claim amounts can
+// end in .50 (instalments are Total / 2); amountToIndianWords spells those paise out.
 
 const ONES = [
   '',
@@ -40,7 +41,14 @@ function formatHundredthsOfLakh(hundredths: number): string {
   return `${whole.toLocaleString('en-IN')}.${fraction}`;
 }
 
-/** Indian system, Title Case: 123456789 -> "Twelve Crore Thirty-Four Lakh Fifty-Six Thousand Seven Hundred Eighty-Nine". */
+/** Rupees and paise in words: 19485981.5 -> "One Crore ... Nine Hundred Eighty-One and Fifty Paise". */
+export function amountToIndianWords(amount: number): string {
+  const rupees = Math.floor(amount);
+  const paise = Math.round((amount - rupees) * 100);
+  return paise > 0 ? `${rupeesToIndianWords(rupees)} and ${belowHundred(paise)} Paise` : rupeesToIndianWords(rupees);
+}
+
+/** Whole rupees only. Indian system, Title Case: 123456789 -> "Twelve Crore Thirty-Four Lakh Fifty-Six Thousand Seven Hundred Eighty-Nine". */
 export function rupeesToIndianWords(rupees: number): string {
   if (rupees === 0) return 'Zero';
   const crore = Math.floor(rupees / 10000000);

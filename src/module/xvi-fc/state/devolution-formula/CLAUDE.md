@@ -45,6 +45,8 @@ submitted. `null` on `CREATE_DRAFT`.
 
 ## Before changing dataset/version logic, read the ADR
 
+- [docs/adr/0002-installments-derived-as-half-of-total.md](docs/adr/0002-installments-derived-as-half-of-total.md)
+  — why instalments are derived (Total / 2, x.50 allowed) and what that means for claim letters.
 - [docs/adr/0001-dataset-versioning.md](docs/adr/0001-dataset-versioning.md) — the atomic
   version-swap pattern on Excel upload, and its consumers. Notably: `claim-letter`'s eligibility
   service depends on this invariant from outside this module — changes here can silently break
@@ -52,10 +54,15 @@ submitted. `null` on `CREATE_DRAFT`.
 
 ## Invariants worth knowing before you change adjacent code
 
-- Row amounts (`totalGrantAllocation`, `installment1Amount`, `installment2Amount`) are whole Rupees
-  only — no decimals. Enforced by `@IsInt()` on `UpdateRowDevolutionFormulaDto` (manual row-edit
-  path) and by `DevolutionFormulaValidator`'s `isWholeNumber` check on the Excel-upload/revalidate
-  path (`validateRow`/`validatePortalRowEdit`). This has gone back and forth — Crore-denominated
+- **Instalments are always Total / 2, never entered** (may end in .50), derived only by
+  `splitTotalIntoInstallments` on every write path, except rows a claim letter holds or froze, which
+  keep their stored split. `updateRow` refuses a sent instalment that isn't Total / 2, and
+  `finalSubmit` refuses while a row the State can fix still holds an older split. See
+  [docs/adr/0002-installments-derived-as-half-of-total.md](docs/adr/0002-installments-derived-as-half-of-total.md).
+- The Total (`totalGrantAllocation`) is whole Rupees only — no decimals. Enforced by `@IsInt()` on
+  `UpdateRowDevolutionFormulaDto` (manual row-edit path) and by `DevolutionFormulaValidator`'s
+  `isWholeNumber` check on the Excel-upload/revalidate path (`validateRow`/`validatePortalRowEdit`).
+  This has gone back and forth — Crore-denominated
   decimals → whole-Rupee integers → unbounded-decimal Rupees → whole-Rupee integers again (current)
   — because letting rows carry decimals let real sums drift from `totalMoHUAAllocation` by whole
   rupees, not just float noise (a real state's ₹30,060,000,000 total summed its uploaded rows to
@@ -64,10 +71,10 @@ submitted. `null` on `CREATE_DRAFT`.
   that sum exactly is the State's responsibility in the Excel they upload, not something this
   codebase reconciles for them.
 - That whole-Rupee check is strict on purpose (previous paragraph), but a formula-computed Excel
-  cell (e.g. a 50/50 installment split) routinely leaves IEEE-754 noise in its raw stored value —
+  cell routinely leaves IEEE-754 noise in its raw stored value —
   something like `63579869.999999996` — that Excel's own display formatting rounds away, so the
   cell *looks* like a clean integer to the person who uploaded it. `DevolutionFormulaExcelService`'s
-  `parseDataRow()` runs the three amount fields through `snapToWholeRupee`
+  `parseDataRow()` runs the Total through `snapToWholeRupee`
   (`helpers/devolution-formula-tolerance.helpers.ts`) before anything else sees them, snapping a
   value to the nearest integer only when it's within `FLOAT_EQUALITY_EPSILON` (0.001) of one — far
   tighter than any real fractional Rupee amount, so a genuine decimal (a real `X.50`) still
@@ -75,10 +82,9 @@ submitted. `null` on `CREATE_DRAFT`.
   `isWholeNumber`/`validateRow`/`validatePortalRowEdit` themselves: it runs once, before the
   validator ever sees the value, so every downstream consumer (validation, persistence,
   `totalAllocatedSum`, the regenerated error-Excel) sees the corrected whole number.
-- Row-level (`inst1 + inst2 === total`) and form-level (`totalAllocatedSum === totalMoHUAAllocation`)
-  reconciliation are handled differently: the row-level check is plain exact-integer equality (both
-  operands are already whole-number-validated in-process). The form-level check still goes through
-  `amountsAreEqual`/`FLOAT_EQUALITY_EPSILON` in `helpers/devolution-formula-tolerance.helpers.ts`,
+- There is no row-level instalment check any more (instalments are derived, see above). The
+  form-level check (`totalAllocatedSum === totalMoHUAAllocation`, a sum of whole-Rupee Totals) still
+  goes through `amountsAreEqual`/`FLOAT_EQUALITY_EPSILON` in `helpers/devolution-formula-tolerance.helpers.ts`,
   kept only as a defensive backstop against `GrantAllocation`, an externally-written collection this
   codebase has no validator for — `totalMoHUAAllocation` is defensively `Math.round()`ed at every
   read site (`resolveGrantAllocation`/`resolveGrantAllocationSummary` in
