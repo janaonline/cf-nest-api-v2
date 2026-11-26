@@ -59,7 +59,7 @@ describe('ExcelService', () => {
           allowBlank: false,
           formulae: ['"Active,Inactive,Pending"'],
           showErrorMessage: true,
-          errorStyle: 'error',
+          errorStyle: 'stop',
           errorTitle: 'Invalid',
           error: 'Pick a valid status.',
         },
@@ -91,7 +91,7 @@ describe('ExcelService', () => {
             allowBlank: false,
             formulae: [`=OR($${statusLetter}${row}<>"Active",ISNUMBER(${notesLetter}${row}))`],
             showErrorMessage: true,
-            errorStyle: 'error',
+            errorStyle: 'stop',
             errorTitle: 'Notes',
             error: 'Required when Active.',
           };
@@ -124,6 +124,62 @@ describe('ExcelService', () => {
       const buffer = await service.generateExcel(HEADERS, [], 'TestSheet', [validation]);
       const sheet = await loadSheet(buffer, 'TestSheet');
       expect(Object.keys(sheet.dataValidations.model)).toHaveLength(0);
+    });
+
+    it('leaves the sheet unprotected and unformatted when no header asks for it', async () => {
+      const buffer = await service.generateExcel(HEADERS, [{ name: 'Alice', status: 'A', score: 1, notes: '' }], 'S');
+      const sheet = await loadSheet(buffer, 'S');
+      expect((sheet as unknown as { sheetProtection?: unknown }).sheetProtection).toBeFalsy();
+      expect(sheet.getCell(2, 3).numFmt).toBeUndefined();
+      expect(sheet.getCell(2, 3).fill).toBeUndefined();
+    });
+
+    it('greys out a `readOnly` column on the header and data rows only and refuses typing there, without protection', async () => {
+      const headers = [
+        { label: 'Total', key: 'total' },
+        { label: 'Half', key: 'half', numFmt: '#,##0.00', readOnly: true, note: 'Calculated automatically.' },
+      ];
+      const rows = [
+        { total: 3, half: { formula: 'A2/2', result: 1.5 } },
+        { total: 4, half: { formula: 'A3/2', result: 2 } },
+      ];
+      const buffer = await service.generateExcel(headers, rows, 'S');
+      const sheet = await loadSheet(buffer, 'S');
+
+      const grey = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } };
+      expect((sheet as unknown as { sheetProtection?: unknown }).sheetProtection).toBeFalsy();
+      for (const row of [1, 2, 3]) {
+        expect(sheet.getCell(row, 2).fill).toEqual(grey);
+        expect(sheet.getCell(row, 2).font?.color).toEqual({ argb: 'FF595959' });
+      }
+      // Read back, ExcelJS lists the rule once per cell of the range.
+      const { model } = (sheet as unknown as { dataValidations: { model: Record<string, ExcelJS.DataValidation> } })
+        .dataValidations;
+      const readOnlyRules = Object.entries(model).filter(([, v]) => v.formulae?.[0] === 'FALSE');
+      expect(readOnlyRules.map(([address]) => address)).toEqual(['B2', 'B3']);
+      expect(readOnlyRules[0][1]).toEqual(
+        expect.objectContaining({
+          type: 'custom',
+          prompt: 'Calculated automatically.',
+          error: 'Calculated automatically.',
+          errorStyle: 'stop',
+        }),
+      );
+      // A cell styled only by the column's number format reads back as "no fill" ({ pattern: 'none' }).
+      expect(sheet.getCell(4, 2).fill).not.toEqual(grey);
+      expect(sheet.getColumn(2).fill).not.toEqual(grey);
+      expect(sheet.getCell(2, 1).fill).not.toEqual(grey);
+      expect(sheet.getCell(2, 2).numFmt).toBe('#,##0.00');
+      expect(sheet.getCell(2, 2).value).toEqual({ formula: 'A2/2', result: 1.5 });
+    });
+
+    it('writes a header note as an Excel comment', async () => {
+      const headers = [{ label: 'Half', key: 'half', note: 'Calculated automatically.' }];
+      const buffer = await service.generateExcel(headers, [{ half: 1 }], 'S');
+      const sheet = await loadSheet(buffer, 'S');
+      const note = sheet.getCell(1, 1).note as string | { texts: Array<{ text: string }> };
+      const text = typeof note === 'string' ? note : note.texts.map((t) => t.text).join('');
+      expect(text).toBe('Calculated automatically.');
     });
   });
 });

@@ -130,7 +130,10 @@ function getHistoryCreateArg(mockFn: jest.Mock): { data: Record<string, unknown>
   return calls[0][0];
 }
 
-const mockClaimLetterUlbLockModel = { findOne: jest.fn().mockReturnValue(q(null)) };
+const mockClaimLetterUlbLockModel = {
+  findOne: jest.fn().mockReturnValue(q(null)),
+  find: jest.fn().mockReturnValue(q([])),
+};
 
 const mockGrantAllocationModel = { findOne: jest.fn() };
 const mockUlbModel = { countDocuments: jest.fn() };
@@ -234,131 +237,109 @@ describe('Devolution Formula — constants', () => {
 describe('DevolutionFormulaValidator', () => {
   const validator = new DevolutionFormulaValidator();
 
+  // Instalments are derived (Total / 2) before validation; the validator never checks them.
   const baseRow = (): DfParsedExcelRow => ({
     rowNumber: 1,
     censusCode: 'C001',
     ulbName: 'Alpha City',
     totalGrantAllocation: 500_000,
-    installment1Amount: 300_000,
-    installment2Amount: 200_000,
+    installment1Amount: 250_000,
+    installment2Amount: 250_000,
     devolutionFormula: 'population',
   });
 
-  it('validateRow returns allocationMismatch error when inst1 + inst2 ≠ totalGrantAllocation', () => {
-    const row = { ...baseRow(), installment1Amount: 300_000, installment2Amount: 100_000 };
-    const errors = validator.validateRow(row, 1, 250);
-    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
-  });
-
-  it('validateAllocations accepts an exact whole-number match (inst1 + inst2 === total)', () => {
+  it('validateRow accepts an odd whole-number Total (its instalments end in .50)', () => {
     const row = {
       ...baseRow(),
       totalGrantAllocation: 141_792_453,
-      installment1Amount: 70_896_227,
-      installment2Amount: 70_896_226,
+      installment1Amount: 70_896_226.5,
+      installment2Amount: 70_896_226.5,
     };
-    const errors = validator.validateRow(row, 1, 250);
-    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(false);
+    expect(validator.validateRow(row, 250)).toHaveLength(0);
   });
 
-  it('validateAllocations still rejects a real mismatch', () => {
+  it('validateRow never checks the instalment values (no mismatch, decimal or required errors)', () => {
     const row = {
       ...baseRow(),
-      totalGrantAllocation: 500_000,
-      installment1Amount: 300_000,
-      installment2Amount: 199_998,
+      installment1Amount: undefined as unknown as number,
+      installment2Amount: 'abc' as unknown as number,
     };
-    const errors = validator.validateRow(row, 1, 250);
-    expect(errors.some((e) => e.code === 'allocationMismatch')).toBe(true);
+    const errors = validator.validateRow(row, 250);
+    expect(errors).toHaveLength(0);
+    expect(errors.some((e) => e.field === 'installment1Amount' || e.field === 'installment2Amount')).toBe(false);
   });
 
-  it('validateRow rejects a fractional totalGrantAllocation/installment1Amount/installment2Amount', () => {
-    const row = {
-      ...baseRow(),
-      totalGrantAllocation: 141_792_452.83,
-      installment1Amount: 70_896_226.415,
-      installment2Amount: 70_896_226.415,
-    };
-    const errors = validator.validateRow(row, 1, 250);
+  it('validateRow rejects a fractional totalGrantAllocation', () => {
+    const row = { ...baseRow(), totalGrantAllocation: 141_792_452.83 };
+    const errors = validator.validateRow(row, 250);
     expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
-    expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
-    expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
+  });
+
+  it('validateRow rejects a negative totalGrantAllocation', () => {
+    const errors = validator.validateRow({ ...baseRow(), totalGrantAllocation: -2 }, 250);
+    expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'min')).toBe(true);
+  });
+
+  it('validateRow rejects a totalGrantAllocation above the MoHUA allocation', () => {
+    const errors = validator.validateRow(baseRow(), 250, { totalMoHUAAllocation: 400_000 });
+    expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'max')).toBe(true);
   });
 
   describe('validatePortalRowEdit', () => {
     it('rejects a fractional totalGrantAllocation on the manual row-edit path', () => {
-      const errors = validator.validatePortalRowEdit({ totalGrantAllocation: 500_000.5 }, 1, 250);
+      const errors = validator.validatePortalRowEdit({ totalGrantAllocation: 500_000.5 }, 250);
       expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'notWholeNumber')).toBe(true);
     });
 
-    it('rejects a fractional installment1Amount/installment2Amount on the manual row-edit path', () => {
-      const errors = validator.validatePortalRowEdit(
-        { installment1Amount: 300_000.25, installment2Amount: 199_999.75 },
-        1,
-        250,
-      );
-      expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'notWholeNumber')).toBe(true);
-      expect(errors.some((e) => e.field === 'installment2Amount' && e.code === 'notWholeNumber')).toBe(true);
-    });
-
-    it('accepts a whole-number edit with no errors', () => {
-      const errors = validator.validatePortalRowEdit(
-        { totalGrantAllocation: 500_000, installment1Amount: 300_000, installment2Amount: 200_000 },
-        1,
-        250,
-      );
-      expect(errors).toHaveLength(0);
+    it('accepts an odd whole-number Total with no errors', () => {
+      expect(validator.validatePortalRowEdit({ totalGrantAllocation: 500_001 }, 250)).toHaveLength(0);
     });
   });
 
   it('validateRow returns required error when ulbName is blank', () => {
     const row = { ...baseRow(), ulbName: '   ' };
-    const errors = validator.validateRow(row, 1, 250);
+    const errors = validator.validateRow(row, 250);
     expect(errors.some((e) => e.field === 'ulbName' && e.code === 'required')).toBe(true);
     // Required phase fails early — no type or business errors should be appended
     expect(errors.every((e) => e.code === 'required')).toBe(true);
   });
 
-  it('validateRow returns required errors when all allocation fields are missing', () => {
-    const row: DfParsedExcelRow = {
-      ...baseRow(),
-      totalGrantAllocation: '',
-      installment1Amount: undefined as unknown as number,
-      installment2Amount: null as unknown as number,
-    };
-    const errors = validator.validateRow(row, 1, 250);
-    const codes = errors.map((e) => e.field);
-    expect(codes).toContain('totalGrantAllocation');
-    expect(codes).toContain('installment1Amount');
-    expect(codes).toContain('installment2Amount');
+  it('validateRow returns a required error only for the Total when it is missing', () => {
+    const row: DfParsedExcelRow = { ...baseRow(), totalGrantAllocation: '' };
+    const errors = validator.validateRow(row, 250);
+    expect(errors.map((e) => e.field)).toEqual(['totalGrantAllocation']);
   });
 
   it('validateRow returns number error when totalGrantAllocation is a non-numeric string', () => {
     const row = { ...baseRow(), totalGrantAllocation: 'abc' };
-    const errors = validator.validateRow(row, 1, 250);
+    const errors = validator.validateRow(row, 250);
     expect(errors.some((e) => e.field === 'totalGrantAllocation' && e.code === 'number')).toBe(true);
   });
 
-  it('validateRow returns min error when installment1Amount is negative', () => {
-    const row = { ...baseRow(), installment1Amount: -500, installment2Amount: 700_000 };
-    const errors = validator.validateRow(row, 1, 250);
-    expect(errors.some((e) => e.field === 'installment1Amount' && e.code === 'min')).toBe(true);
+  // Number(true) is 1, which would pass every Total check while its instalments derive as 0 / 0.
+  it.each([true, false])('validateRow returns number error for a Boolean %p Total', (total) => {
+    const errors = validator.validateRow({ ...baseRow(), totalGrantAllocation: total }, 250);
+    expect(errors).toEqual([expect.objectContaining({ field: 'totalGrantAllocation', code: 'number' })]);
+  });
+
+  it('validateRow accepts number-like text in the Total cell', () => {
+    expect(validator.validateRow({ ...baseRow(), totalGrantAllocation: '400000' }, 250)).toHaveLength(0);
   });
 
   it('validateRow returns 0 errors for a fully valid row', () => {
-    const errors = validator.validateRow(baseRow(), 1, 250);
+    const errors = validator.validateRow(baseRow(), 250);
     expect(errors).toHaveLength(0);
   });
 
   it('validateRow returns maxlength error when devolutionFormula exceeds the DB-driven limit', () => {
     const row = { ...baseRow(), devolutionFormula: 'x'.repeat(251) };
-    const errors = validator.validateRow(row, 1, 250);
+    const errors = validator.validateRow(row, 250);
     expect(errors.some((e) => e.field === 'devolutionFormula' && e.code === 'maxlength')).toBe(true);
   });
 
   it('validateRow accepts a devolutionFormula at exactly the DB-driven limit', () => {
     const row = { ...baseRow(), devolutionFormula: 'x'.repeat(250) };
-    const errors = validator.validateRow(row, 1, 250);
+    const errors = validator.validateRow(row, 250);
     expect(errors).toHaveLength(0);
   });
 
@@ -524,6 +505,7 @@ describe('DevolutionFormulaService', () => {
       providers: [
         DevolutionFormulaService,
         DevolutionFormulaValidator,
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         ExcelService,
         DynamicFormValidationService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },
@@ -1196,15 +1178,58 @@ describe('DevolutionFormulaService', () => {
   describe('excelFile supportingContent — Revalidate Excel visibility', () => {
     const uploadedExcel = { originalName: 'test.xlsx', path: 'state/test.xlsx' };
 
-    async function getRevalidateAction(doc: object) {
+    // `rows` feeds the older-split lookup (rowModel.find); [] means every row is already Total / 2.
+    async function getExcelSupport(doc: object, rows: object[] = []) {
       mockFormModel.findOne.mockReturnValue(q(doc));
       mockGrantAllocationModel.findOne.mockReturnValue(q(mockGrantAlloc));
+      mockRowModel.find.mockReturnValue(q(rows));
       const result = await service.getForm(stateOid.toString(), YEAR_ID, 1, adminUser);
       const data = result.data as { questions: HydratedFieldConfig[] };
-      const fileQ = data.questions.find((q) => q.key === 'excelFile');
-      const actions = fileQ?.supportingContent?.[0]?.actions ?? [];
-      return actions.find((a) => a.id === 'revalidate-excel');
+      return data.questions.find((q) => q.key === 'excelFile')?.supportingContent?.[0];
     }
+
+    async function getRevalidateAction(doc: object, rows: object[] = []) {
+      const support = await getExcelSupport(doc, rows);
+      return (support?.actions ?? []).find((a) => a.id === 'revalidate-excel');
+    }
+
+    const olderSplitRow = {
+      ulbName: 'Shimla MC',
+      totalGrantAllocation: 95_286_669,
+      installment1Amount: 47_643_312,
+      installment2Amount: 47_643_357,
+    };
+
+    it('is visible when validationStatus is VALID but saved rows still hold an older split', async () => {
+      const support = await getExcelSupport({ ...mockFormInProgress, excelFile: uploadedExcel }, [olderSplitRow]);
+      const revalidate = (support?.actions ?? []).find((a) => a.id === 'revalidate-excel');
+      const badges = (support?.badges ?? []).filter((b) => b.visible).map((b) => b.label);
+
+      expect(revalidate?.visible).toBe(true);
+      expect(badges).toContain('1 ULB(s) need Revalidate: each instalment must be half of the Total');
+      expect(badges).not.toContain('All valid');
+    });
+
+    it('says "editing" and keeps Revalidate hidden while an approved claim letter froze rows (Revalidate would be refused)', async () => {
+      const support = await getExcelSupport({ ...mockFormInProgress, excelFile: uploadedExcel }, [
+        { ...olderSplitRow, ulbName: 'Frozen', rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA },
+        { ...olderSplitRow, ulbName: 'Open', rowStatus: null },
+      ]);
+      const revalidate = (support?.actions ?? []).find((a) => a.id === 'revalidate-excel');
+      const badges = (support?.badges ?? []).filter((b) => b.visible).map((b) => b.label);
+
+      expect(revalidate?.visible).toBe(false);
+      expect(badges).toContain('1 ULB(s) need editing: each instalment must be half of the Total');
+    });
+
+    it('does not look up older splits for a form the State cannot edit', async () => {
+      mockRowModel.find.mockClear();
+      await getExcelSupport(
+        { ...mockFormInProgress, excelFile: uploadedExcel, currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_PMU },
+        [olderSplitRow],
+      );
+      expect(mockRowModel.find).not.toHaveBeenCalled();
+    });
 
     it('is visible when validationStatus is INVALID (baseline)', async () => {
       const action = await getRevalidateAction({
@@ -1642,6 +1667,109 @@ describe('DevolutionFormulaService', () => {
       };
       expect(updatePayload.$set.excelFile.pageCount).toBeNull();
     });
+
+    const submitDto = {
+      stateId: stateOid.toString(),
+      yearId: YEAR_ID,
+      installment: 1 as const,
+      data: {
+        excelFile: {
+          originalName: 'f.xlsx',
+          path: 'path/f.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+        checkboxConfirmation: true,
+      },
+    };
+
+    const olderSplit = {
+      totalGrantAllocation: 95_286_669,
+      installment1Amount: 47_643_312,
+      installment2Amount: 47_643_357,
+    };
+
+    it('finalSubmit refuses while a saved row is off Total / 2, naming the ULB, without submitting', async () => {
+      mockUlbModel.countDocuments.mockResolvedValue(50);
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockRowModel.find.mockReturnValue(
+        q([
+          {
+            ulbName: 'Alpha City',
+            totalGrantAllocation: 500_000,
+            installment1Amount: 250_000,
+            installment2Amount: 250_000,
+          },
+          {
+            ulbName: 'Shimla MC',
+            totalGrantAllocation: 95_286_669,
+            installment1Amount: 47_643_312,
+            installment2Amount: 47_643_357,
+          },
+        ]),
+      );
+      mockFormModel.findOneAndUpdate.mockClear();
+
+      const error = (await service.finalSubmit(submitDto, adminUser).catch((e: unknown) => e)) as {
+        response: { errors: { excelFile: Array<{ code: string; message: string }> } };
+      };
+      const [entry] = error.response.errors.excelFile;
+      expect(entry.code).toBe('installmentSplitOutdated');
+      expect(entry.message).toContain('1 ULB(s) still have an older split (Shimla MC)');
+      expect(mockFormModel.findOneAndUpdate).not.toHaveBeenCalled();
+    });
+
+    // An older split on a row a claim letter froze (5) or still holds (open lock) is left alone: the State can't
+    // edit it, and changing it would split it from what that letter claimed.
+    it('finalSubmit ignores older splits on rows a claim letter froze or still holds', async () => {
+      const heldUlb = new Types.ObjectId();
+      mockUlbModel.countDocuments.mockResolvedValue(50);
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockRowModel.find.mockReturnValue(
+        q([
+          {
+            ...olderSplit,
+            ulbId: new Types.ObjectId(),
+            ulbName: 'Frozen',
+            rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          },
+          { ...olderSplit, ulbId: heldUlb, ulbName: 'Held', rowStatus: null },
+        ]),
+      );
+      mockClaimLetterUlbLockModel.find.mockReturnValue(q([{ ulbId: heldUlb }]));
+      mockFormModel.findOneAndUpdate.mockReturnValue(q({ _id: formOid }));
+
+      await expect(service.finalSubmit(submitDto, adminUser)).resolves.toBeDefined();
+      mockClaimLetterUlbLockModel.find.mockReturnValue(q([]));
+    });
+
+    it('finalSubmit asks for row edits, not Revalidate, while an approved claim letter froze rows', async () => {
+      mockUlbModel.countDocuments.mockResolvedValue(50);
+      mockFormModel.findOne.mockReturnValue(q({ ...mockFormInProgress, excelRowCount: 50, newUlbCount: 0 }));
+      mockRowModel.findOne.mockReturnValue(q(null));
+      mockRowModel.find.mockReturnValue(
+        q([
+          {
+            ...olderSplit,
+            ulbId: new Types.ObjectId(),
+            ulbName: 'Frozen',
+            rowStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+          },
+          { ...olderSplit, ulbId: new Types.ObjectId(), ulbName: 'Open', rowStatus: null },
+        ]),
+      );
+
+      const error = (await service.finalSubmit(submitDto, adminUser).catch((e: unknown) => e)) as {
+        response: { errors: { excelFile: Array<{ message: string }> } };
+      };
+      const [entry] = error.response.errors.excelFile;
+      expect(entry.message).toContain(
+        '1 ULB(s) still have an older split (Open). Edit and save these rows, then submit.',
+      );
+    });
   });
 
   // Test 11: final-submit blocked when form not valid — error keyed to excelFile
@@ -1994,8 +2122,8 @@ describe('DevolutionFormulaService', () => {
             censusCode: 'C001',
             ulbName: 'Alpha City',
             totalGrantAllocation: 500_000,
-            installment1Amount: 300_000,
-            installment2Amount: 200_000,
+            installment1Amount: 250_000,
+            installment2Amount: 250_000,
             devolutionFormula: 'population',
             datasetVersion: 1,
           },
@@ -2255,6 +2383,59 @@ describe('DevolutionFormulaRowService', () => {
     expect(formUpdateArg.$set.totalAllocatedSum).toBe(500_000);
   });
 
+  it('updateRow refuses a sent instalment that is not Total / 2, without writing', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+    mockRowModel.findOne.mockReturnValue(q(mockRow));
+    mockRowModel.findByIdAndUpdate.mockClear();
+
+    await expect(
+      service.updateRow(
+        stateOid.toString(),
+        YEAR_ID,
+        1,
+        rowOid.toString(),
+        { totalGrantAllocation: 400_001, installment1Amount: 300_000, installment2Amount: 200_000.5 },
+        adminUser,
+      ),
+    ).rejects.toMatchObject({
+      response: {
+        errors: {
+          installment1Amount: [expect.objectContaining({ code: 'installmentNotHalf' })],
+        },
+      },
+    });
+    expect(mockRowModel.findByIdAndUpdate).not.toHaveBeenCalled();
+  });
+
+  it('updateRow accepts sent instalments equal to Total / 2 and saves the halves (x.50 for an odd Total)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockFormInProgress));
+    mockRowModel.findOne.mockReturnValue(q(mockRow));
+    mockRowModel.findByIdAndUpdate.mockReturnValue(q(mockRow));
+    mockRowModel.find.mockReturnValue(q([{ totalGrantAllocation: 400_001 }]));
+    mockRowModel.countDocuments.mockReturnValueOnce(q(1)).mockReturnValueOnce(q(1)).mockReturnValueOnce(q(1));
+    mockFormModel.findById
+      .mockReturnValueOnce(q({ totalMoHUAAllocation: 500_000, excelRowCount: 1 }))
+      .mockReturnValueOnce(q({ ...mockFormInProgress }));
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+
+    await service.updateRow(
+      stateOid.toString(),
+      YEAR_ID,
+      1,
+      rowOid.toString(),
+      { totalGrantAllocation: 400_001, installment1Amount: 200_000.5, installment2Amount: 200_000.5 },
+      adminUser,
+    );
+
+    const rowSet = (mockRowModel.findByIdAndUpdate.mock.calls as unknown[][][])[0][1] as {
+      $set: Record<string, unknown>;
+    };
+    expect(rowSet.$set['totalGrantAllocation']).toBe(400_001);
+    expect(rowSet.$set['installment1Amount']).toBe(200_000.5);
+    expect(rowSet.$set['installment2Amount']).toBe(200_000.5);
+    expect(rowSet.$set['validationStatus']).toBe('VALID');
+  });
+
   // Test 15: mutation blocked when form is under MoHUA review
   it('updateRow throws when form currentFormStatus is UNDER_REVIEW_BY_MOHUA', async () => {
     mockFormModel.findOne.mockReturnValue(
@@ -2501,6 +2682,7 @@ describe('Devolution Formula — getForm rowEditFields', () => {
       providers: [
         DevolutionFormulaService,
         DevolutionFormulaValidator,
+        { provide: getModelToken(ClaimLetterUlbLock.name), useValue: mockClaimLetterUlbLockModel },
         ExcelService,
         DynamicFormValidationService,
         { provide: getModelToken(DevolutionFormulaForm.name), useValue: mockFormModel },

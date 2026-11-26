@@ -5,6 +5,32 @@ export interface RowHeader {
   label: string;
   key: string;
   width?: number;
+  numFmt?: string;
+  /** Greyed out on the header and data rows, and typed entries are refused (no sheet protection: devolution-formula ADR 0002). */
+  readOnly?: boolean;
+  /** Excel comment on the header cell (shown on hover); also the read-only message of a `readOnly` column. */
+  note?: string;
+}
+
+// Fresh objects per cell, so a later change to one cell's style can't leak into others ("Background 1, Darker 5%").
+const readOnlyFill = (): ExcelJS.Fill => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F2F2' } });
+const readOnlyFont = (): Partial<ExcelJS.Font> => ({ color: { argb: 'FF595959' } });
+
+/** Refuses every typed entry; a paste or Delete gets past it. */
+function readOnlyValidation(note?: string): ExcelJS.DataValidation {
+  const text = note ?? 'This column is read-only.';
+  return {
+    type: 'custom',
+    allowBlank: false,
+    formulae: ['FALSE'],
+    showInputMessage: true,
+    promptTitle: 'Read-only',
+    prompt: text,
+    showErrorMessage: true,
+    errorStyle: 'stop',
+    errorTitle: 'Read-only',
+    error: text,
+  };
 }
 
 export interface StaticColumnValidation {
@@ -45,20 +71,42 @@ export class ExcelService {
       header: header.label,
       key: header.key,
       width: header.width || 20,
+      ...(header.numFmt ? { style: { numFmt: header.numFmt } } : {}),
     }));
 
     sheet.addRows(rows as unknown as object[]);
 
-    if (columnValidations?.length && rows.length > 0) {
+    const firstDataRow = 2;
+    const lastDataRow = rows.length + 1;
+
+    headers.forEach((header, idx) => {
+      if (header.note) sheet.getCell(1, idx + 1).note = header.note;
+      if (!header.readOnly) return;
+      // Cell by cell, not a column style, so the grey stops at the last data row.
+      for (let row = 1; row <= lastDataRow; row++) {
+        const cell = sheet.getCell(row, idx + 1);
+        cell.fill = readOnlyFill();
+        cell.font = readOnlyFont();
+      }
+    });
+
+    if (rows.length > 0) {
       const keyToLetter = new Map<string, string>();
       for (const col of sheet.columns) {
         if (col.key && col.letter) keyToLetter.set(col.key, col.letter);
       }
 
-      const firstDataRow = 2;
-      const lastDataRow = rows.length + 1;
+      for (const header of headers) {
+        const letter = keyToLetter.get(header.key);
+        if (header.readOnly && letter) {
+          sheet.dataValidations.add(
+            `${letter}${firstDataRow}:${letter}${lastDataRow}`,
+            readOnlyValidation(header.note),
+          );
+        }
+      }
 
-      for (const config of columnValidations) {
+      for (const config of columnValidations ?? []) {
         const letter = keyToLetter.get(config.key);
         if (!letter) continue;
 

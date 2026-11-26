@@ -42,6 +42,7 @@ import {
   DF_EXCEL_HEADER_MAP,
   DF_FOLDER_PATH_ERROR_SHEETS,
   DF_TEMPLATE_HEADERS,
+  DF_TEMPLATE_TOTAL_COLUMN_LETTER,
   type DfInstallment,
 } from '../../constants/devolution-formula.constants';
 import type { ValidateExcelDevolutionFormulaDto } from '../../dto/validate-excel-devolution-formula.dto';
@@ -55,6 +56,7 @@ import type {
 import { DevolutionFormulaValidator, type DfParsedExcelRow } from '../../validators/devolution-formula.validator';
 import { assertNoFrozenDfRows } from '../../helpers/devolution-formula-frozen-rows.helpers';
 import { amountsAreEqual, snapToWholeRupee } from '../../helpers/devolution-formula-tolerance.helpers';
+import { splitTotalIntoInstallments } from '../../helpers/devolution-formula-installments.helpers';
 import { DevolutionFormulaService } from '../main/devolution-formula.service';
 import { DfFormJsonConfigService } from '../form-json/devolution-formula-form-json.service';
 import { getDfFieldsByType } from '../../helpers/devolution-formula-form-json.helpers';
@@ -338,7 +340,7 @@ export class DevolutionFormulaExcelService {
               });
             } else {
               // Steps 2–4: required → type → business
-              rowErrors = this.dfValidator.validateRow(parsed, dto.installment, maxFormulaLength, {
+              rowErrors = this.dfValidator.validateRow(parsed, maxFormulaLength, {
                 totalMoHUAAllocation,
               });
             }
@@ -621,12 +623,15 @@ export class DevolutionFormulaExcelService {
 
     // Case A: active rows exist — revalidate in memory and bulk-update
     if (activeRows.length > 0) {
+      const heldUlbIds = await this.dfService.findClaimHeldUlbIds(stateOid, yearOid, installment);
       const matchedUlbIds = new Set<string>();
       const rowUpdates: Array<{
         id: Types.ObjectId;
         validationErrors: DfRowError[];
         validationStatus: 'VALID' | 'INVALID';
         totalGrantAllocation: number;
+        installment1Amount: number;
+        installment2Amount: number;
       }> = [];
       let errorRowCount = 0;
       let newUlbCount = 0;
@@ -639,13 +644,18 @@ export class DevolutionFormulaExcelService {
       let totalAllocatedSum = 0;
 
       for (const row of activeRows) {
+        // Re-derived so a revalidate also corrects any split saved before the Total / 2 rule, except on a ULB a
+        // claim letter holds: it keeps the amounts that letter claimed (docs/adr/0002).
+        const installments =
+          row.ulbId && heldUlbIds.has(String(row.ulbId))
+            ? { installment1Amount: row.installment1Amount, installment2Amount: row.installment2Amount }
+            : splitTotalIntoInstallments(row.totalGrantAllocation);
         const parsed: DfParsedExcelRow = {
           rowNumber: row.rowNumber,
           censusCode: row.censusCode ?? '',
           ulbName: row.ulbName,
           totalGrantAllocation: row.totalGrantAllocation,
-          installment1Amount: row.installment1Amount,
-          installment2Amount: row.installment2Amount,
+          ...installments,
           devolutionFormula: row.devolutionFormula,
         };
 
@@ -657,7 +667,7 @@ export class DevolutionFormulaExcelService {
             rowErrors.push({ field: 'censusCode', code: 'duplicate', message: 'Duplicate ULB in dataset.' });
           } else {
             matchedUlbIds.add(ulbIdStr);
-            rowErrors = this.dfValidator.validateRow(parsed, installment, maxFormulaLength, { totalMoHUAAllocation });
+            rowErrors = this.dfValidator.validateRow(parsed, maxFormulaLength, { totalMoHUAAllocation });
           }
         } else {
           newUlbCount++;
@@ -673,6 +683,7 @@ export class DevolutionFormulaExcelService {
           validationErrors: rowErrors,
           validationStatus: rowStatus,
           totalGrantAllocation: row.totalGrantAllocation,
+          ...installments,
         });
       }
 
@@ -680,7 +691,13 @@ export class DevolutionFormulaExcelService {
         updateOne: {
           filter: { _id: r.id },
           update: {
-            $set: { validationErrors: r.validationErrors, validationStatus: r.validationStatus, updatedBy: userOid },
+            $set: {
+              validationErrors: r.validationErrors,
+              validationStatus: r.validationStatus,
+              installment1Amount: r.installment1Amount,
+              installment2Amount: r.installment2Amount,
+              updatedBy: userOid,
+            },
           },
         },
       })) as unknown as AnyBulkWriteOperation<DevolutionFormulaRowDocument>[];
@@ -829,14 +846,14 @@ export class DevolutionFormulaExcelService {
       }
 
       // Iterate active registry in name order; overlay saved values where available.
-      const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u) => {
+      const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u, idx) => {
         const saved = savedByUlbId.get(String(u['_id']));
+        const total = saved?.totalGrantAllocation ?? '';
         return {
           censusCode: String((u['censusCode'] as string | null) || (u['sbCode'] as string | null) || ''),
           ulbName: (u['name'] as string | undefined) ?? '',
-          totalGrantAllocation: saved?.totalGrantAllocation ?? '',
-          installment1Amount: saved?.installment1Amount ?? '',
-          installment2Amount: saved?.installment2Amount ?? '',
+          totalGrantAllocation: total,
+          ...this.buildInstallmentFormulaCells(idx + 2, total),
           devolutionFormula: saved?.devolutionFormula ?? '',
         };
       });
@@ -850,12 +867,11 @@ export class DevolutionFormulaExcelService {
     }
 
     // No active dataset — blank editable rows from active registry.
-    const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u) => ({
+    const rows = (activeUlbsRaw as Record<string, unknown>[]).map((u, idx) => ({
       censusCode: String((u['censusCode'] as string | null) || (u['sbCode'] as string | null) || ''),
       ulbName: (u['name'] as string | undefined) ?? '',
       totalGrantAllocation: '',
-      installment1Amount: '',
-      installment2Amount: '',
+      ...this.buildInstallmentFormulaCells(idx + 2, ''),
       devolutionFormula: '',
     }));
 
@@ -869,66 +885,37 @@ export class DevolutionFormulaExcelService {
 
   // ─── Private helpers ─────────────────────────────────────────────────────
 
+  /** Instalment cells for template row `rowNumber`: a Total / 2 formula, with the current value cached for readers that don't recalculate. */
+  private buildInstallmentFormulaCells(
+    rowNumber: number,
+    total: unknown,
+  ): { installment1Amount: ExcelJS.CellFormulaValue; installment2Amount: ExcelJS.CellFormulaValue } {
+    const ref = `${DF_TEMPLATE_TOTAL_COLUMN_LETTER}${rowNumber}`;
+    const cell: ExcelJS.CellFormulaValue = {
+      formula: `IF(${ref}="","",${ref}/2)`,
+      result: typeof total === 'number' ? splitTotalIntoInstallments(total).installment1Amount : '',
+    };
+    return { installment1Amount: cell, installment2Amount: { ...cell } };
+  }
+
   private buildDfTemplateValidations(maxFormulaLength: number, totalMoHUAAllocation?: number): ExcelColumnValidation[] {
+    const maxText = totalMoHUAAllocation !== undefined ? `, and cannot exceed ₹${totalMoHUAAllocation}` : '';
+    // The instalment columns' read-only rule comes from their `readOnly` header (ExcelService).
     return [
       {
         key: 'totalGrantAllocation',
         mode: 'perRow',
         buildValidation: (row, keyToLetter) => {
-          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
-          const inst1Letter = keyToLetter.get('installment1Amount')!;
-          const inst2Letter = keyToLetter.get('installment2Amount')!;
-          const maxClause = totalMoHUAAllocation !== undefined ? `,${totalLetter}${row}<=${totalMoHUAAllocation}` : '';
+          const cell = `${keyToLetter.get('totalGrantAllocation')!}${row}`;
+          const maxClause = totalMoHUAAllocation !== undefined ? `,${cell}<=${totalMoHUAAllocation}` : '';
           return {
             type: 'custom',
             allowBlank: true,
-            formulae: [
-              // Whole Rupees only (MOD(...,1)=0) on all three cells, plus the existing ≥0/max/sum checks.
-              `OR(${totalLetter}${row}="",AND(ISNUMBER(${totalLetter}${row}),MOD(${totalLetter}${row},1)=0,${totalLetter}${row}>=0${maxClause},ISNUMBER(${inst1Letter}${row}),MOD(${inst1Letter}${row},1)=0,ISNUMBER(${inst2Letter}${row}),MOD(${inst2Letter}${row},1)=0,${totalLetter}${row}=(${inst1Letter}${row}+${inst2Letter}${row})))`,
-            ],
+            formulae: [`OR(${cell}="",AND(ISNUMBER(${cell}),MOD(${cell},1)=0,${cell}>=0${maxClause}))`],
             showErrorMessage: true,
-            errorStyle: 'warning',
-            errorTitle: 'Allocation Mismatch',
-            error:
-              'Total Grant Allocation must be a whole number (no decimals), ≥ 0, and must equal the sum of Installment 1 and Installment 2 amounts.',
-          };
-        },
-      },
-      {
-        key: 'installment1Amount',
-        mode: 'perRow',
-        buildValidation: (row, keyToLetter) => {
-          const inst1Letter = keyToLetter.get('installment1Amount')!;
-          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
-          return {
-            type: 'custom',
-            allowBlank: true,
-            formulae: [
-              `OR(${inst1Letter}${row}="",AND(ISNUMBER(${inst1Letter}${row}),MOD(${inst1Letter}${row},1)=0,${inst1Letter}${row}>=0,OR(${totalLetter}${row}="",${inst1Letter}${row}<=${totalLetter}${row})))`,
-            ],
-            showErrorMessage: true,
-            errorStyle: 'error',
-            errorTitle: 'Invalid Installment 1 Amount',
-            error: `Installment 1 Amount must be a whole number (no decimals), ≥ 0, and cannot exceed Total Grant Allocation (₹${totalMoHUAAllocation}).`,
-          };
-        },
-      },
-      {
-        key: 'installment2Amount',
-        mode: 'perRow',
-        buildValidation: (row, keyToLetter) => {
-          const inst2Letter = keyToLetter.get('installment2Amount')!;
-          const totalLetter = keyToLetter.get('totalGrantAllocation')!;
-          return {
-            type: 'custom',
-            allowBlank: true,
-            formulae: [
-              `OR(${inst2Letter}${row}="",AND(ISNUMBER(${inst2Letter}${row}),MOD(${inst2Letter}${row},1)=0,${inst2Letter}${row}>=0,OR(${totalLetter}${row}="",${inst2Letter}${row}<=${totalLetter}${row})))`,
-            ],
-            showErrorMessage: true,
-            errorStyle: 'error',
-            errorTitle: 'Invalid Installment 2 Amount',
-            error: `Installment 2 Amount must be a whole number (no decimals), ≥ 0, and cannot exceed Total Grant Allocation (₹${totalMoHUAAllocation}).`,
+            errorStyle: 'stop',
+            errorTitle: 'Invalid Total Grant Allocation',
+            error: `Total Grant Allocation must be a whole number (no decimals), ≥ 0${maxText}. Installment 1 and Installment 2 are calculated as half of it.`,
           };
         },
       },
@@ -942,7 +929,7 @@ export class DevolutionFormulaExcelService {
             allowBlank: false,
             formulae: [`AND(${cellLetter}${row}<>"",LEN(${cellLetter}${row})<=${maxFormulaLength})`],
             showErrorMessage: true,
-            errorStyle: 'error',
+            errorStyle: 'stop',
             errorTitle: 'Allocation Formula Required',
             error: `Allocation Formula is required and must not exceed ${maxFormulaLength} characters.`,
           };
@@ -962,12 +949,11 @@ export class DevolutionFormulaExcelService {
 
   private findMissingRequiredHeaders(headerRow: string[]): string[] {
     const presentKeys = new Set(headerRow.map((h) => DF_EXCEL_HEADER_MAP[h]).filter(Boolean));
+    // The instalment columns are optional: their values are ignored (always Total / 2).
     const requiredDataCols: Array<[string, string]> = [
       ['censusCode', 'Census Code'],
       ['ulbName', 'ULB Name'],
       ['totalGrantAllocation', 'Total Grant Allocation'],
-      ['installment1Amount', 'Installment 1 Amount'],
-      ['installment2Amount', 'Installment 2 Amount'],
       ['devolutionFormula', 'Allocation Formula'],
     ];
     const missing: string[] = [];
@@ -986,16 +972,16 @@ export class DevolutionFormulaExcelService {
       const idx = colIndexMap.get(key);
       return idx !== undefined ? row[idx] : undefined;
     };
+    // Normalize once when the raw cell enters the pipeline to absorb IEEE-754 noise from formula cells
+    // without weakening the validator's whole-Rupee check. See devolution-formula-tolerance.helpers.ts.
+    const totalGrantAllocation = snapToWholeRupee(get('totalGrantAllocation'));
     return {
       rowNumber,
       censusCode: String((get('censusCode') ?? '') as string | number | boolean).trim(),
       ulbName: String((get('ulbName') ?? '') as string | number | boolean).trim(),
-      // Normalize once when raw cell values enter the pipeline to absorb IEEE-754 noise from formula cells
-      // without weakening the validator's whole-Rupee check. All downstream consumers of parsed see the
-      // corrected value. See devolution-formula-tolerance.helpers.ts.
-      totalGrantAllocation: snapToWholeRupee(get('totalGrantAllocation')),
-      installment1Amount: snapToWholeRupee(get('installment1Amount')),
-      installment2Amount: snapToWholeRupee(get('installment2Amount')),
+      totalGrantAllocation,
+      // Instalment cells in the upload are ignored: always Total / 2.
+      ...splitTotalIntoInstallments(totalGrantAllocation),
       devolutionFormula: String((get('devolutionFormula') ?? '') as string | number | boolean).trim(),
     };
   }

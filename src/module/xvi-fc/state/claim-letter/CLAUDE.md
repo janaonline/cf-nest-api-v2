@@ -186,13 +186,14 @@ Unspent Declaration, ATR), merged with `pdf-lib`.
   the request may omit `claimedAmount`, the server stores the allocation, and a different amount is
   rejected, so every child has `claimedAmount === allocatedAmount` and zero difference. Switch on: the
   request's amount, within the band.
-- Money is whole Rupees throughout, like every other xvi-fc form; `claimedAmount` is `@IsInt()`. The
-  feature went Crore decimals -> whole Rupees -> Rupees with decimals -> whole Rupees, all before
-  launch, so no stored-data migration exists. Decimals were dropped because splitting an allocation
-  across many ULBs never divides evenly and real sums drifted from the target total (one State's rows
-  summed ₹2.08 off); whole numbers make that drift impossible. `helpers/claim-letter-financial.helpers.ts`
-  does all amount arithmetic with plain integers; the variance band cross-multiplies instead of
-  dividing so it stays exact.
+- Money is Rupees with at most 50 paise: `allocatedAmount` is the ULB's Devolution instalment, always
+  Total / 2, so it and `claimedAmount` can end in .50 (devolution-formula's
+  `docs/adr/0002-installments-derived-as-half-of-total.md`). Multiples of 0.5 add exactly, so
+  `helpers/claim-letter-financial.helpers.ts` stays exact with plain arithmetic; the variance band
+  cross-multiplies instead of dividing. The letter's amount in words uses `amountToIndianWords`.
+  `claimedAmount` on the request may carry 50 paise: with the switch off it must equal the allocation,
+  with it on it must be whole Rupees within the band (`resolveClaimedAmount`). Accepting .50 with the
+  switch on is still open (that resolver rule and the UI's decimal check).
 - Each child's `eligibilitySources` holds one snapshot per ULB condition, all already fetched: each
   `FORM_AND_ROW` source (Elected Body, FC Unspent) as its State-level result plus this ULB's row
   evidence (`rowEvidenceByFormId`), and each ULB-owned form (`perCriterion[].formEvidence`). The
