@@ -64,8 +64,10 @@ export class DevolutionFormulaValidator {
 
     if (errors.length > 0) return errors;
 
-    // 2. Type / format checks (the instalments are derived from the Total, so only the Total is checked)
-    const total = Number(parsed.totalGrantAllocation);
+    // 2. Type / format checks (the instalments are derived from the Total, so only the Total is checked).
+    // Only a number or number-like text counts: Number(true) is 1, and a TRUE cell would get 0 / 0 instalments.
+    const rawTotal = parsed.totalGrantAllocation;
+    const total = typeof rawTotal === 'number' || typeof rawTotal === 'string' ? Number(rawTotal) : NaN;
 
     if (!isFiniteNumber(total)) {
       errors.push({

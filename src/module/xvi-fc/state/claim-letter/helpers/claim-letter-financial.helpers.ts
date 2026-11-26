@@ -30,8 +30,8 @@ export function isClaimedAmountWithinVariance(
   return claimedAmount * 100 >= allocatedAmount * lowerPercent && claimedAmount * 100 <= allocatedAmount * upperPercent;
 }
 
-/** The amount to store, or null when the request must be rejected. Switch off: the allocation, and a
- *  different requested amount is rejected. Switch on: the requested amount, within the band. */
+/** The amount to store, or null when the request must be rejected. Switch off: the allocation (may be .50), and
+ *  a different requested amount is rejected. Switch on: the requested amount, whole Rupees within the band. */
 export function resolveClaimedAmount(
   allocatedAmount: number,
   requestedAmount: number | undefined,
@@ -40,7 +40,7 @@ export function resolveClaimedAmount(
   if (!config.editable) {
     return requestedAmount === undefined || requestedAmount === allocatedAmount ? allocatedAmount : null;
   }
-  if (requestedAmount === undefined) return null;
+  if (requestedAmount === undefined || !Number.isInteger(requestedAmount)) return null;
   return isClaimedAmountWithinVariance(allocatedAmount, requestedAmount, config.lowerPercent, config.upperPercent)
     ? requestedAmount
     : null;

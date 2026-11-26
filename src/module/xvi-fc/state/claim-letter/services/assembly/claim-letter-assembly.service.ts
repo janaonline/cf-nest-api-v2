@@ -61,7 +61,7 @@ import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
 
 export interface ClaimLetterUlbSelectionInput {
   ulbId: string;
-  /** Whole Rupees; omitted while the claim-amount switch is off (resolveClaimedAmount). */
+  /** Optional while the claim-amount switch is off, when it must equal the allocation (resolveClaimedAmount). */
   claimedAmount?: number;
 }
 

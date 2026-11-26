@@ -612,6 +612,42 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     expect(rowDocs[0]['installment2Amount']).toBe(250_000.5);
   });
 
+  // Number(true) is 1: without this the row would pass as Total 1 with 0 / 0 instalments and count in the form total.
+  it('rejects a TRUE cell in the Total column as a row error', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 500_000, performance: 0 });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', true, '', '', 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const rowDocs = (mockRowModel.insertMany.mock.calls as unknown[][][])[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs[0]['validationStatus']).toBe('INVALID');
+    expect(rowDocs[0]['validationErrors']).toEqual([
+      expect.objectContaining({ field: 'totalGrantAllocation', code: 'number' }),
+    ]);
+  });
+
   it('accepts an upload without the instalment columns', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
