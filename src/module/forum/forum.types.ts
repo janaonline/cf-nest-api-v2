@@ -1,12 +1,38 @@
 import { Types } from 'mongoose';
 import { ForumCategory } from '../../schemas/forum/forum-category.schema';
 import { ForumComment } from '../../schemas/forum/forum-comment.schema';
+import type { ForumReportReason, ForumReportTargetType } from '../../schemas/forum/forum-report.schema';
 import { ForumThread } from '../../schemas/forum/forum-thread.schema';
 
 export interface ForumPublicUser {
   userId: string;
   name: string;
   role: string;
+}
+
+export interface ForumLastReply {
+  userId: string;
+  name: string;
+  role: string;
+  createdAt: string;
+}
+
+/** One open report as shown in the ADMIN reports list. */
+export interface ForumAdminReportView {
+  id: string;
+  targetType: ForumReportTargetType;
+  targetId: string;
+  threadId: string;
+  threadTitle: string;
+  threadSlug: string | null;
+  /** Plain-text start of the reported thread / reply body. */
+  excerpt: string;
+  author: ForumPublicUser | null;
+  reason: ForumReportReason;
+  reporter: { userId: string; name: string; role: string };
+  createdAt: string;
+  /** True when the post is already hidden (e.g. by another report or the moderation tools). */
+  isHidden: boolean;
 }
 
 export interface ForumCategoryView {
@@ -34,9 +60,13 @@ export interface ForumThreadView {
   createdAt: string;
   updatedAt: string;
   lastActivityAt: string;
+  /** Latest visible reply (TS-1305 "Last post" column); null when there is none. Set on list endpoints. */
+  lastReply?: ForumLastReply | null;
   /** Viewer-specific flags, present on every endpoint that returns threads to the signed-in user. */
   liked?: boolean;
   bookmarked?: boolean;
+  /** Thread detail only: the viewer has already reported this thread. */
+  reported?: boolean;
 }
 
 export interface ForumCommentView {
@@ -51,6 +81,8 @@ export interface ForumCommentView {
   createdAt: string;
   updatedAt: string;
   liked?: boolean;
+  /** Thread detail only: the viewer has already reported this reply. */
+  reported?: boolean;
 }
 
 export interface ForumAdminCommentView extends ForumCommentView {

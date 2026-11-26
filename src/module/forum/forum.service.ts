@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -19,13 +20,19 @@ import { ForumLike, ForumLikeTargetType } from '../../schemas/forum/forum-like.s
 import { ForumThread } from '../../schemas/forum/forum-thread.schema';
 import { ForumThreadView as ForumThreadViewDoc } from '../../schemas/forum/forum-thread-view.schema';
 import { ForumUserAgent } from '../../schemas/forum/forum-user-agent.schema';
+import { ForumReport, ForumReportReason, ForumReportTargetType } from '../../schemas/forum/forum-report.schema';
+import { State } from '../../schemas/state.schema';
+import { Ulb } from '../../schemas/ulb.schema';
 import { User } from '../../schemas/user/user.schema';
+import { resolveForumDisplayName } from '../../common/utils/forum-display-name.util';
 import { Role } from '../auth/enum/role.enum';
 import { CreateCommentDto, CreateThreadDto, UpdateThreadDto } from './dto/forum.dto';
 import { FORUM_CATEGORIES, FORUM_CATEGORY_SLUGS, FORUM_THREAD_LIST_LIMIT } from './forum.constants';
 import {
   ForumCategoryView,
   ForumCommentView,
+  ForumLastReply,
+  ForumPublicUser,
   ForumRequestMetadata,
   ForumThreadView,
   serializeCategory,
@@ -54,6 +61,9 @@ export class ForumService implements OnModuleInit {
     @InjectModel(ForumThreadViewDoc.name, FORUM_DB_CONNECTION) private readonly viewModel: Model<ForumThreadViewDoc>,
     @InjectModel(ForumUserAgent.name, FORUM_DB_CONNECTION) private readonly userAgentModel: Model<ForumUserAgent>,
     @InjectModel(User.name) private readonly userModel: Model<User>,
+    @InjectModel(ForumReport.name, FORUM_DB_CONNECTION) readonly reportModel: Model<ForumReport>,
+    @InjectModel(Ulb.name) private readonly ulbModel: Model<Ulb>,
+    @InjectModel(State.name) private readonly stateModel: Model<State>,
   ) {}
 
   /** Idempotently seeds the canonical categories; existing rows keep their `_id` and `createdAt`. */
@@ -109,7 +119,7 @@ export class ForumService implements OnModuleInit {
       .limit(FORUM_THREAD_LIST_LIMIT)
       .lean()
       .exec();
-    return this.withViewerFlags(
+    return this.decorateThreads(
       threads.map((t) => serializeThread(t as never)),
       user,
     );
@@ -122,7 +132,7 @@ export class ForumService implements OnModuleInit {
       .limit(FORUM_THREAD_LIST_LIMIT)
       .lean()
       .exec();
-    return this.withViewerFlags(
+    return this.decorateThreads(
       threads.map((t) => serializeThread(t as never)),
       user,
     );
@@ -144,7 +154,7 @@ export class ForumService implements OnModuleInit {
     const sorted = threads
       .map((t) => serializeThread(t as never))
       .sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
-    return this.withViewerFlags(sorted, user);
+    return this.decorateThreads(sorted, user);
   }
 
   /** Thread detail for the signed-in user; counts the view once per (thread, user). */
@@ -159,13 +169,21 @@ export class ForumService implements OnModuleInit {
     if (!doc) throw new NotFoundException('Thread not found.');
     const thread = serializeThread(doc as never);
     const threadId = doc._id;
-    const [viewCount, comments, likedThreadIds, bookmarkedThreadIds] = await Promise.all([
+    const [viewCount, comments, likedThreadIds, bookmarkedThreadIds, reportedIds] = await Promise.all([
       this.recordUniqueView(threadId, new Types.ObjectId(user._id)),
       this.commentModel.find({ threadId, deletedAt: null }).sort({ createdAt: 1 }).lean().exec(),
       this.likedTargetIds(user._id, 'thread', [thread.id]),
       this.bookmarkedThreadIds(user._id, [thread.id]),
+      this.reportedTargetIds(user._id, threadId),
     ]);
-    const serializedComments = comments.map((c) => serializeComment(c as never));
+    // One display-name lookup for the thread author and every reply author.
+    const names = await this.displayNames([thread.user.userId, ...comments.map((c) => c.user.userId.toString())]);
+    const named = <T extends { user: ForumPublicUser }>(v: T): T => ({
+      ...v,
+      user: { ...v.user, name: names.get(v.user.userId) ?? v.user.name },
+    });
+    thread.user = named(thread).user;
+    const serializedComments = comments.map((c) => named(serializeComment(c as never)));
     const likedCommentIds = new Set(
       await this.likedTargetIds(
         user._id,
@@ -179,9 +197,24 @@ export class ForumService implements OnModuleInit {
         viewCount,
         liked: likedThreadIds.length > 0,
         bookmarked: bookmarkedThreadIds.length > 0,
+        reported: reportedIds.has(thread.id),
       },
-      comments: serializedComments.map((c) => ({ ...c, liked: likedCommentIds.has(c.id) })),
+      comments: serializedComments.map((c) => ({
+        ...c,
+        liked: likedCommentIds.has(c.id),
+        reported: reportedIds.has(c.id),
+      })),
     };
+  }
+
+  /** Ids of the thread and its replies that this user has already reported (any status — one report per item). */
+  private async reportedTargetIds(userId: string, threadId: Types.ObjectId): Promise<Set<string>> {
+    const reports = await this.reportModel
+      .find({ threadId, 'reporter.userId': new Types.ObjectId(userId) })
+      .select('targetId')
+      .lean()
+      .exec();
+    return new Set(reports.map((r) => r.targetId.toString()));
   }
 
   async createThread(dto: CreateThreadDto, author: IAuthUser, meta: ForumRequestMetadata): Promise<ForumThreadView> {
@@ -233,7 +266,8 @@ export class ForumService implements OnModuleInit {
       .lean()
       .exec();
     if (!updated) throw new NotFoundException('Thread not found.');
-    return serializeThread(updated as never);
+    const [view] = await this.withDisplayNames([serializeThread(updated as never)]);
+    return view;
   }
 
   async deleteThread(threadId: string, user: IAuthUser): Promise<void> {
@@ -277,6 +311,46 @@ export class ForumService implements OnModuleInit {
   ): Promise<{ active: boolean; likeCount: number }> {
     const id = this.toObjectId(commentId, 'Comment not found.');
     return { active, likeCount: await this.setLike(user._id, 'comment', id, active) };
+  }
+
+  // ------------------------------------------------------------------ reports
+
+  /** Reports a visible thread or reply for ADMIN review; one report per user per item (409 on repeat). */
+  async reportPost(
+    targetType: ForumReportTargetType,
+    targetId: string,
+    reason: ForumReportReason,
+    user: IAuthUser,
+  ): Promise<{ reported: true }> {
+    const notFound = targetType === 'thread' ? 'Thread not found.' : 'Comment not found.';
+    const id = this.toObjectId(targetId, notFound);
+    let threadId: Types.ObjectId;
+    if (targetType === 'thread') {
+      if (!(await this.threadModel.exists({ _id: id, ...VISIBLE_THREAD }))) throw new NotFoundException(notFound);
+      threadId = id;
+    } else {
+      const comment = await this.commentModel.findOne({ _id: id, deletedAt: null }).select('threadId').lean().exec();
+      if (!comment || !(await this.threadModel.exists({ _id: comment.threadId, ...VISIBLE_THREAD }))) {
+        throw new NotFoundException(notFound);
+      }
+      threadId = comment.threadId;
+    }
+    const reporter = await this.userIdentity(user._id);
+    try {
+      await this.reportModel.create({
+        targetType,
+        targetId: id,
+        threadId,
+        reason,
+        reporter: { userId: new Types.ObjectId(user._id), name: reporter.name, role: reporter.role ?? user.role },
+        status: 'open',
+        createdAt: new Date(),
+      });
+    } catch (error) {
+      if (isDuplicateKey(error)) throw new ConflictException('You have already reported this post.');
+      throw error;
+    }
+    return { reported: true };
   }
 
   // ----------------------------------------------------------------- comments
@@ -487,9 +561,124 @@ export class ForumService implements OnModuleInit {
     return thread.counts?.views ?? 0;
   }
 
+  /** Last post, then live display names, then the viewer's like/bookmark flags — for every thread list. */
+  private async decorateThreads(threads: ForumThreadView[], user: IAuthUser): Promise<ForumThreadView[]> {
+    return this.withViewerFlags(await this.withDisplayNames(await this.attachLastReplies(threads)), user);
+  }
+
+  /** Adds the latest visible reply of each thread (TS-1305 "Last post"); one aggregation for the whole page. */
+  private async attachLastReplies(threads: ForumThreadView[]): Promise<ForumThreadView[]> {
+    if (!threads.length) return threads;
+    const rows = await this.commentModel
+      .aggregate<{ _id: Types.ObjectId; userId: Types.ObjectId; name: string; role: string; createdAt: Date }>([
+        { $match: { threadId: { $in: threads.map((t) => new Types.ObjectId(t.id)) }, deletedAt: null } },
+        { $sort: { createdAt: -1 } },
+        {
+          $group: {
+            _id: '$threadId',
+            userId: { $first: '$user.userId' },
+            name: { $first: '$user.name' },
+            role: { $first: '$user.role' },
+            createdAt: { $first: '$createdAt' },
+          },
+        },
+      ])
+      .exec();
+    const byThread = new Map<string, ForumLastReply>(
+      rows.map((r) => [
+        r._id.toString(),
+        {
+          userId: r.userId.toString(),
+          name: r.name,
+          role: r.role,
+          createdAt: new Date(r.createdAt).toISOString(),
+        },
+      ]),
+    );
+    return threads.map((t) => ({ ...t, lastReply: byThread.get(t.id) ?? null }));
+  }
+
+  /**
+   * TS-1305: replaces each author name (and Last post name) with the author's current forum display name —
+   * the ULB name, "State DMA, <State>" or "MoHUA" — looked up live, so posts written before this rule (or
+   * before a ULB was renamed) show the right name. Falls back to the stored name if the user no longer exists.
+   */
+  async withDisplayNames<T extends { user: ForumPublicUser; lastReply?: ForumLastReply | null }>(
+    items: T[],
+  ): Promise<T[]> {
+    const names = await this.displayNames(
+      items.flatMap((i) => (i.lastReply ? [i.user.userId, i.lastReply.userId] : [i.user.userId])),
+    );
+    const rename = <U extends { userId: string; name: string }>(u: U): U => ({
+      ...u,
+      name: names.get(u.userId) ?? u.name,
+    });
+    return items.map((i) => ({
+      ...i,
+      user: rename(i.user),
+      ...(i.lastReply ? { lastReply: rename(i.lastReply) } : {}),
+    }));
+  }
+
+  /** userId → forum display name, in 3 queries (users, then their ULBs and States) whatever the count. */
+  async displayNames(userIds: string[]): Promise<Map<string, string>> {
+    const ids = [...new Set(userIds)].filter((id) => Types.ObjectId.isValid(id)).map((id) => new Types.ObjectId(id));
+    if (!ids.length) return new Map();
+    const users = await this.userModel
+      .find({ _id: { $in: ids } })
+      .select('name email role ulb state')
+      .lean()
+      .exec();
+    const refIds = (key: 'ulb' | 'state') => users.map((u) => u[key]).filter((id): id is Types.ObjectId => !!id);
+    const [ulbs, states] = await Promise.all([
+      this.ulbModel
+        .find({ _id: { $in: refIds('ulb') } })
+        .select('name')
+        .lean()
+        .exec(),
+      this.stateModel
+        .find({ _id: { $in: refIds('state') } })
+        .select('name')
+        .lean()
+        .exec(),
+    ]);
+    const ulbName = new Map(ulbs.map((u) => [String(u._id), u.name]));
+    const stateName = new Map(states.map((s) => [String(s._id), s.name]));
+    return new Map(
+      users.map((u) => [
+        String(u._id),
+        resolveForumDisplayName({
+          role: u.role,
+          accountName: u.name,
+          email: u.email,
+          ulbName: u.ulb ? ulbName.get(String(u.ulb)) : undefined,
+          stateName: u.state ? stateName.get(String(u.state)) : undefined,
+        }),
+      ]),
+    );
+  }
+
+  /** The user's forum display name (ULB / State DMA / MoHUA name, else the account name) and role. */
+  private async userIdentity(userId: string): Promise<{ name: string; role?: string }> {
+    const record = await this.userModel.findById(userId).select('name email role ulb state').lean().exec();
+    const [ulb, state] = await Promise.all([
+      record?.ulb ? this.ulbModel.findById(record.ulb).select('name').lean().exec() : null,
+      record?.state ? this.stateModel.findById(record.state).select('name').lean().exec() : null,
+    ]);
+    return {
+      name: resolveForumDisplayName({
+        role: record?.role,
+        accountName: record?.name,
+        email: record?.email,
+        ulbName: ulb?.name,
+        stateName: state?.name,
+      }),
+      role: record?.role,
+    };
+  }
+
   private async embeddedUser(author: IAuthUser, meta: ForumRequestMetadata) {
-    const record = await this.userModel.findById(author._id).select('name email').lean().exec();
-    const name = (record?.name?.trim() || record?.email || 'Unknown user').slice(0, 60);
+    const { name } = await this.userIdentity(author._id);
     return {
       userId: new Types.ObjectId(author._id),
       name,

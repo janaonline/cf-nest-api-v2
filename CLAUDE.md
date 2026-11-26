@@ -91,6 +91,17 @@ src/
 │                        # same server, connection `forum_db` via `ForumDbModule`/`useDb`); users stay in the main
 │                        # DB. Collections keep the old standalone-app names (threads, comments, ...), so existing
 │                        # forum_db data is read in place. The 3 canonical categories are upserted on boot.
+│                        # Authors show as a forum display name, not the account name: the ULB name, "State DMA,
+│                        # <State>" or "MoHUA" (`common/utils/forum-display-name.util.ts` — the one rule, also
+│                        # returned as `forumDisplayName` in the login/refresh user payload). It is resolved live
+│                        # on every read (`ForumService.withDisplayNames`/`displayNames`: 3 batched queries —
+│                        # users, ULBs, States), so old posts and renamed ULBs show correctly with no migration;
+│                        # the name stored on a post is only a fallback for deleted users and the search index.
+│                        # Thread lists carry a read-time `lastReply` (latest non-deleted
+│                        # reply). Users report a thread/reply once each (`reports` collection, unique per
+│                        # user+item → 409); ADMINs review open reports at `forum/admin/reports` — "hide" reuses
+│                        # thread unpublish / reply soft-delete (restorable from the Threads admin), "dismiss"
+│                        # keeps the post.
 ├── users/               # User CRUD with repository pattern
 ├── admin/
 │   ├── afs-digitization/ # AFS file processing with BullMQ queues

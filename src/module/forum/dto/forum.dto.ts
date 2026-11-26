@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform } from 'class-transformer';
 import { IsBoolean, IsIn, IsMongoId, IsOptional, IsString, Length, Matches } from 'class-validator';
+import { FORUM_REPORT_REASONS, type ForumReportReason } from '../../../schemas/forum/forum-report.schema';
 
 const trim = ({ value }: { value: unknown }): unknown => (typeof value === 'string' ? value.trim() : value);
 
@@ -107,6 +108,18 @@ export class ModerateCommentDto {
   @ApiProperty()
   @IsBoolean()
   isDeleted!: boolean;
+}
+
+export class ReportPostDto {
+  @ApiProperty({ enum: FORUM_REPORT_REASONS })
+  @IsIn(FORUM_REPORT_REASONS, { message: 'Choose a reason for the report.' })
+  reason!: ForumReportReason;
+}
+
+export class ResolveReportDto {
+  @ApiProperty({ enum: ['hide', 'dismiss'], description: 'hide = hide the reported post; dismiss = keep it' })
+  @IsIn(['hide', 'dismiss'])
+  action!: 'hide' | 'dismiss';
 }
 
 export class CategoryDto {

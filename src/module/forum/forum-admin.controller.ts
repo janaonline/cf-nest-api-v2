@@ -7,7 +7,7 @@ import { Roles } from '../auth/decorators/roles.decorator';
 import { Role } from '../auth/enum/role.enum';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { UseGuards } from '@nestjs/common';
-import { CategoryDto, ModerateCommentDto, ModerateThreadDto } from './dto/forum.dto';
+import { CategoryDto, ModerateCommentDto, ModerateThreadDto, ResolveReportDto } from './dto/forum.dto';
 import { ForumAdminService } from './forum-admin.service';
 
 @ApiTags('Forum admin')
@@ -50,6 +50,22 @@ export class ForumAdminController {
   ) {
     await this.admin.moderateComment(commentId, dto, admin);
     return { updated: true };
+  }
+
+  @Get('reports')
+  @ApiOperation({ summary: 'Open reports of threads and replies, newest first' })
+  reports() {
+    return this.admin.listReports();
+  }
+
+  @Patch('reports/:reportId')
+  @ApiOperation({ summary: 'Hide the reported post (resolves all its open reports) or dismiss this report' })
+  resolveReport(
+    @Param('reportId', ParseObjectIdPipe) reportId: string,
+    @Body() dto: ResolveReportDto,
+    @CurrentUser() admin: IAuthUser,
+  ) {
+    return this.admin.resolveReport(reportId, dto.action, admin);
   }
 
   @Post('categories')
