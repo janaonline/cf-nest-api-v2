@@ -5,7 +5,25 @@ export interface RowHeader {
   label: string;
   key: string;
   width?: number;
+  numFmt?: string;
+  /** Read-only when the sheet is generated with `protectLockedColumns`; ignored otherwise. */
+  locked?: boolean;
 }
+
+export interface GenerateExcelOptions {
+  /** Protects the sheet (no password) so `locked` columns can't be typed into; every other data cell stays editable. */
+  protectLockedColumns?: boolean;
+}
+
+// Protection still allows selecting, resizing, filtering and sorting.
+const SHEET_PROTECTION_OPTIONS: Partial<ExcelJS.WorksheetProtection> = {
+  selectLockedCells: true,
+  selectUnlockedCells: true,
+  formatColumns: true,
+  formatRows: true,
+  autoFilter: true,
+  sort: true,
+};
 
 export interface StaticColumnValidation {
   key: string;
@@ -37,6 +55,7 @@ export class ExcelService {
     rows: ReadonlyArray<TRow>,
     sheetName = 'Sheet1',
     columnValidations?: ExcelColumnValidation[],
+    options?: GenerateExcelOptions,
   ): Promise<ExcelJS.Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(sheetName) as WorksheetWithValidations;
@@ -45,9 +64,21 @@ export class ExcelService {
       header: header.label,
       key: header.key,
       width: header.width || 20,
+      ...(header.numFmt ? { style: { numFmt: header.numFmt } } : {}),
     }));
 
     sheet.addRows(rows as unknown as object[]);
+
+    if (options?.protectLockedColumns) {
+      // Excel cells are locked by default, so unlock the editable data cells, then protect the sheet.
+      const editableColumns = headers.flatMap((header, idx) => (header.locked ? [] : [idx + 1]));
+      for (let row = 2; row <= rows.length + 1; row++) {
+        for (const col of editableColumns) {
+          sheet.getCell(row, col).protection = { locked: false };
+        }
+      }
+      await sheet.protect('', SHEET_PROTECTION_OPTIONS);
+    }
 
     if (columnValidations?.length && rows.length > 0) {
       const keyToLetter = new Map<string, string>();

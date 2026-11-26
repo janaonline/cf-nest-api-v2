@@ -61,6 +61,7 @@ copy is uploaded; `allocation` is the State's installment allocation (basic + pe
 Submissions figure) next to `totalAmount`, the amount claimed.
 
 ## Not built yet
+
 DoE status (dropped from the history until DoE tracking exists), excluding cities from an OM (an OM always covers
 every ULB on its letter), moving the claim letter past 5. MoHUA's return of a verified letter (5 -> 6), when built,
 must delete that letter's `xvifc_om_ulbs` rows, or its ULBs can never be approved again this installment.

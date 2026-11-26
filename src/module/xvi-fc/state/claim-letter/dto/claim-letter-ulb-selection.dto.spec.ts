@@ -24,7 +24,14 @@ describe('ClaimLetterUlbSelectionDto claimedAmount', () => {
     expect(selection.claimedAmount).toBe(250000);
   });
 
-  it.each([0, 12.5, 'abc'])('rejects %p', async (claimedAmount) => {
+  // A .50 allocation (odd Devolution Total) must get through to resolveClaimedAmount, which decides by the switch.
+  it('keeps an amount ending in 50 paise as sent', async () => {
+    const { selection, errorCount } = await selectionFor(250000.5);
+    expect(errorCount).toBe(0);
+    expect(selection.claimedAmount).toBe(250000.5);
+  });
+
+  it.each([0, -1, 12.345, 'abc'])('rejects %p', async (claimedAmount) => {
     expect((await selectionFor(claimedAmount)).errorCount).toBe(1);
   });
 });

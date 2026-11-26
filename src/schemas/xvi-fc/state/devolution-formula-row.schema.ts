@@ -67,6 +67,7 @@ export class DevolutionFormulaRow {
   @Prop({ type: Number, required: true })
   totalGrantAllocation!: number;
 
+  // Both instalments are always Total / 2 (splitTotalIntoInstallments), so they can end in .50.
   @Prop({ type: Number, required: true })
   installment1Amount!: number;
 

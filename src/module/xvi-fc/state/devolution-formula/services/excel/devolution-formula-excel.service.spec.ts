@@ -220,7 +220,11 @@ const mockS3Service = { getBuffer: jest.fn(), uploadPublic: jest.fn(), uploadPri
 const mockExcelService = { generateExcel: jest.fn().mockResolvedValue(Buffer.from('')) };
 const mockFileTokenService = { signFileUrl: jest.fn((url: string) => `signed::${url}`) };
 const mockFileUrlNormalizer = { toRawStoragePath: jest.fn((url: string) => url) };
-const mockDfService = { resolveGrantAllocation: jest.fn() };
+const mockDfService = {
+  resolveGrantAllocation: jest.fn(),
+  // ULBs a claim letter holds: none unless a test says otherwise.
+  findClaimHeldUlbIds: jest.fn().mockResolvedValue(new Set<string>()),
+};
 const mockDfFormJsonConfig = { loadFields: jest.fn() };
 
 // ─── 1 · Safe dataset replace ────────────────────────────────────────────────
@@ -490,7 +494,8 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     expect(rowDocs).toHaveLength(1);
     const errors = rowDocs[0]['validationErrors'] as Array<{ code: string; field: string }>;
     expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'totalGrantAllocation')).toBe(true);
-    expect(errors.some((e) => e.code === 'notWholeNumber' && e.field === 'installment1Amount')).toBe(true);
+    // Instalments are derived from the Total, never validated themselves.
+    expect(errors.some((e) => e.field === 'installment1Amount' || e.field === 'installment2Amount')).toBe(false);
     expect(rowDocs[0]['validationStatus']).toBe('INVALID');
     // Stored as-uploaded (for redisplay/error-sheet purposes), not rounded away.
     expect(rowDocs[0]['totalGrantAllocation']).toBe(141_792_452.83);
@@ -542,6 +547,149 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     expect(rowDocs[0]['installment2Amount']).toBe(44_357_670);
   });
 
+  it('ignores typed instalment values and stores Total / 2 (x.50 for an odd Total)', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 38_971_963, performance: 0 });
+
+    // A 70/30 split typed into an old template.
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 38_971_963, 27_280_374, 11_691_589, 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const rowDocs = (mockRowModel.insertMany.mock.calls as unknown[][][])[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs[0]['validationStatus']).toBe('VALID');
+    expect(rowDocs[0]['installment1Amount']).toBe(19_485_981.5);
+    expect(rowDocs[0]['installment2Amount']).toBe(19_485_981.5);
+  });
+
+  it('splits a Total stored as text in Excel the same as a number', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 500_001, performance: 0 });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', '500001', '', '', 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const rowDocs = (mockRowModel.insertMany.mock.calls as unknown[][][])[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs[0]['validationStatus']).toBe('VALID');
+    expect(rowDocs[0]['totalGrantAllocation']).toBe(500_001);
+    expect(rowDocs[0]['installment1Amount']).toBe(250_000.5);
+    expect(rowDocs[0]['installment2Amount']).toBe(250_000.5);
+  });
+
+  // Number(true) is 1: without this the row would pass as Total 1 with 0 / 0 instalments and count in the form total.
+  it('rejects a TRUE cell in the Total column as a row error', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 500_000, performance: 0 });
+
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', true, '', '', 'population']]);
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const rowDocs = (mockRowModel.insertMany.mock.calls as unknown[][][])[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs[0]['validationStatus']).toBe('INVALID');
+    expect(rowDocs[0]['validationErrors']).toEqual([
+      expect.objectContaining({ field: 'totalGrantAllocation', code: 'number' }),
+    ]);
+  });
+
+  it('accepts an upload without the instalment columns', async () => {
+    mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
+    mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
+    mockRowModel.updateMany.mockReturnValue(q({ modifiedCount: 2 }));
+    mockRowModel.insertMany.mockResolvedValue([]);
+    mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
+    mockRowModel.deleteMany.mockReturnValue(q(null));
+    mockDfService.resolveGrantAllocation.mockResolvedValue({ _id: allocOid, basic: 500_000, performance: 0 });
+
+    const buffer = makeXlsxBufferWithHeaders(
+      ['Census Code', 'ULB Name', 'Total Grant Allocation', 'Allocation Formula'],
+      [['C001', 'Alpha City', 500_000, 'population']],
+    );
+    mockS3Service.getBuffer.mockResolvedValue(buffer);
+
+    await service.validateExcel(
+      {
+        stateId: stateOid.toString(),
+        yearId: YEAR_ID,
+        installment: 1,
+        excelFile: {
+          originalName: 'test.xlsx',
+          path: 'state/path/test.xlsx',
+          mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          sizeKb: 1,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        },
+      },
+      adminUser,
+    );
+
+    const rowDocs = (mockRowModel.insertMany.mock.calls as unknown[][][])[0][0] as Array<Record<string, unknown>>;
+    expect(rowDocs[0]['validationStatus']).toBe('VALID');
+    expect(rowDocs[0]['installment1Amount']).toBe(250_000);
+    expect(rowDocs[0]['installment2Amount']).toBe(250_000);
+  });
+
   it('accepts excelFile.pageCount: null and persists it on the form excelFile', async () => {
     mockFormModel.findOne.mockReturnValue(q(mockExistingForm));
     mockFormModel.findOneAndUpdate.mockReturnValue(mockUpsertedForm({ activeDatasetVersion: 2 }));
@@ -588,8 +736,8 @@ describe('DevolutionFormulaExcelService — safe dataset replace', () => {
     mockFormModel.findByIdAndUpdate.mockReturnValue(q(null));
     mockRowModel.deleteMany.mockReturnValue(q(null));
 
-    // Known-registry ULB with a negative installment amount → row error → error sheet generated
-    const buffer = makeXlsxBuffer([['C001', 'Alpha City', 500_000, -300_000, 200_000, 'population']]);
+    // Known-registry ULB with a negative Total → row error → error sheet generated
+    const buffer = makeXlsxBuffer([['C001', 'Alpha City', -500_000, 300_000, 200_000, 'population']]);
     mockS3Service.getBuffer.mockResolvedValue(buffer);
 
     await service.validateExcel(
@@ -681,6 +829,45 @@ describe('DevolutionFormulaExcelService — revalidateExcel', () => {
     expect(formUpdateCalls.length).toBeGreaterThan(0);
     const updateArg = formUpdateCalls[0][1] as { $set: Record<string, unknown> };
     expect(Object.keys(updateArg.$set)).not.toContain('activeDatasetVersion');
+  });
+
+  it('rewrites an old uneven split as Total / 2 when revalidating (Case A)', async () => {
+    const unevenRow = {
+      ...mockActiveRows[0],
+      totalGrantAllocation: 500_001,
+      installment1Amount: 300_000,
+      installment2Amount: 200_001,
+    };
+    mockFormModel.findOne.mockReturnValue(q({ ...mockExistingForm }));
+    mockRowModel.find.mockReturnValue(q([unevenRow]));
+
+    await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const ops = (mockRowModel.bulkWrite.mock.calls as unknown[][])[0][0] as Array<{
+      updateOne: { update: { $set: Record<string, unknown> } };
+    }>;
+    expect(ops[0].updateOne.update.$set['installment1Amount']).toBe(250_000.5);
+    expect(ops[0].updateOne.update.$set['installment2Amount']).toBe(250_000.5);
+  });
+
+  it('keeps the stored split on a ULB a claim letter holds when revalidating (Case A)', async () => {
+    const heldRow = {
+      ...mockActiveRows[0],
+      totalGrantAllocation: 500_001,
+      installment1Amount: 300_000,
+      installment2Amount: 200_001,
+    };
+    mockFormModel.findOne.mockReturnValue(q({ ...mockExistingForm }));
+    mockRowModel.find.mockReturnValue(q([heldRow]));
+    mockDfService.findClaimHeldUlbIds.mockResolvedValueOnce(new Set([String(heldRow.ulbId)]));
+
+    await service.revalidateExcel(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const ops = (mockRowModel.bulkWrite.mock.calls as unknown[][])[0][0] as Array<{
+      updateOne: { update: { $set: Record<string, unknown> } };
+    }>;
+    expect(ops[0].updateOne.update.$set['installment1Amount']).toBe(300_000);
+    expect(ops[0].updateOne.update.$set['installment2Amount']).toBe(200_001);
   });
 
   it('unsets errorExcelFile when revalidation produces zero row errors (Case A)', async () => {
@@ -981,24 +1168,51 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(rows).toEqual([expect.objectContaining({ censusCode: 'C001', ulbName: 'Alpha City' })]);
   });
 
-  it('passes 4 column validations covering the 3 amount fields and devolutionFormula', async () => {
+  it('passes 2 column validations (Total and devolutionFormula); the instalment columns are formulas', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
     const columnValidations = calls[0][3] as Array<{ key: string; mode: string }>;
-    expect(columnValidations).toHaveLength(4);
-    expect(columnValidations.map((v) => v.key)).toEqual([
-      'totalGrantAllocation',
-      'installment1Amount',
-      'installment2Amount',
-      'devolutionFormula',
-    ]);
+    expect(columnValidations.map((v) => v.key)).toEqual(['totalGrantAllocation', 'devolutionFormula']);
     expect(columnValidations[0].mode).toBe('perRow');
+    // devolutionFormula is perRow/custom with allowBlank:false so Excel blocks a blank cell
+    // (a static textLength rule with allowBlank:true never flags an empty cell).
     expect(columnValidations[1].mode).toBe('perRow');
-    expect(columnValidations[2].mode).toBe('perRow');
-    // devolutionFormula is now perRow/custom with allowBlank:false so Excel blocks a blank cell
-    // (a static textLength rule with allowBlank:true, as before, never flags an empty cell).
-    expect(columnValidations[3].mode).toBe('perRow');
+  });
+
+  it('builds a hard-stop Total validation: whole, >= 0, <= MoHUA allocation, no instalment sum clause', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const columnValidations = calls[0][3] as Array<{
+      key: string;
+      buildValidation: (row: number, keyToLetter: Map<string, string>) => Record<string, unknown>;
+    }>;
+    const built = columnValidations[0].buildValidation(2, new Map([['totalGrantAllocation', 'E']]));
+    const [formula] = built['formulae'] as string[];
+
+    expect(built['errorStyle']).toBe('error');
+    expect(formula).toContain('MOD(E2,1)=0');
+    expect(formula).toContain('E2>=0');
+    expect(formula).toContain('E2<=');
+    expect(formula).not.toMatch(/[CD]2/);
+  });
+
+  it('protects the template and fills both instalment cells with a Total / 2 formula', async () => {
+    await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
+
+    const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
+    const rows = calls[0][1] as Array<Record<string, unknown>>;
+    expect(calls[0][4]).toEqual({ protectLockedColumns: true });
+    // First data row is Excel row 2; the Total sits in column E. Blank Total -> blank cached result.
+    expect(rows[0]['installment1Amount']).toEqual({ formula: 'IF(E2="","",E2/2)', result: '' });
+    expect(rows[0]['installment2Amount']).toEqual({ formula: 'IF(E2="","",E2/2)', result: '' });
+  });
+
+  it('marks only the instalment template columns as locked, with a 2-decimal number format', () => {
+    const locked = DF_TEMPLATE_HEADERS.filter((h) => h.locked).map((h) => h.key);
+    expect(locked).toEqual(['installment1Amount', 'installment2Amount']);
+    expect(DF_TEMPLATE_HEADERS.find((h) => h.key === 'installment1Amount')?.numFmt).toBe('#,##0.00');
   });
 
   it('builds a required, non-blank-blocking validation formula for devolutionFormula', async () => {
@@ -1027,9 +1241,10 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
       ulbId: ulbOid, // matched registry ULB — overlay pattern uses this to join
       censusCode: 'C001',
       ulbName: 'Alpha City',
-      totalGrantAllocation: 500_000,
+      totalGrantAllocation: 500_001,
+      // An old uneven split: the template shows Total / 2 instead.
       installment1Amount: 300_000,
-      installment2Amount: 200_000,
+      installment2Amount: 200_001,
       devolutionFormula: 'Population-based',
       isActive: true,
     };
@@ -1050,13 +1265,14 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
 
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
     const rows = calls[0][1] as Array<Record<string, unknown>>;
+    const halfCell = { formula: 'IF(E2="","",E2/2)', result: 250_000.5 };
     expect(rows).toEqual([
       expect.objectContaining({
         censusCode: 'C001',
         ulbName: 'Alpha City',
-        totalGrantAllocation: 500_000,
-        installment1Amount: 300_000,
-        installment2Amount: 200_000,
+        totalGrantAllocation: 500_001,
+        installment1Amount: halfCell,
+        installment2Amount: halfCell,
         devolutionFormula: 'Population-based',
       }),
     ]);
