@@ -202,11 +202,11 @@ describe('AnnualAccountManualReviewService', () => {
 
     const YEAR_ID = '507f1f77bcf86cd799439012';
 
-    // 4 failed uploads in a row by default: enough for a manual review request.
+    // 3 failed uploads in a row by default: enough for a manual review request.
     const docWithOcr = (
       ocrInfo: Record<string, unknown>,
       upload: Record<string, unknown> = { version: 4 },
-      failedUploadsInARow = 4,
+      failedUploadsInARow = 3,
     ) =>
       mockQuery({
         _id: ACCOUNT_ID,
@@ -279,9 +279,9 @@ describe('AnnualAccountManualReviewService', () => {
       );
     });
 
-    it('rejects a FAIL before 4 failed uploads in a row, however often the same file was retried', async () => {
+    it('rejects a FAIL before 3 failed uploads in a row, however often the same file was retried', async () => {
       mockAnnualAccountModel.findById.mockReturnValue(
-        docWithOcr({ validationStatus: 'FAIL' }, { version: 3, retryValidationCount: 5 }, 3),
+        docWithOcr({ validationStatus: 'FAIL' }, { version: 3, retryValidationCount: 5 }, 2),
       );
 
       await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
