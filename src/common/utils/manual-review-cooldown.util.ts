@@ -23,9 +23,9 @@ export const UPLOAD_BLOCKED_MESSAGE =
   `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_HOURS} hours. ` +
   `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
 
-/** Manual review is a last resort: a document must have failed this many uploads in a row (the first upload and 3
+/** Manual review is a last resort: a document must have failed this many uploads in a row (the first upload and 2
  *  re-uploads) before the ULB can ask for one. Retries of the same file don't count; a pass starts again from 0. */
-export const MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW = 4;
+export const MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW = 3;
 
 /** A document slot's run of failed uploads, as `failedUploadsInARow` and the upload that last added to it. */
 interface FailedUploadRun {

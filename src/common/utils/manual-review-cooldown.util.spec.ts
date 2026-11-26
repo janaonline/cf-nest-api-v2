@@ -96,8 +96,8 @@ describe('failedUploadRunUpdate / hasEnoughFailedUploads', () => {
   });
 
   it(`allows a manual review only from ${MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row`, () => {
-    expect(hasEnoughFailedUploads({ failedUploadsInARow: 3 })).toBe(false);
-    expect(hasEnoughFailedUploads({ failedUploadsInARow: 4 })).toBe(true);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 2 })).toBe(false);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 3 })).toBe(true);
     expect(hasEnoughFailedUploads(undefined)).toBe(false);
   });
 });

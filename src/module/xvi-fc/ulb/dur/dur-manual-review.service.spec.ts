@@ -186,8 +186,8 @@ describe('DurManualReviewService.requestManualReview', () => {
     ulb: '507f1f77bcf86cd799439011',
   } as AuthUser;
 
-  // 4 failed uploads in a row unless a test says otherwise: enough for a manual review request.
-  const durWithUpload = (upload: Record<string, unknown>, failedUploadsInARow = 4) => ({
+  // 3 failed uploads in a row unless a test says otherwise: enough for a manual review request.
+  const durWithUpload = (upload: Record<string, unknown>, failedUploadsInARow = 3) => ({
     _id: DUR_ID,
     ulb: '507f1f77bcf86cd799439011',
     design_year: '507f1f77bcf86cd799439013',
@@ -223,8 +223,8 @@ describe('DurManualReviewService.requestManualReview', () => {
     );
   });
 
-  it('rejects a FAIL before 4 failed uploads in a row, however often the same file was retried', async () => {
-    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 3, retryValidationCount: 5 }, 3)));
+  it('rejects a FAIL before 3 failed uploads in a row, however often the same file was retried', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 3, retryValidationCount: 5 }, 2)));
 
     await expect(service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser)).rejects.toThrow(
       FIRST_ATTEMPT_MESSAGE,
@@ -243,7 +243,7 @@ describe('DurManualReviewService.requestManualReview', () => {
     expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
   });
 
-  it('creates the request after 4 failed uploads in a row on an editable form', async () => {
+  it('creates the request after 3 failed uploads in a row on an editable form', async () => {
     mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 2 })));
 
     await service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser);
