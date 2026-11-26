@@ -9,6 +9,7 @@ import {
   CreateCommentDto,
   CreateThreadDto,
   ListThreadsQueryDto,
+  ReportPostDto,
   ThreadReactionDto,
   UpdateThreadDto,
 } from './dto/forum.dto';
@@ -117,6 +118,28 @@ export class ForumController {
     @CurrentUser() user: IAuthUser,
   ) {
     return this.forum.likeComment(commentId, dto.active, user);
+  }
+
+  @Post('threads/:threadId/report')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Report a thread to the forum administrators (once per user)' })
+  reportThread(
+    @Param('threadId', ParseObjectIdPipe) threadId: string,
+    @Body() dto: ReportPostDto,
+    @CurrentUser() user: IAuthUser,
+  ) {
+    return this.forum.reportPost('thread', threadId, dto.reason, user);
+  }
+
+  @Post('comments/:commentId/report')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Report a reply to the forum administrators (once per user)' })
+  reportComment(
+    @Param('commentId', ParseObjectIdPipe) commentId: string,
+    @Body() dto: ReportPostDto,
+    @CurrentUser() user: IAuthUser,
+  ) {
+    return this.forum.reportPost('comment', commentId, dto.reason, user);
   }
 
   /** `req.ip` honours `trust proxy` (main.ts); the forwarded headers are never read directly. */

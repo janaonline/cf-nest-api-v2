@@ -8,6 +8,9 @@ import { ForumLike, ForumLikeSchema } from '../../schemas/forum/forum-like.schem
 import { ForumThreadView, ForumThreadViewSchema } from '../../schemas/forum/forum-thread-view.schema';
 import { ForumThread, ForumThreadSchema } from '../../schemas/forum/forum-thread.schema';
 import { ForumUserAgent, ForumUserAgentSchema } from '../../schemas/forum/forum-user-agent.schema';
+import { ForumReport, ForumReportSchema } from '../../schemas/forum/forum-report.schema';
+import { State, StateSchema } from '../../schemas/state.schema';
+import { Ulb, UlbSchema } from '../../schemas/ulb.schema';
 import { User, UserSchema } from '../../schemas/user/user.schema';
 import { ForumAdminController } from './forum-admin.controller';
 import { ForumAdminService } from './forum-admin.service';
@@ -25,11 +28,16 @@ import { ForumService } from './forum.service';
         { name: ForumBookmark.name, schema: ForumBookmarkSchema },
         { name: ForumThreadView.name, schema: ForumThreadViewSchema },
         { name: ForumUserAgent.name, schema: ForumUserAgentSchema },
+        { name: ForumReport.name, schema: ForumReportSchema },
       ],
       FORUM_DB_CONNECTION,
     ),
-    // Users live in the primary database, not forum_db.
-    MongooseModule.forFeature([{ name: User.name, schema: UserSchema }]),
+    // Users, ULBs and States live in the primary database, not forum_db.
+    MongooseModule.forFeature([
+      { name: User.name, schema: UserSchema },
+      { name: Ulb.name, schema: UlbSchema },
+      { name: State.name, schema: StateSchema },
+    ]),
   ],
   controllers: [ForumController, ForumAdminController],
   providers: [ForumService, ForumAdminService],

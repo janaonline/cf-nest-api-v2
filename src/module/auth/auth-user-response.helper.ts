@@ -2,6 +2,7 @@ import { UserDocument } from 'src/schemas/user/user.schema';
 import { AdcDocument } from 'src/schemas/adc.schema';
 import { StateDocument } from 'src/schemas/state.schema';
 import { UlbDocument } from 'src/schemas/ulb.schema';
+import { resolveForumDisplayName } from 'src/common/utils/forum-display-name.util';
 import { Role } from './enum/role.enum';
 import { parseUserRole } from './roles-xvi-fc.helper';
 
@@ -47,5 +48,13 @@ export function buildUserResponsePayload(
     isUA: user.role === Role.ULB ? (ulb?.isUA ?? null) : null,
     isMillionPlus: user.role === Role.ULB ? (ulb?.isMillionPlus ?? null) : null,
     isUserVerified2223: user.isVerified2223,
+    // TS-1305: the ULB / State DMA / MoHUA name the forum shows in the user menu while on /forum.
+    forumDisplayName: resolveForumDisplayName({
+      role: user.role,
+      accountName: user.name,
+      email: user.email,
+      ulbName: ulb?.name,
+      stateName: state?.name,
+    }),
   };
 }
