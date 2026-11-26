@@ -40,9 +40,14 @@ applied across all ULBs, and 45 of one state's 76 ULBs had odd Totals.
 - An odd Total gives x.50 instalments. That is safe where typed decimals were not: halves of whole
   Rupees are only ever .00 or .50, which floating point represents and adds exactly, so sums can't
   drift the way arbitrary typed decimals did.
-- The template shows the instalments as locked `IF(<Total>="","",<Total>/2)` formula columns
-  (`DF_TEMPLATE_HEADERS` `locked`, `ExcelService` `protectLockedColumns`, no password). The lock is
-  guidance only; the server derives the values regardless.
+- The template shows the instalments as `IF(<Total>="","",<Total>/2)` formula columns marked
+  `readOnly` in `DF_TEMPLATE_HEADERS`, with a header comment (`DF_INSTALLMENT_NOTE`). For a
+  `readOnly` column `ExcelService` greys the header and data rows (down to the last ULB only) and adds
+  a data validation that shows the comment text on selection and refuses any typed entry. The sheet is
+  not protected: Excel's normal paste copies the source's Locked flag, so on a protected sheet pasted
+  Total / Formula cells locked themselves. A paste or Delete can still change the instalment cells in
+  the file; that is guidance only, since the server derives the values regardless. The error sheets
+  (`DF_ERROR_EXCEL_HEADERS`) hold fixed instalment values, so they drop `readOnly` and the comment.
 - `UpdateRowDevolutionFormulaDto` keeps the two instalment fields so a sent value gets the
   `installmentNotHalf` error above rather than the global `forbidNonWhitelisted` one.
 

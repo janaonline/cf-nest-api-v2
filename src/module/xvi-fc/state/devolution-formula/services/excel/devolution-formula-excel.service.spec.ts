@@ -4,7 +4,7 @@ import { MongoServerError } from 'mongodb';
 import { Types } from 'mongoose';
 import * as XLSX from 'xlsx';
 import { DevolutionFormulaExcelService } from './devolution-formula-excel.service';
-import { DF_TEMPLATE_HEADERS } from '../../constants/devolution-formula.constants';
+import { DF_ERROR_EXCEL_HEADERS, DF_TEMPLATE_HEADERS } from '../../constants/devolution-formula.constants';
 import { DevolutionFormulaValidator } from '../../validators/devolution-formula.validator';
 import { DevolutionFormulaForm } from 'src/schemas/xvi-fc/state/devolution-formula-form.schema';
 import { DevolutionFormulaRow } from 'src/schemas/xvi-fc/state/devolution-formula-row.schema';
@@ -1168,7 +1168,8 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(rows).toEqual([expect.objectContaining({ censusCode: 'C001', ulbName: 'Alpha City' })]);
   });
 
-  it('passes 2 column validations (Total and devolutionFormula); the instalment columns are formulas', async () => {
+  // The instalment columns' read-only rule comes from their `readOnly` header in ExcelService, not from here.
+  it('passes 2 column validations (Total and devolutionFormula)', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
@@ -1180,6 +1181,14 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(columnValidations[1].mode).toBe('perRow');
   });
 
+  it('keeps the error sheet plain: no read-only look or comment on its fixed instalment values', () => {
+    expect(DF_ERROR_EXCEL_HEADERS.map((h) => h.key)).toEqual([...DF_TEMPLATE_HEADERS.map((h) => h.key), 'errors']);
+    for (const header of DF_ERROR_EXCEL_HEADERS) {
+      expect(header.readOnly).toBeUndefined();
+      expect(header.note).toBeUndefined();
+    }
+  });
+
   it('builds a hard-stop Total validation: whole, >= 0, <= MoHUA allocation, no instalment sum clause', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
@@ -1188,7 +1197,8 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
       key: string;
       buildValidation: (row: number, keyToLetter: Map<string, string>) => Record<string, unknown>;
     }>;
-    const built = columnValidations[0].buildValidation(2, new Map([['totalGrantAllocation', 'E']]));
+    const totalValidation = columnValidations.find((v) => v.key === 'totalGrantAllocation')!;
+    const built = totalValidation.buildValidation(2, new Map([['totalGrantAllocation', 'E']]));
     const [formula] = built['formulae'] as string[];
 
     expect(built['errorStyle']).toBe('error');
@@ -1198,21 +1208,24 @@ describe('DevolutionFormulaExcelService — generateTemplate', () => {
     expect(formula).not.toMatch(/[CD]2/);
   });
 
-  it('protects the template and fills both instalment cells with a Total / 2 formula', async () => {
+  it('fills both instalment cells with a Total / 2 formula, without protecting the sheet', async () => {
     await service.generateTemplate(stateOid.toString(), YEAR_ID, 1, adminUser);
 
     const calls = mockExcelService.generateExcel.mock.calls as unknown[][];
     const rows = calls[0][1] as Array<Record<string, unknown>>;
-    expect(calls[0][4]).toEqual({ protectLockedColumns: true });
+    expect(calls[0]).toHaveLength(4);
     // First data row is Excel row 2; the Total sits in column E. Blank Total -> blank cached result.
     expect(rows[0]['installment1Amount']).toEqual({ formula: 'IF(E2="","",E2/2)', result: '' });
     expect(rows[0]['installment2Amount']).toEqual({ formula: 'IF(E2="","",E2/2)', result: '' });
   });
 
-  it('marks only the instalment template columns as locked, with a 2-decimal number format', () => {
-    const locked = DF_TEMPLATE_HEADERS.filter((h) => h.locked).map((h) => h.key);
-    expect(locked).toEqual(['installment1Amount', 'installment2Amount']);
-    expect(DF_TEMPLATE_HEADERS.find((h) => h.key === 'installment1Amount')?.numFmt).toBe('#,##0.00');
+  it('marks only the instalment template columns as read-only, with a 2-decimal number format and a header comment', () => {
+    const readOnly = DF_TEMPLATE_HEADERS.filter((h) => h.readOnly);
+    expect(readOnly.map((h) => h.key)).toEqual(['installment1Amount', 'installment2Amount']);
+    for (const header of readOnly) {
+      expect(header.numFmt).toBe('#,##0.00');
+      expect(header.note).toBe('Calculated automatically as half of the Total Allocation.');
+    }
   });
 
   it('builds a required, non-blank-blocking validation formula for devolutionFormula', async () => {

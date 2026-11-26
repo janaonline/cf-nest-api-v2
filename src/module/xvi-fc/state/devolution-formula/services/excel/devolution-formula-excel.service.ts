@@ -868,7 +868,6 @@ export class DevolutionFormulaExcelService {
         rows,
         'ULB-wise Allocation',
         this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
-        { protectLockedColumns: true },
       );
     }
 
@@ -886,7 +885,6 @@ export class DevolutionFormulaExcelService {
       rows,
       'ULB-wise Allocation',
       this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
-      { protectLockedColumns: true },
     );
   }
 
@@ -907,6 +905,7 @@ export class DevolutionFormulaExcelService {
 
   private buildDfTemplateValidations(maxFormulaLength: number, totalMoHUAAllocation?: number): ExcelColumnValidation[] {
     const maxText = totalMoHUAAllocation !== undefined ? `, and cannot exceed ₹${totalMoHUAAllocation}` : '';
+    // The instalment columns' read-only rule comes from their `readOnly` header (ExcelService).
     return [
       {
         key: 'totalGrantAllocation',

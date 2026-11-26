@@ -38,23 +38,28 @@ export const DF_REQUIRED_EXCEL_KEYS = ['ulbName', 'totalGrantAllocation', 'devol
 /** Instalments are Total / 2, so they can end in .50. */
 export const DF_INSTALLMENT_NUM_FMT = '#,##0.00';
 
-// Instalment columns are locked formula cells in the template (Total / 2); the State types only the Total.
+/** Header comment on the instalment columns; the portal's header tooltips use the same text. */
+export const DF_INSTALLMENT_NOTE = 'Calculated automatically as half of the Total Allocation.';
+
+// Instalment columns are read-only, greyed-out formula cells in the template (Total / 2); the State types only the Total.
 export const DF_TEMPLATE_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   {
     label: 'Installment 1 Amount (Rs.)',
     key: 'installment1Amount',
-    width: 22,
+    width: 27,
     numFmt: DF_INSTALLMENT_NUM_FMT,
-    locked: true,
+    readOnly: true,
+    note: DF_INSTALLMENT_NOTE,
   },
   {
     label: 'Installment 2 Amount (Rs.)',
     key: 'installment2Amount',
-    width: 22,
+    width: 27,
     numFmt: DF_INSTALLMENT_NUM_FMT,
-    locked: true,
+    readOnly: true,
+    note: DF_INSTALLMENT_NOTE,
   },
   { label: 'Total Grant Allocation (Rs.)', key: 'totalGrantAllocation', width: 24 },
   { label: 'Allocation Formula', key: 'devolutionFormula', width: 30 },
@@ -65,8 +70,9 @@ export const DF_TEMPLATE_TOTAL_COLUMN_LETTER = String.fromCharCode(
   65 + DF_TEMPLATE_HEADERS.findIndex((h) => h.key === 'totalGrantAllocation'),
 );
 
+// The error sheet holds fixed instalment values, not formulas, so it is neither greyed out nor commented.
 export const DF_ERROR_EXCEL_HEADERS: RowHeader[] = [
-  ...DF_TEMPLATE_HEADERS,
+  ...DF_TEMPLATE_HEADERS.map(({ readOnly: _readOnly, note: _note, ...header }) => header),
   { label: 'Errors', key: 'errors', width: 70 },
 ];
 
