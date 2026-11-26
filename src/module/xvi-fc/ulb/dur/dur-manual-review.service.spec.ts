@@ -1,7 +1,7 @@
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { DurManualReviewService } from './dur-manual-review.service';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
-import { FIRST_ATTEMPT_MESSAGE } from 'src/common/utils/manual-review-cooldown.util';
+import { DUR_FIRST_ATTEMPT_MESSAGE } from 'src/common/utils/manual-review-cooldown.util';
 
 /** Mimics a Mongoose query chain — `.select()`/`.lean()` are no-ops that return the same
  *  chain object, `.exec()` resolves to the given value, regardless of call order. */
@@ -186,8 +186,8 @@ describe('DurManualReviewService.requestManualReview', () => {
     ulb: '507f1f77bcf86cd799439011',
   } as AuthUser;
 
-  // 4 failed uploads in a row unless a test says otherwise: enough for a manual review request.
-  const durWithUpload = (upload: Record<string, unknown>, failedUploadsInARow = 4) => ({
+  // 2 failed uploads in a row unless a test says otherwise: enough for a manual review request.
+  const durWithUpload = (upload: Record<string, unknown>, failedUploadsInARow = 2) => ({
     _id: DUR_ID,
     ulb: '507f1f77bcf86cd799439011',
     design_year: '507f1f77bcf86cd799439013',
@@ -223,11 +223,11 @@ describe('DurManualReviewService.requestManualReview', () => {
     );
   });
 
-  it('rejects a FAIL before 4 failed uploads in a row, however often the same file was retried', async () => {
-    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 3, retryValidationCount: 5 }, 3)));
+  it('rejects a FAIL before 2 failed uploads in a row, however often the same file was retried', async () => {
+    mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 3, retryValidationCount: 5 }, 1)));
 
     await expect(service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser)).rejects.toThrow(
-      FIRST_ATTEMPT_MESSAGE,
+      DUR_FIRST_ATTEMPT_MESSAGE,
     );
     expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
   });
@@ -243,7 +243,7 @@ describe('DurManualReviewService.requestManualReview', () => {
     expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
   });
 
-  it('creates the request after 4 failed uploads in a row on an editable form', async () => {
+  it('creates the request after 2 failed uploads in a row on an editable form', async () => {
     mockDurModel.findById.mockReturnValue(mockQuery(durWithUpload({ version: 2 })));
 
     await service.requestManualReview(DUR_ID, 'tiedGrant' as any, ulbUser);
