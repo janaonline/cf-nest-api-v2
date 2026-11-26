@@ -23,9 +23,13 @@ export const UPLOAD_BLOCKED_MESSAGE =
   `Too many failed attempts on this document. Uploads are temporarily blocked for ${POST_REJECTION_COOLDOWN_HOURS} hours. ` +
   `For further details, please email ${MANUAL_REVIEW_SUPPORT_EMAIL}.`;
 
-/** Manual review is a last resort: a document must have failed this many uploads in a row (the first upload and 2
- *  re-uploads) before the ULB can ask for one. Retries of the same file don't count; a pass starts again from 0. */
+/** Manual review is a last resort: an Annual Accounts document (Audited / Provisional) must have failed this many
+ *  uploads in a row (the first upload and 2 re-uploads) before the ULB can ask for one. Retries of the same file
+ *  don't count; a pass starts again from 0. */
 export const MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW = 3;
+
+/** The same rule for DUR documents, which allow it sooner: the first upload and 1 re-upload. */
+export const DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW = 2;
 
 /** A document slot's run of failed uploads, as `failedUploadsInARow` and the upload that last added to it. */
 interface FailedUploadRun {
@@ -51,13 +55,19 @@ export function failedUploadRunUpdate(
   };
 }
 
-/** True once the slot has failed MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW uploads in a row. Mirrors the UI's
- *  isEligibleForManualReview. */
-export function hasEnoughFailedUploads(slot: FailedUploadRun | null | undefined): boolean {
-  return (slot?.failedUploadsInARow ?? 0) >= MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW;
+/** True once the slot has failed `min` uploads in a row (Annual Accounts by default; DUR passes its own).
+ *  Mirrors the UI's isEligibleForManualReview. */
+export function hasEnoughFailedUploads(
+  slot: FailedUploadRun | null | undefined,
+  min: number = MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW,
+): boolean {
+  return (slot?.failedUploadsInARow ?? 0) >= min;
 }
 
-export const FIRST_ATTEMPT_MESSAGE = `Please re-upload a corrected document before requesting a manual review: it can be requested after ${MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row.`;
+const firstAttemptMessage = (min: number) =>
+  `Please re-upload a corrected document before requesting a manual review: it can be requested after ${min} failed uploads in a row.`;
+export const FIRST_ATTEMPT_MESSAGE = firstAttemptMessage(MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW);
+export const DUR_FIRST_ATTEMPT_MESSAGE = firstAttemptMessage(DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW);
 
 /** Returns true while this document's `uploadBlockedUntil` cooldown is still in effect. */
 export function isUploadBlocked(uploadBlockedUntil: Date | null | undefined): boolean {

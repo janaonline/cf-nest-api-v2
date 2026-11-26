@@ -36,7 +36,8 @@ import {
 } from 'src/module/file/file-response.util';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import {
-  FIRST_ATTEMPT_MESSAGE,
+  DUR_FIRST_ATTEMPT_MESSAGE,
+  DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW,
   MAX_POST_REJECTION_ATTEMPTS,
   MANUAL_REVIEW_SUPPORT_EMAIL,
   UPLOAD_BLOCKED_MESSAGE,
@@ -117,8 +118,8 @@ export class DurManualReviewService {
     if (docSlot.currentUpload.ocrInfo?.validationStatus?.toUpperCase() !== 'FAIL') {
       throw new BadRequestException('Manual review can only be requested for a failed validation.');
     }
-    if (!hasEnoughFailedUploads(docSlot)) {
-      throw new BadRequestException(FIRST_ATTEMPT_MESSAGE);
+    if (!hasEnoughFailedUploads(docSlot, DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW)) {
+      throw new BadRequestException(DUR_FIRST_ATTEMPT_MESSAGE);
     }
     if (docSlot.currentUpload.ocrInfo?.isManualReviewRequested) {
       throw new BadRequestException('Manual review has already been requested for this document.');

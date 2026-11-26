@@ -257,7 +257,8 @@ export class DocumentItem {
   /**
    * Uploads of this document that failed in a row (a real FAIL verdict). Counted once per upload, so retries of the
    * same file don't add; a pass resets it to 0. "Request Manual Review" needs MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW
-   * (common/utils/manual-review-cooldown.util.ts). Shared by DUR, which reuses this sub-schema.
+   * (DUR, which reuses this sub-schema, needs DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW;
+   * common/utils/manual-review-cooldown.util.ts).
    */
   @Prop({ default: 0 })
   failedUploadsInARow!: number;
