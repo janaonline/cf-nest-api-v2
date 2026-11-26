@@ -5,6 +5,7 @@ MoHUA's recommendation to the Department of Expenditure to release the installme
 the generated PDF through e-Office for signature and uploads the signed PDF back.
 
 ## Data
+
 - `xvifc_om_ulbs` (`schemas/xvi-fc/mohua/om-ulb.schema.ts`): one row per ULB of a verified letter, copied from the
   claim letter's ULB rows by `copyClaimLetterUlbsToOm` (`om-ulbs.helper.ts`) inside the SO's approve transaction
   (`mohua/claim-letters` `approve()`). Generate stamps `om` on them. The unique `{state, year, installment, ulbId}`
@@ -17,14 +18,17 @@ the generated PDF through e-Office for signature and uploads the signed PDF back
 - `xvifc_om_logs`: GENERATED / SIGNED_UPLOADED rows.
 
 ## Content
+
 `om-content.builder.ts` builds the OM from the claim letter's own full document
 (`ClaimLetterDocumentService.buildFullDocument`): rows A-K are the letter's compliance rows, printed as plain text
 (the letter's own letter-detail boxes are dropped). Fixed text (letterhead, address, signatory, addressee) is in
 `om.constants.ts`. The year allocation printed is the State's **basic** grant from `grantAllocation`.
 
 ## The download: one PDF
+
 Generate and `GET :omId/pdf` return one PDF: the OM, then the claim letter's ULB lists (rows J and K), then its
 annexures (Elected Body, GTC, Unspent Declaration, ATR... - formjson 26 `meta.mergeDocuments`).
+
 - The ULB lists (eligible / ineligible) are frozen in `content.ulbLists` on Generate and drawn on landscape pages with
   the claim letter's own column widths and alignment (`claim-letter-annexure-columns.helpers.ts`, shared with its
   .docx), followed by a note (`OM_ULB_LISTS_FOOTNOTE`, frozen with them). "₹" prints as "Rs." (the PDF's standard fonts have no rupee sign). The editor view leaves them out. An OM
@@ -39,15 +43,24 @@ annexures (Elected Body, GTC, Unspent Declaration, ATR... - formjson 26 `meta.me
   unreadable stored PDF is a 422.
 
 ## Boxes
+
 Only the "No." (`omNumber`, the e-Office file number) is required; "Dated" (`omDate`) defaults to today (IST).
 `OM_FIELDS` is in the shape the portal's inline letter boxes read. Drafts autosave through `PATCH .../draft`;
 once generated the OM can no longer be edited (the upsert hits the one-OM-per-letter index → 409).
 
 ## Access
+
 Reads: MoHUA / DoE (read-only) / ADMIN (`isMohuaViewScope`). Writes: `ISSUE_OFFICE_MEMORANDUM` + MoHUA scope
 (`assertReviewerAccess`); DoE writes are blocked globally by `DoeReadOnlyGuard`.
 
+## History
+
+`GET history/:yearId/:installment` lists every GENERATED and SIGNED_UPLOADED OM; the UI labels them **Generated** and
+**Issued**. `issuedOn` is the OM's own "Dated" (`omDate`, printed on the signed copy) and is null until the signed
+copy is uploaded; `allocation` is the State's installment allocation (basic + performance, halved, the Claims &
+Submissions figure) next to `totalAmount`, the amount claimed.
+
 ## Not built yet
-DoE status (history shows PENDING), excluding cities from an OM (an OM always covers every ULB on its letter),
-moving the claim letter past 5. MoHUA's return of a verified letter (5 -> 6), when built, must delete that letter's
-`xvifc_om_ulbs` rows, or its ULBs can never be approved again this installment.
+DoE status (dropped from the history until DoE tracking exists), excluding cities from an OM (an OM always covers
+every ULB on its letter), moving the claim letter past 5. MoHUA's return of a verified letter (5 -> 6), when built,
+must delete that letter's `xvifc_om_ulbs` rows, or its ULBs can never be approved again this installment.

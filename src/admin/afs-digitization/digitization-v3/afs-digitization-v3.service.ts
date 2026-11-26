@@ -117,8 +117,8 @@ const SCORE_REFRESH_DELAY_MS = 3 * 60 * 1000;
 /** Arithmetic status FastAPI stores when the uploaded doc type isn't in the PDF (no checks ran). */
 const ARITHMETIC_SKIPPED = 'SKIPPED';
 
-/** Files digitized before this date are the old flow's (legacy). v3 went live in September 2026. */
-const LEGACY_CUTOFF = new Date('2026-09-01T00:00:00.000Z');
+/** Files digitized before this date are the old flow's (legacy): everything before November 2026. */
+const LEGACY_CUTOFF = new Date('2026-11-01T00:00:00.000Z');
 
 export interface OverallRecalcSummary {
   scanned: number;
@@ -376,8 +376,14 @@ export class AfsDigitizationV3Service implements OnModuleInit, OnModuleDestroy {
         continue;
       }
 
-      const current = records.get(row.ulb.toString())?.status;
-      if (current === DigitizationV3Statuses.DIGITIZED && !query.redigitize) {
+      const record = records.get(row.ulb.toString());
+      const current = record?.status;
+      // Old-flow files show as digitized on the page (displayStatus) though their raw status is not_digitized,
+      // so they are skipped here too; the row-level Redigitize (redigitize=true) still queues them.
+      if (
+        (current === DigitizationV3Statuses.DIGITIZED || this.displayStatus(record) === DigitizationV3Statuses.DIGITIZED) &&
+        !query.redigitize
+      ) {
         summary.skippedAlreadyDigitized++;
         continue;
       }

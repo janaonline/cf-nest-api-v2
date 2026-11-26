@@ -70,10 +70,7 @@ describe('PermissionGuard', () => {
   });
 
   it('returns true for an ADMIN user regardless of the permissions required (ADMIN has all)', () => {
-    reflector.getAllAndOverride.mockReturnValue([
-      Permission.MANAGE_USERS,
-      Permission.FINAL_SUBMIT_TO_DOE,
-    ]);
+    reflector.getAllAndOverride.mockReturnValue([Permission.MANAGE_USERS, Permission.FINAL_SUBMIT_TO_DOE]);
     const ctx = makeContext({ role: UserRole.ADMIN });
 
     expect(guard.canActivate(ctx)).toBe(true);
@@ -113,6 +110,29 @@ describe('PermissionGuard', () => {
     const ctx = makeContext({ role: UserRole.MoHUA, xviFcSubrole: 'reviewer' });
 
     expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('lets a MoHUA reviewer do every review action the admin can (approve / return claim letters, OMs)', () => {
+    reflector.getAllAndOverride.mockReturnValue([
+      Permission.APPROVE_STATE_SUBMISSIONS,
+      Permission.ISSUE_OFFICE_MEMORANDUM,
+      Permission.FINAL_SUBMIT_TO_DOE,
+    ]);
+    const ctx = makeContext({ role: UserRole.MoHUA, xviFcSubrole: 'reviewer' });
+
+    expect(guard.canActivate(ctx)).toBe(true);
+  });
+
+  it('keeps MoHUA team management with the admin, and the MoHUA viewer read-only', () => {
+    reflector.getAllAndOverride.mockReturnValue([Permission.MANAGE_USERS]);
+    expect(() => guard.canActivate(makeContext({ role: UserRole.MoHUA, xviFcSubrole: 'reviewer' }))).toThrow(
+      ForbiddenException,
+    );
+
+    reflector.getAllAndOverride.mockReturnValue([Permission.APPROVE_STATE_SUBMISSIONS]);
+    expect(() => guard.canActivate(makeContext({ role: UserRole.MoHUA, xviFcSubrole: 'viewer' }))).toThrow(
+      ForbiddenException,
+    );
   });
 
   it('throws ForbiddenException for a ULB user (permission matrix not yet implemented → no permissions)', () => {

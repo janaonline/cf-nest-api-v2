@@ -13,6 +13,17 @@ export const MOHUA_OVERVIEW_COMPLETED_FORM_STATUSES: ReadonlySet<number> = new S
 ]);
 
 /**
+ * A state-condition form counts as **approved** on the State page's "State Form Completion" cards once PMU has
+ * approved it (under SO review, 15) and through every later step (under MoHUA review 5, acknowledged 7). Stricter than
+ * MOHUA_OVERVIEW_COMPLETED_FORM_STATUSES, which also counts a form still with PMU (13) and drives the Overview stages.
+ */
+export const MOHUA_STATE_FORM_APPROVED_STATUSES: ReadonlySet<number> = new Set<number>([
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+]);
+
+/**
  * The one set of labels shown for state-condition forms, whatever the form: not started / in
  * progress / under review. Statuses not listed fall back to the standard FORM_STATUS label.
  */
@@ -27,17 +38,18 @@ export const MOHUA_OVERVIEW_STATE_FORM_STATUS_LABEL: Readonly<Record<number, str
 };
 
 /**
- * A ULB form counts as submitted once it has reached the State or gone beyond it: under review by
- * State, under review by MoHUA, acknowledged, approved by State, awaiting claim letter — or the ULB
- * is exempt from it (a genuinely new ULB). Returned statuses (4, 6) do not count. Using only
- * "under review by State" would drop a ULB from the count as soon as the State acts on it.
+ * MoHUA counts a ULB form as done only once the State has approved it: approved by State (8), and every status a
+ * claim letter moves it on to afterwards (awaiting claim letter 9, under SO review 15, under MoHUA review 5,
+ * acknowledged 7) — or the ULB is exempt from it (12). A form still with the State (3) or returned (4, 6, 16) does
+ * not count. Used by the ULB-wise ticks, the State page's ULB Form Completion cards, the Overview and the per-ULB
+ * forms page alike, so they always agree.
  */
 export const MOHUA_OVERVIEW_ULB_SUBMITTED_STATUSES: ReadonlySet<number> = new Set<FormStatusType>([
-  FORM_STATUS.UNDER_REVIEW_BY_STATE,
-  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
-  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
   FORM_STATUS.APPROVED_BY_STATE,
   FORM_STATUS.AWAITING_CLAIM_LETTER,
+  FORM_STATUS.UNDER_REVIEW_BY_SO,
+  FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+  FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
   FORM_STATUS.EXEMPTED_ACKNOWLEDGED,
 ]);
 

@@ -533,6 +533,7 @@ export class DurService {
         manualReviewDecision: d.manualReviewDecision,
         postRejectionAttemptsUsed: d.postRejectionAttemptsUsed,
         passedReplacementsUsed: d.passedReplacementsUsed ?? 0,
+        failedUploadsInARow: d.failedUploadsInARow ?? 0,
         manualReviewRejectionCount: d.manualReviewRejectionCount,
         uploadBlockedUntil: d.uploadBlockedUntil,
       })),

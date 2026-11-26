@@ -142,48 +142,46 @@ describe('UsersService', () => {
     it('throws 404 when target user does not exist', async () => {
       mockUserModel.exec.mockResolvedValueOnce(null);
       const dto = makeOverridesDto();
-      await expect(service.updatePermissionOverrides(targetId, dto, makeUlbAdmin())).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.updatePermissionOverrides(targetId, dto, makeUlbAdmin())).rejects.toThrow(NotFoundException);
     });
 
     it('throws 400 for an invalid target user ID', async () => {
       const dto = makeOverridesDto();
-      await expect(
-        service.updatePermissionOverrides('not-an-object-id', dto, makeUlbAdmin()),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.updatePermissionOverrides('not-an-object-id', dto, makeUlbAdmin())).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     // Same-tenant scoping — previously flagged (see git history) as documented in the JSDoc but
     // not enforced by the code; "admin-only" itself is the route's @RequirePermissions guard's
     // job, not this service's — these tests cover the part that IS this service's job: the
     // target must belong to the requester's own ULB/state/organization.
-    describe('authorization scoping — target must belong to the requester\'s own tenant', () => {
+    describe("authorization scoping — target must belong to the requester's own tenant", () => {
       it('rejects a STATE requester acting on a user in a different state', async () => {
         const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID_2) });
         mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-        await expect(
-          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeStateAdmin()),
-        ).rejects.toThrow(ForbiddenException);
+        await expect(service.updatePermissionOverrides(targetId, makeOverridesDto(), makeStateAdmin())).rejects.toThrow(
+          ForbiddenException,
+        );
       });
 
       it('rejects a ULB requester acting on a user in a different ULB', async () => {
         const targetDoc = makeUserDoc({ ulb: new Types.ObjectId(ULB_ID_2) });
         mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-        await expect(
-          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeUlbAdmin()),
-        ).rejects.toThrow(ForbiddenException);
+        await expect(service.updatePermissionOverrides(targetId, makeOverridesDto(), makeUlbAdmin())).rejects.toThrow(
+          ForbiddenException,
+        );
       });
 
       it('rejects a MoHUA requester acting on a non-MoHUA user', async () => {
         const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID) });
         mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-        await expect(
-          service.updatePermissionOverrides(targetId, makeOverridesDto(), makeMohuaAdmin()),
-        ).rejects.toThrow(ForbiddenException);
+        await expect(service.updatePermissionOverrides(targetId, makeOverridesDto(), makeMohuaAdmin())).rejects.toThrow(
+          ForbiddenException,
+        );
       });
 
       it('allows a MoHUA requester to update another MoHUA user', async () => {
@@ -213,6 +211,13 @@ describe('UsersService', () => {
       expect(Array.isArray(rows)).toBe(true);
       expect(rows.length).toBeGreaterThan(0);
     });
+
+    it('reads each row from the permission the API enforces: reviewer approves, only the admin manages the team', () => {
+      const row = (key: Permission) => service.getMohuaPermissionMatrix().find((r) => r.permissionKey === key);
+      expect(row(Permission.APPROVE_STATE_SUBMISSIONS)).toMatchObject({ admin: true, reviewer: true, viewer: false });
+      expect(row(Permission.FINAL_SUBMIT_TO_DOE)).toMatchObject({ admin: true, reviewer: true, viewer: false });
+      expect(row(Permission.MANAGE_USERS)).toMatchObject({ admin: true, reviewer: false, viewer: false });
+    });
   });
 
   describe('getMohuaMembers()', () => {
@@ -228,12 +233,18 @@ describe('UsersService', () => {
   });
 
   describe('inviteMohuaMember()', () => {
-    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+    const dto = {
+      name: 'A',
+      email: 'a@b.com',
+      mobile: '9999999999',
+      designation: 'Officer',
+      subRole: 'VIEWER' as const,
+    };
 
     it('rejects a non-admin-subrole MoHUA requester', async () => {
-      await expect(
-        service.inviteMohuaMember(dto, makeMohuaAdmin({ xviFcSubrole: 'viewer' })),
-      ).rejects.toThrow(ForbiddenException);
+      await expect(service.inviteMohuaMember(dto, makeMohuaAdmin({ xviFcSubrole: 'viewer' }))).rejects.toThrow(
+        ForbiddenException,
+      );
       expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
     });
 
@@ -269,7 +280,13 @@ describe('UsersService', () => {
   // ─── PMU and DoE teams share the MoHUA team logic (one set of methods, parameterised by team) ───
 
   describe('PMU / DoE team management', () => {
-    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+    const dto = {
+      name: 'A',
+      email: 'a@b.com',
+      mobile: '9999999999',
+      designation: 'Officer',
+      subRole: 'VIEWER' as const,
+    };
     const pmuAdmin = () => makeMohuaAdmin({ role: Role.MOHUA_PMU });
     const doeAdmin = () => makeMohuaAdmin({ role: Role.XVIFC_DOE });
 
@@ -291,9 +308,9 @@ describe('UsersService', () => {
     it("keeps one team's Submitter out of another team's invite", async () => {
       await expect(service.invitePmuMember(dto, makeMohuaAdmin())).rejects.toThrow(ForbiddenException);
       await expect(service.inviteDoeMember(dto, pmuAdmin())).rejects.toThrow(ForbiddenException);
-      await expect(service.inviteDoeMember(dto, makeMohuaAdmin({ role: Role.XVIFC_DOE, xviFcSubrole: 'viewer' }))).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(
+        service.inviteDoeMember(dto, makeMohuaAdmin({ role: Role.XVIFC_DOE, xviFcSubrole: 'viewer' })),
+      ).rejects.toThrow(ForbiddenException);
       expect(mockEmailDomainValidation.domainHasMxRecord).not.toHaveBeenCalled();
     });
 
@@ -331,7 +348,13 @@ describe('UsersService', () => {
   });
 
   describe('inviteStateMember()', () => {
-    const dto = { name: 'A', email: 'a@b.com', mobile: '9999999999', designation: 'Officer', subRole: 'VIEWER' as const };
+    const dto = {
+      name: 'A',
+      email: 'a@b.com',
+      mobile: '9999999999',
+      designation: 'Officer',
+      subRole: 'VIEWER' as const,
+    };
 
     it('restore: sets role back to STATE even if the removed document had drifted to a different role (e.g. MoHUA)', async () => {
       const restoreDto = { ...dto, action: 'restore' as const };
@@ -366,11 +389,7 @@ describe('UsersService', () => {
       const result = await service.issueProfileSaveToken(TARGET_USER_ID);
 
       expect(result.token).toEqual(expect.any(String));
-      expect(mockRedisService.set).toHaveBeenCalledWith(
-        `profile_save_token:${TARGET_USER_ID}`,
-        result.token,
-        120,
-      );
+      expect(mockRedisService.set).toHaveBeenCalledWith(`profile_save_token:${TARGET_USER_ID}`, result.token, 120);
     });
 
     it('throws 404 when the user does not exist', async () => {
@@ -431,16 +450,12 @@ describe('UsersService', () => {
       // The "People & Roles" page edits name/mobile without ever obtaining a saveToken — only
       // the two verification flags need OTP re-proof, not routine contact edits.
       const requester = makeUlbAdmin({ _id: TARGET_USER_ID });
-      mockUserModel.exec
-        .mockResolvedValueOnce(makeUserDoc())
-        .mockResolvedValueOnce(makeUserDoc({ name: 'New Name' }));
+      mockUserModel.exec.mockResolvedValueOnce(makeUserDoc()).mockResolvedValueOnce(makeUserDoc({ name: 'New Name' }));
 
       const result = await service.updateProfileContacts(TARGET_USER_ID, { name: 'New Name' }, requester);
 
       expect(mockRedisService.get).not.toHaveBeenCalled();
-      expect(result).toEqual(
-        expect.objectContaining({ message: 'Profile contacts updated successfully' }),
-      );
+      expect(result).toEqual(expect.objectContaining({ message: 'Profile contacts updated successfully' }));
     });
 
     it('rejects a ULB self-update that changes commissionerEmail with no saveToken — "People & Roles" now has its own OTP step', async () => {
@@ -508,16 +523,12 @@ describe('UsersService', () => {
       const targetDoc = makeUserDoc({ role: Role.STATE, xviFcSubrole: 'admin', state: new Types.ObjectId(STATE_ID) });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
-        BadRequestException,
-      );
+      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(BadRequestException);
     });
 
     it('throws 404 when target user does not exist', async () => {
       mockUserModel.exec.mockResolvedValueOnce(null);
-      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
-        NotFoundException,
-      );
+      await expect(service.softDeleteStateUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(NotFoundException);
     });
   });
 
@@ -662,9 +673,7 @@ describe('UsersService', () => {
 
     it('updates isNodalOfficer when explicitly sent', async () => {
       const targetDoc = makeUserDoc({ role: Role.STATE, state: new Types.ObjectId(STATE_ID), ulb: undefined });
-      mockUserModel.exec
-        .mockResolvedValueOnce(targetDoc)
-        .mockResolvedValueOnce({ ...targetDoc, isNodalOfficer: true });
+      mockUserModel.exec.mockResolvedValueOnce(targetDoc).mockResolvedValueOnce({ ...targetDoc, isNodalOfficer: true });
 
       await service.adminUpdateUser(TARGET_USER_ID, { isNodalOfficer: true }, platformAdmin);
 
@@ -699,9 +708,9 @@ describe('UsersService', () => {
       const targetDoc = makeUserDoc({ role: Role.XVIFC, state: undefined, ulb: undefined });
       mockUserModel.exec.mockResolvedValueOnce(targetDoc);
 
-      await expect(
-        service.adminUpdateUser(TARGET_USER_ID, { role: Role.STATE }, platformAdmin),
-      ).rejects.toThrow(BadRequestException);
+      await expect(service.adminUpdateUser(TARGET_USER_ID, { role: Role.STATE }, platformAdmin)).rejects.toThrow(
+        BadRequestException,
+      );
     });
 
     it('rejects when the new email/mobile collides with another active user', async () => {
@@ -723,9 +732,7 @@ describe('UsersService', () => {
     const platformAdmin = makeStateAdmin({ scope: Scope.ADMIN, state: undefined });
 
     it('rejects a non-ADMIN requester', async () => {
-      await expect(service.adminSoftDeleteUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(
-        ForbiddenException,
-      );
+      await expect(service.adminSoftDeleteUser(TARGET_USER_ID, makeStateAdmin())).rejects.toThrow(ForbiddenException);
       expect(mockUserModel.findById).not.toHaveBeenCalled();
     });
 

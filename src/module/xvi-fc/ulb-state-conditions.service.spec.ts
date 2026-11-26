@@ -23,10 +23,21 @@ describe('UlbStateConditionsService', () => {
   let dfRow: { findOne: jest.Mock };
   let unspentForm: { findOne: jest.Mock };
   let unspentRow: { findOne: jest.Mock };
+  let gtcForm: { findOne: jest.Mock };
   let formJson: { findActiveByDesignYearAndFormId: jest.Mock };
+  let exemptions: { resolveDiscretionary: jest.Mock };
   let service: UlbStateConditionsService;
 
   const form = (currentFormStatus: number) => q({ _id: formId, currentFormStatus, activeDatasetVersion: 3 });
+
+  /** Puts all five State forms at `status` (SFC with an answer). */
+  const allAt = (status: number) => {
+    sfcModel.findOne.mockReturnValue(q({ currentFormStatus: status, data: { isActiveSfc: 'yes' } }));
+    ebForm.findOne.mockReturnValue(form(status));
+    dfForm.findOne.mockReturnValue(form(status));
+    unspentForm.findOne.mockReturnValue(form(status));
+    gtcForm.findOne.mockReturnValue(form(status));
+  };
 
   beforeEach(() => {
     sfcModel = { findOne: jest.fn().mockReturnValue(q(null)) };
@@ -36,11 +47,13 @@ describe('UlbStateConditionsService', () => {
     dfRow = { findOne: jest.fn().mockReturnValue(q(null)) };
     unspentForm = { findOne: jest.fn().mockReturnValue(q(null)) };
     unspentRow = { findOne: jest.fn().mockReturnValue(q(null)) };
+    gtcForm = { findOne: jest.fn().mockReturnValue(q(null)) };
     formJson = {
       findActiveByDesignYearAndFormId: jest.fn().mockResolvedValue({
         data: [{ key: 'isActiveSfc', options: [{ id: 'yes', label: 'Yes' }] }],
       }),
     };
+    exemptions = { resolveDiscretionary: jest.fn().mockResolvedValue(null) };
     service = new UlbStateConditionsService(
       sfcModel as never,
       ebForm as never,
@@ -49,13 +62,15 @@ describe('UlbStateConditionsService', () => {
       dfRow as never,
       unspentForm as never,
       unspentRow as never,
+      gtcForm as never,
       formJson as never,
+      exemptions as never,
     );
   });
 
-  it('shows data at 13 (Under Review by PMU), 5 (Under Review by MoHUA) and 7 (Acknowledged) only', () => {
+  it('counts a State form as approved by PMU at 15 (with the SO), 5 (MoHUA review) and 7 (acknowledged) only', () => {
     expect(ULB_VISIBLE_STATE_FORM_STATUSES).toEqual([
-      FORM_STATUS.UNDER_REVIEW_BY_PMU,
+      FORM_STATUS.UNDER_REVIEW_BY_SO,
       FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
       FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
     ]);
@@ -72,13 +87,10 @@ describe('UlbStateConditionsService', () => {
     expect(unspentRow.findOne).not.toHaveBeenCalled();
   });
 
-  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.RETURNED_BY_PMU, FORM_STATUS.AWAITING_CLAIM_LETTER])(
-    'withholds every value while the form is at status %i',
+  it.each([FORM_STATUS.IN_PROGRESS, FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.RETURNED_BY_PMU])(
+    'withholds every value while the forms are at status %i (not yet approved by PMU)',
     async (status) => {
-      sfcModel.findOne.mockReturnValue(q({ currentFormStatus: status, data: { isActiveSfc: 'yes' } }));
-      ebForm.findOne.mockReturnValue(form(status));
-      dfForm.findOne.mockReturnValue(form(status));
-      unspentForm.findOne.mockReturnValue(form(status));
+      allAt(status);
 
       const result = await service.resolve(stateId, ulbId, yearId);
 
@@ -89,27 +101,32 @@ describe('UlbStateConditionsService', () => {
     },
   );
 
-  it.each([FORM_STATUS.UNDER_REVIEW_BY_PMU, FORM_STATUS.UNDER_REVIEW_BY_MOHUA, FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA])(
-    'is visible at status %i',
-    async (status) => {
-      sfcModel.findOne.mockReturnValue(q({ currentFormStatus: status, data: { isActiveSfc: 'yes' } }));
-      ebForm.findOne.mockReturnValue(form(status));
-      dfForm.findOne.mockReturnValue(form(status));
-      unspentForm.findOne.mockReturnValue(form(status));
+  it.each([
+    FORM_STATUS.UNDER_REVIEW_BY_SO,
+    FORM_STATUS.UNDER_REVIEW_BY_MOHUA,
+    FORM_STATUS.SUBMISSION_ACKNOWLEDGED_BY_MOHUA,
+  ])('is visible once all five forms are at status %i', async (status) => {
+    allAt(status);
 
-      const result = await service.resolve(stateId, ulbId, yearId);
+    const result = await service.resolve(stateId, ulbId, yearId);
 
-      expect(Object.values(result).every((c) => c.visible)).toBe(true);
-    },
-  );
+    expect(Object.values(result).every((c) => c.visible)).toBe(true);
+  });
 
-  it("returns each State-filed value at status 5, reading only this ULB's row", async () => {
-    sfcModel.findOne.mockReturnValue(q({ currentFormStatus: 5, data: { isActiveSfc: 'yes' } }));
-    ebForm.findOne.mockReturnValue(form(5));
+  it('withholds everything while even one form (here GTC) is still with PMU', async () => {
+    allAt(FORM_STATUS.UNDER_REVIEW_BY_SO);
+    gtcForm.findOne.mockReturnValue(form(FORM_STATUS.UNDER_REVIEW_BY_PMU));
+
+    const result = await service.resolve(stateId, ulbId, yearId);
+
+    expect(Object.values(result).every((c) => !c.visible)).toBe(true);
+    expect(ebRow.findOne).not.toHaveBeenCalled();
+  });
+
+  it("returns each State-filed value once all are approved, reading only this ULB's row", async () => {
+    allAt(5);
     ebRow.findOne.mockReturnValue(q({ electedBodyStatus: 'Elected body in place' }));
-    dfForm.findOne.mockReturnValue(form(5));
     dfRow.findOne.mockReturnValue(q({ totalGrantAllocation: 1234567 }));
-    unspentForm.findOne.mockReturnValue(form(5));
     unspentRow.findOne.mockReturnValue(q({ unspentAmount: 250000 }));
 
     const result = await service.resolve(stateId, ulbId, yearId);
@@ -124,10 +141,19 @@ describe('UlbStateConditionsService', () => {
     expect(ebRow.findOne).toHaveBeenCalledWith(expect.objectContaining({ datasetVersion: 3 }));
   });
 
+  it('lets a whole-State SFC exemption stand in for SFC, shown as "Exempted"', async () => {
+    allAt(FORM_STATUS.UNDER_REVIEW_BY_SO);
+    sfcModel.findOne.mockReturnValue(q(null));
+    exemptions.resolveDiscretionary.mockResolvedValue({ currentFormStatus: FORM_STATUS.UNDER_REVIEW_BY_MOHUA });
+
+    const result = await service.resolve(stateId, ulbId, yearId);
+
+    expect(result.sfcStatus).toMatchObject({ visible: true, value: 'Exempted' });
+    expect(result.electedBody.visible).toBe(true);
+  });
+
   it("is visible but empty when the State's form has no row for this ULB", async () => {
-    ebForm.findOne.mockReturnValue(form(5));
-    dfForm.findOne.mockReturnValue(form(5));
-    unspentForm.findOne.mockReturnValue(form(5));
+    allAt(5);
 
     const result = await service.resolve(stateId, ulbId, yearId);
 
@@ -137,7 +163,7 @@ describe('UlbStateConditionsService', () => {
   });
 
   it('falls back to the stored SFC answer when its label config is unavailable', async () => {
-    sfcModel.findOne.mockReturnValue(q({ currentFormStatus: 5, data: { isActiveSfc: 'yes' } }));
+    allAt(5);
     formJson.findActiveByDesignYearAndFormId.mockRejectedValue(new Error('no config'));
 
     const result = await service.resolve(stateId, ulbId, yearId);

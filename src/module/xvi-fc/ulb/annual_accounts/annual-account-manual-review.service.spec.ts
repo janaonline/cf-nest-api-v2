@@ -26,6 +26,7 @@ import { UlbEligibilityService } from '../../../ulb-eligibility/ulb-eligibility.
 import { FormReturnedNotificationService } from '../../common/reminders/form-returned-notification.service';
 import { ExcelService } from '../../../../services/excel/excel.service';
 import type { AuthUser } from '../../../auth/auth-user.interface';
+import { FIRST_ATTEMPT_MESSAGE } from 'src/common/utils/manual-review-cooldown.util';
 
 /** Shape of the second argument passed to Mongoose's updateOne in the tests below. */
 interface MongoUpdateCall {
@@ -201,8 +202,12 @@ describe('AnnualAccountManualReviewService', () => {
 
     const YEAR_ID = '507f1f77bcf86cd799439012';
 
-    // version 2: past the first attempt, so the "second try" rule lets it through by default.
-    const docWithOcr = (ocrInfo: Record<string, unknown>, upload: Record<string, unknown> = { version: 2 }) =>
+    // 4 failed uploads in a row by default: enough for a manual review request.
+    const docWithOcr = (
+      ocrInfo: Record<string, unknown>,
+      upload: Record<string, unknown> = { version: 4 },
+      failedUploadsInARow = 4,
+    ) =>
       mockQuery({
         _id: ACCOUNT_ID,
         ulb: ULB_ID,
@@ -215,6 +220,7 @@ describe('AnnualAccountManualReviewService', () => {
             processingStatus: 'FAILED',
             currentUpload: { uploadId: 'upload-1', ocrInfo, ...upload },
             stateDecision: null,
+            failedUploadsInARow,
           },
         ],
       });
@@ -254,7 +260,9 @@ describe('AnnualAccountManualReviewService', () => {
 
     it('treats a lowercase "fail" as a failed validation', async () => {
       // Already requested, so it stops at the next check: proof the FAIL check let it through.
-      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'fail', isManualReviewRequested: true }));
+      mockAnnualAccountModel.findById.mockReturnValue(
+        docWithOcr({ validationStatus: 'fail', isManualReviewRequested: true }),
+      );
 
       await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
         'Manual review has already been requested for this document.',
@@ -271,21 +279,19 @@ describe('AnnualAccountManualReviewService', () => {
       );
     });
 
-    it('rejects a first-attempt FAIL (v1, retried at most once), same rule as the UI', async () => {
+    it('rejects a FAIL before 4 failed uploads in a row, however often the same file was retried', async () => {
       mockAnnualAccountModel.findById.mockReturnValue(
-        docWithOcr({ validationStatus: 'FAIL' }, { version: 1, retryValidationCount: 1 }),
+        docWithOcr({ validationStatus: 'FAIL' }, { version: 3, retryValidationCount: 5 }, 3),
       );
 
       await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
-        'Please retry or re-upload the document before requesting a manual review.',
+        FIRST_ATTEMPT_MESSAGE,
       );
       expect(mockManualReviewRequestModel.create).not.toHaveBeenCalled();
     });
 
-    it('accepts a v1 FAIL once it has been retried twice', async () => {
-      mockAnnualAccountModel.findById.mockReturnValue(
-        docWithOcr({ validationStatus: 'FAIL' }, { version: 1, retryValidationCount: 2 }),
-      );
+    it('accepts a FAIL once 4 uploads in a row have failed', async () => {
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL' }, { version: 4 }, 4));
 
       await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
 
@@ -306,9 +312,7 @@ describe('AnnualAccountManualReviewService', () => {
     });
 
     it('sets isManualReviewRequested on both the account and upload-history records', async () => {
-      mockAnnualAccountModel.findById.mockReturnValue(
-        docWithOcr({ validationStatus: 'FAIL', jobId: 'ocr-job-1' }),
-      );
+      mockAnnualAccountModel.findById.mockReturnValue(docWithOcr({ validationStatus: 'FAIL', jobId: 'ocr-job-1' }));
       mockUploadHistoryModel.updateOne = jest.fn().mockResolvedValue({ modifiedCount: 1 });
 
       await service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser);
@@ -350,6 +354,7 @@ describe('AnnualAccountManualReviewService', () => {
             manualReviewDecision: { status: 'RETURNED', note: 'Wrong document' },
             postRejectionAttemptsUsed,
             uploadBlockedUntil,
+            failedUploadsInARow: 4,
           },
         ],
       });
@@ -357,9 +362,9 @@ describe('AnnualAccountManualReviewService', () => {
     it('rejects a re-request while self-service attempts remain', async () => {
       mockAnnualAccountModel.findById.mockReturnValue(docReturned(1));
 
-      await expect(
-        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser),
-      ).rejects.toThrow(/already declined.*2 attempt\(s\) left/);
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        /already declined.*2 attempt\(s\) left/,
+      );
     });
 
     it('allows a re-request once all 3 self-service attempts are exhausted', async () => {
@@ -375,9 +380,9 @@ describe('AnnualAccountManualReviewService', () => {
       const future = new Date(Date.now() + 24 * 60 * 60 * 1000);
       mockAnnualAccountModel.findById.mockReturnValue(docReturned(3, future));
 
-      await expect(
-        service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser),
-      ).rejects.toThrow('Too many failed attempts');
+      await expect(service.requestManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', ulbUser)).rejects.toThrow(
+        'Too many failed attempts',
+      );
     });
   });
 
@@ -468,7 +473,13 @@ describe('AnnualAccountManualReviewService', () => {
       );
 
       await expect(
-        service.decideManualReview(ACCOUNT_ID, 'auditedData', 'auditors-report', { decision: 'RETURNED', note: 'x' }, adminUser),
+        service.decideManualReview(
+          ACCOUNT_ID,
+          'auditedData',
+          'auditors-report',
+          { decision: 'RETURNED', note: 'x' },
+          adminUser,
+        ),
       ).rejects.toThrow('This manual review request has already been decided.');
       expect(mockAnnualAccountModel.updateOne).not.toHaveBeenCalled();
     });
@@ -534,7 +545,7 @@ describe('AnnualAccountManualReviewService', () => {
       expect(update.$set?.['documents.$.uploadBlockedUntil']).toBeUndefined();
     });
 
-    it('a second RETURNED just bumps manualReviewRejectionCount and resets attempts — it no longer sets a cooldown itself (that is now the OCR processor\'s job once attempts run out)', async () => {
+    it("a second RETURNED just bumps manualReviewRejectionCount and resets attempts — it no longer sets a cooldown itself (that is now the OCR processor's job once attempts run out)", async () => {
       mockAnnualAccountModel.findById.mockReturnValue(
         docAwaitingReview({ manualReviewRejectionCount: 1, postRejectionAttemptsUsed: 3 }),
       );
@@ -663,7 +674,10 @@ describe('AnnualAccountManualReviewService', () => {
       );
 
       const pipeline = mockManualReviewRequestModel.aggregate.mock.calls.at(-1)?.[0] as Record<string, any>[];
-      const before = pipeline.slice(0, pipeline.findIndex((stage) => stage.$facet));
+      const before = pipeline.slice(
+        0,
+        pipeline.findIndex((stage) => stage.$facet),
+      );
       expect(before.filter((stage) => stage.$lookup).map((stage) => stage.$lookup.from)).toEqual(['ulbs']);
       expect(String(before.find((stage) => stage.$match?.['ulbDoc.state'])?.$match['ulbDoc.state'])).toBe(
         '5dcf9d7416a06aed41c748f0',
@@ -684,9 +698,7 @@ describe('AnnualAccountManualReviewService', () => {
 
     it('computes the overturn rate and warns once enough requests are decided', async () => {
       mockManualReviewRequestModel.aggregate.mockReturnValue(
-        mockQuery([
-          { received: 18, pending: 2, approved: 15, rejected: 1, over48hCount: 3, avgResponseHours: 26.4 },
-        ]),
+        mockQuery([{ received: 18, pending: 2, approved: 15, rejected: 1, over48hCount: 3, avgResponseHours: 26.4 }]),
       );
 
       const result = await service.getManualReviewHistoryStats({ range: 'all' }, adminUser);
@@ -792,9 +804,10 @@ describe('AnnualAccountManualReviewService', () => {
     });
 
     it('builds a workbook from every matching row, unpaginated, including the file/OCR-log links', async () => {
-      mockConfigService.get.mockImplementation((key: string, defaultValue?: string) =>
-        ({ CLIENT_URL: 'https://cityfinance.in', API_BASE_URL_V3: 'https://ocr.example.com/api/v3' })[key] ??
-        defaultValue,
+      mockConfigService.get.mockImplementation(
+        (key: string, defaultValue?: string) =>
+          ({ CLIENT_URL: 'https://cityfinance.in', API_BASE_URL_V3: 'https://ocr.example.com/api/v3' })[key] ??
+          defaultValue,
       );
       const rows = [
         {
