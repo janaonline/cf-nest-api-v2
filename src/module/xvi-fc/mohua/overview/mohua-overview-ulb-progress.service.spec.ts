@@ -28,25 +28,25 @@ describe('MohuaOverviewUlbProgressService.loadFullySubmittedUlbIds', () => {
       query(opts.bank) as never,
     );
 
-  it('counts a ULB only when all five forms are submitted to the State or beyond', async () => {
+  it('counts a ULB only when the State has approved all five forms (8 or later)', async () => {
     const service = build({
       annual: [
-        { ulb: ulbA, sectionType: 'audited', form_status_id: UNDER_REVIEW_BY_STATE },
+        { ulb: ulbA, sectionType: 'audited', form_status_id: APPROVED_BY_STATE },
         { ulb: ulbA, sectionType: 'unaudited', form_status_id: UNDER_REVIEW_BY_MOHUA },
-        { ulb: ulbB, sectionType: 'audited', form_status_id: UNDER_REVIEW_BY_STATE },
+        { ulb: ulbB, sectionType: 'audited', form_status_id: APPROVED_BY_STATE },
         { ulb: ulbB, sectionType: 'unaudited', form_status_id: IN_PROGRESS },
       ],
       dur: [
-        { ulb: ulbA, currentFormStatus: UNDER_REVIEW_BY_STATE },
-        { ulb: ulbB, currentFormStatus: UNDER_REVIEW_BY_STATE },
+        { ulb: ulbA, currentFormStatus: APPROVED_BY_STATE },
+        { ulb: ulbB, currentFormStatus: APPROVED_BY_STATE },
       ],
       slb: [
         { ulb: ulbA, currentFormStatus: APPROVED_BY_STATE },
         { ulb: ulbB, currentFormStatus: APPROVED_BY_STATE },
       ],
       bank: [
-        { ulb: ulbA, currentFormStatus: UNDER_REVIEW_BY_STATE },
-        { ulb: ulbB, currentFormStatus: UNDER_REVIEW_BY_STATE },
+        { ulb: ulbA, currentFormStatus: APPROVED_BY_STATE },
+        { ulb: ulbB, currentFormStatus: APPROVED_BY_STATE },
       ],
     });
 
@@ -55,7 +55,7 @@ describe('MohuaOverviewUlbProgressService.loadFullySubmittedUlbIds', () => {
     expect([...done]).toEqual([String(ulbA)]);
   });
 
-  it('counts SLB only at Approved by State (8), not at an earlier status', async () => {
+  it('counts no form still under State review (3): the State must approve it first', async () => {
     const service = build({
       annual: [
         { ulb: ulbA, sectionType: 'audited', form_status_id: UNDER_REVIEW_BY_STATE },
@@ -72,10 +72,10 @@ describe('MohuaOverviewUlbProgressService.loadFullySubmittedUlbIds', () => {
   it('does not count a ULB that is missing one of the forms entirely', async () => {
     const service = build({
       annual: [
-        { ulb: ulbA, sectionType: 'audited', form_status_id: UNDER_REVIEW_BY_STATE },
-        { ulb: ulbA, sectionType: 'unaudited', form_status_id: UNDER_REVIEW_BY_STATE },
+        { ulb: ulbA, sectionType: 'audited', form_status_id: APPROVED_BY_STATE },
+        { ulb: ulbA, sectionType: 'unaudited', form_status_id: APPROVED_BY_STATE },
       ],
-      dur: [{ ulb: ulbA, currentFormStatus: UNDER_REVIEW_BY_STATE }],
+      dur: [{ ulb: ulbA, currentFormStatus: APPROVED_BY_STATE }],
       slb: [{ ulb: ulbA, currentFormStatus: APPROVED_BY_STATE }],
       bank: [],
     });

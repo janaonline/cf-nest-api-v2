@@ -30,24 +30,40 @@ export const DF_EXCEL_HEADER_MAP: Record<string, string> = {
   devolutionFormula: 'devolutionFormula',
 };
 
-export const DF_REQUIRED_EXCEL_KEYS = [
-  'ulbName',
-  'totalGrantAllocation',
-  'installment1Amount',
-  'installment2Amount',
-  'devolutionFormula',
-] as const;
+// Instalment columns are optional on upload: their values are ignored (always Total / 2).
+export const DF_REQUIRED_EXCEL_KEYS = ['ulbName', 'totalGrantAllocation', 'devolutionFormula'] as const;
 
 // ─── Template / error Excel column definitions ──────────────────────────────
 
+/** Instalments are Total / 2, so they can end in .50. */
+export const DF_INSTALLMENT_NUM_FMT = '#,##0.00';
+
+// Instalment columns are locked formula cells in the template (Total / 2); the State types only the Total.
 export const DF_TEMPLATE_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
-  { label: 'Installment 1 Amount (Rs.)', key: 'installment1Amount', width: 22 },
-  { label: 'Installment 2 Amount (Rs.)', key: 'installment2Amount', width: 22 },
+  {
+    label: 'Installment 1 Amount (Rs.)',
+    key: 'installment1Amount',
+    width: 22,
+    numFmt: DF_INSTALLMENT_NUM_FMT,
+    locked: true,
+  },
+  {
+    label: 'Installment 2 Amount (Rs.)',
+    key: 'installment2Amount',
+    width: 22,
+    numFmt: DF_INSTALLMENT_NUM_FMT,
+    locked: true,
+  },
   { label: 'Total Grant Allocation (Rs.)', key: 'totalGrantAllocation', width: 24 },
   { label: 'Allocation Formula', key: 'devolutionFormula', width: 30 },
 ];
+
+/** Column the template's instalment formulas read from (single letter: the template has under 26 columns). */
+export const DF_TEMPLATE_TOTAL_COLUMN_LETTER = String.fromCharCode(
+  65 + DF_TEMPLATE_HEADERS.findIndex((h) => h.key === 'totalGrantAllocation'),
+);
 
 export const DF_ERROR_EXCEL_HEADERS: RowHeader[] = [
   ...DF_TEMPLATE_HEADERS,
@@ -64,8 +80,8 @@ export const DF_DUMP_HEADERS: RowHeader[] = [
   { label: 'Census Code', key: 'censusCode', width: 15 },
   { label: 'ULB Name', key: 'ulbName', width: 35 },
   { label: 'Total Grant Allocation (Rs.)', key: 'totalGrantAllocation', width: 24 },
-  { label: 'Installment 1 Amount (Rs.)', key: 'installment1Amount', width: 22 },
-  { label: 'Installment 2 Amount (Rs.)', key: 'installment2Amount', width: 22 },
+  { label: 'Installment 1 Amount (Rs.)', key: 'installment1Amount', width: 22, numFmt: DF_INSTALLMENT_NUM_FMT },
+  { label: 'Installment 2 Amount (Rs.)', key: 'installment2Amount', width: 22, numFmt: DF_INSTALLMENT_NUM_FMT },
   { label: 'Allocation Formula', key: 'devolutionFormula', width: 30 },
   { label: 'Dataset Version', key: 'datasetVersion', width: 18 },
   { label: 'Submitted By', key: 'submittedBy', width: 25 },

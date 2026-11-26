@@ -1,4 +1,9 @@
-import { formatHalfRupeesInLakh, formatRupeesInLakh, rupeesToIndianWords } from './xvi-fc-amount-format.util';
+import {
+  amountToIndianWords,
+  formatHalfRupeesInLakh,
+  formatRupeesInLakh,
+  rupeesToIndianWords,
+} from './xvi-fc-amount-format.util';
 
 describe('xvi-fc amount format', () => {
   describe('formatRupeesInLakh', () => {
@@ -12,6 +17,8 @@ describe('xvi-fc amount format', () => {
       [10000000, '100.00'],
       [123456789, '1,234.57'],
       [2461705000, '24,617.05'],
+      [19485981.5, '194.86'], // an instalment of an odd Total
+      [2084999999.5, '20,850.00'],
     ])('%d -> %s', (rupees, expected) => {
       expect(formatRupeesInLakh(rupees)).toBe(expected);
     });
@@ -24,8 +31,20 @@ describe('xvi-fc amount format', () => {
       [123456789, '617.28'],
       [999, '0.00'],
       [1000, '0.01'], // 500 rupees, half-up
+      [19485981.5, '97.43'], // half of an x.50 allocation
     ])('%d -> %s', (rupees, expected) => {
       expect(formatHalfRupeesInLakh(rupees)).toBe(expected);
+    });
+  });
+
+  describe('amountToIndianWords', () => {
+    it.each([
+      [123456789, 'Twelve Crore Thirty-Four Lakh Fifty-Six Thousand Seven Hundred Eighty-Nine'],
+      [19485981.5, 'One Crore Ninety-Four Lakh Eighty-Five Thousand Nine Hundred Eighty-One and Fifty Paise'],
+      [100.5, 'One Hundred and Fifty Paise'],
+      [0, 'Zero'],
+    ])('%d -> %s', (amount, expected) => {
+      expect(amountToIndianWords(amount)).toBe(expected);
     });
   });
 
