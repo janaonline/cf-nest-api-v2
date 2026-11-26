@@ -1,6 +1,7 @@
 import {
   MAX_POST_REJECTION_ATTEMPTS,
   MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW,
+  DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW,
   POST_REJECTION_COOLDOWN_HOURS,
   computeUploadBlockedUntil,
   isAwaitingManualReviewDecision,
@@ -96,8 +97,13 @@ describe('failedUploadRunUpdate / hasEnoughFailedUploads', () => {
   });
 
   it(`allows a manual review only from ${MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row`, () => {
-    expect(hasEnoughFailedUploads({ failedUploadsInARow: 3 })).toBe(false);
-    expect(hasEnoughFailedUploads({ failedUploadsInARow: 4 })).toBe(true);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 2 })).toBe(false);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 3 })).toBe(true);
     expect(hasEnoughFailedUploads(undefined)).toBe(false);
+  });
+
+  it(`allows a DUR manual review from ${DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW} failed uploads in a row`, () => {
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 1 }, DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW)).toBe(false);
+    expect(hasEnoughFailedUploads({ failedUploadsInARow: 2 }, DUR_MIN_FAILED_UPLOADS_FOR_MANUAL_REVIEW)).toBe(true);
   });
 });
