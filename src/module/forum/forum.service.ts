@@ -24,7 +24,12 @@ import { ForumReport, ForumReportReason, ForumReportTargetType } from '../../sch
 import { State } from '../../schemas/state.schema';
 import { Ulb } from '../../schemas/ulb.schema';
 import { User } from '../../schemas/user/user.schema';
-import { resolveForumDisplayName } from '../../common/utils/forum-display-name.util';
+import {
+  FORUM_MOHUA_NAME,
+  FORUM_STATE_ROLES,
+  FORUM_ULB_ROLES,
+  resolveForumDisplayName,
+} from '../../common/utils/forum-display-name.util';
 import { Role } from '../auth/enum/role.enum';
 import { CreateCommentDto, CreateThreadDto, UpdateThreadDto } from './dto/forum.dto';
 import { FORUM_CATEGORIES, FORUM_CATEGORY_SLUGS, FORUM_THREAD_LIST_LIMIT } from './forum.constants';
@@ -66,7 +71,10 @@ export class ForumService implements OnModuleInit {
     @InjectModel(State.name) private readonly stateModel: Model<State>,
   ) {}
 
-  /** Idempotently seeds the canonical categories; existing rows keep their `_id` and `createdAt`. */
+  /**
+   * Inserts any missing canonical category. An existing one is left exactly as it is, so an ADMIN's
+   * edits to its name or description survive restarts.
+   */
   async onModuleInit(): Promise<void> {
     const now = new Date();
     try {
@@ -74,7 +82,7 @@ export class ForumService implements OnModuleInit {
         FORUM_CATEGORIES.map((c) =>
           this.categoryModel.updateOne(
             { slug: c.slug },
-            { $set: { name: c.name, description: c.description }, $setOnInsert: { createdAt: now } },
+            { $setOnInsert: { name: c.name, description: c.description, createdAt: now } },
             { upsert: true },
           ),
         ),
@@ -104,12 +112,16 @@ export class ForumService implements OnModuleInit {
     const search = query?.trim();
     if (search) {
       const pattern = new RegExp(escapeRegex(search), 'i');
-      const commentThreadIds = await this.commentModel.distinct('threadId', { body: pattern, deletedAt: null });
+      const [commentThreadIds, authors] = await Promise.all([
+        this.commentModel.distinct('threadId', { body: pattern, deletedAt: null }),
+        this.authorsMatching(pattern),
+      ]);
       filter.$or = [
         { title: pattern },
         { body: pattern },
         { categorySlug: pattern },
-        { 'user.name': pattern },
+        { 'user.userId': { $in: authors.live } },
+        { 'user.userId': { $in: authors.orphaned }, 'user.name': pattern },
         { _id: { $in: commentThreadIds } },
       ];
     }
@@ -362,7 +374,10 @@ export class ForumService implements OnModuleInit {
     meta: ForumRequestMetadata,
   ): Promise<ForumCommentView> {
     const id = this.toObjectId(threadId, 'Thread not found.');
-    if (!(await this.threadModel.exists({ _id: id }))) throw new NotFoundException('Thread not found.');
+    // Unpublished or deleted threads take no replies (nor counter / activity updates).
+    if (!(await this.threadModel.exists({ _id: id, ...VISIBLE_THREAD }))) {
+      throw new NotFoundException('Thread not found.');
+    }
     let parentId: Types.ObjectId | undefined;
     if (dto.parentId) {
       parentId = new Types.ObjectId(dto.parentId);
@@ -402,20 +417,43 @@ export class ForumService implements OnModuleInit {
     await this.softDeleteComment(comment._id, comment.threadId, user._id);
   }
 
+  /**
+   * Soft-deletes the comment and its still-visible replies as one batch (one `deletionBatch` id).
+   * Replies that were already deleted keep their own batch.
+   */
   async softDeleteComment(id: Types.ObjectId, threadId: Types.ObjectId, deletedBy: string): Promise<void> {
-    const ids = await this.commentTreeIds(id, { $eq: null });
+    const ids = await this.commentTreeIds(id);
+    const now = new Date();
     const result = await this.commentModel.updateMany(
       { _id: { $in: ids }, deletedAt: null },
-      { $set: { deletedAt: new Date(), deletedBy: new Types.ObjectId(deletedBy), updatedAt: new Date() } },
+      {
+        $set: {
+          deletedAt: now,
+          deletedBy: new Types.ObjectId(deletedBy),
+          deletionBatch: new Types.ObjectId(),
+          updatedAt: now,
+        },
+      },
     );
     if (result.modifiedCount) await this.adjustReplies(threadId, -result.modifiedCount);
   }
 
+  /**
+   * Undoes the soft-delete that removed this comment: restores the comment and only the replies
+   * removed in the same batch. A reply deleted on its own (before or after) stays deleted.
+   */
   async restoreComment(id: Types.ObjectId, threadId: Types.ObjectId): Promise<void> {
-    const ids = await this.commentTreeIds(id, { $ne: null });
+    const target = await this.commentModel.findById(id).select('deletedAt deletionBatch').lean().exec();
+    if (!target?.deletedAt) return;
+    const ids = await this.commentTreeIds(id);
+    // Comments deleted before `deletionBatch` existed: one delete wrote one `deletedAt` to its whole
+    // batch, so that timestamp identifies the batch.
+    const sameBatch: FilterQuery<ForumComment> = target.deletionBatch
+      ? { deletionBatch: target.deletionBatch }
+      : { deletionBatch: null, deletedAt: target.deletedAt };
     const result = await this.commentModel.updateMany(
-      { _id: { $in: ids }, deletedAt: { $ne: null } },
-      { $set: { deletedAt: null, deletedBy: null, updatedAt: new Date() } },
+      { _id: { $in: ids }, ...sameBatch },
+      { $set: { deletedAt: null, deletedBy: null, deletionBatch: null, updatedAt: new Date() } },
     );
     if (result.modifiedCount) await this.adjustReplies(threadId, result.modifiedCount);
   }
@@ -438,11 +476,11 @@ export class ForumService implements OnModuleInit {
     return thread;
   }
 
-  /** The comment plus its children and grandchildren whose `deletedAt` matches `deleted`. */
-  private async commentTreeIds(id: Types.ObjectId, deleted: { $eq: null } | { $ne: null }): Promise<Types.ObjectId[]> {
-    const children = await this.commentModel.find({ parentId: id, deletedAt: deleted }).distinct('_id');
+  /** The comment plus all its children and grandchildren, deleted or not (callers filter by state). */
+  private async commentTreeIds(id: Types.ObjectId): Promise<Types.ObjectId[]> {
+    const children = await this.commentModel.find({ parentId: id }).distinct('_id');
     const grandchildren = children.length
-      ? await this.commentModel.find({ parentId: { $in: children }, deletedAt: deleted }).distinct('_id')
+      ? await this.commentModel.find({ parentId: { $in: children } }).distinct('_id')
       : [];
     return [id, ...children, ...grandchildren] as Types.ObjectId[];
   }
@@ -502,40 +540,65 @@ export class ForumService implements OnModuleInit {
       throw new NotFoundException(targetType === 'thread' ? 'Thread not found.' : 'Comment not found.');
     }
     const key = { userId: new Types.ObjectId(userId), targetType, targetId };
-    let delta = 0;
-    if (active) {
-      try {
-        const result = await this.likeModel.updateOne(
-          key,
-          { $setOnInsert: { createdAt: new Date() } },
-          { upsert: true },
-        );
-        delta = result.upsertedCount;
-      } catch (error) {
-        if (!isDuplicateKey(error)) throw error; // concurrent like by the same user: already counted
-      }
-    } else {
-      delta = -(await this.likeModel.deleteOne(key)).deletedCount;
+    const delta = await this.applyMembership(this.likeModel as Model<unknown>, key, active);
+    const count = await this.incrementCounter(model, { _id: targetId }, 'counts.likes', delta, () =>
+      this.likeModel.countDocuments({ targetType, targetId }),
+    );
+    if (count === null) {
+      throw new NotFoundException(targetType === 'thread' ? 'Thread not found.' : 'Comment not found.');
     }
-    const updated = await model
-      .findOneAndUpdate(
-        targetFilter,
-        [{ $set: { 'counts.likes': { $max: [0, { $add: [{ $ifNull: ['$counts.likes', 0] }, delta] }] } } }],
-        { new: true, projection: { counts: 1 } },
-      )
-      .lean()
-      .exec();
-    if (!updated) throw new NotFoundException(targetType === 'thread' ? 'Thread not found.' : 'Comment not found.');
-    return (updated as { counts?: { likes?: number } }).counts?.likes ?? 0;
+    return count;
   }
 
   private async setBookmark(userId: string, threadId: Types.ObjectId, active: boolean): Promise<number> {
     const key = { userId: new Types.ObjectId(userId), threadId };
-    if (active) await this.bookmarkModel.updateOne(key, { $setOnInsert: { createdAt: new Date() } }, { upsert: true });
-    else await this.bookmarkModel.deleteOne(key);
-    const bookmarkCount = await this.bookmarkModel.countDocuments({ threadId });
-    await this.threadModel.updateOne({ _id: threadId }, { $set: { 'counts.bookmarks': bookmarkCount } });
-    return bookmarkCount;
+    const delta = await this.applyMembership(this.bookmarkModel as Model<unknown>, key, active);
+    const count = await this.incrementCounter(this.threadModel, { _id: threadId }, 'counts.bookmarks', delta, () =>
+      this.bookmarkModel.countDocuments({ threadId }),
+    );
+    if (count === null) throw new NotFoundException('Thread not found.');
+    return count;
+  }
+
+  /**
+   * Adds or removes one like / bookmark membership and returns exactly what changed: +1 inserted,
+   * -1 removed, 0 when it was already in that state (including a concurrent duplicate insert).
+   */
+  private async applyMembership(model: Model<unknown>, key: object, active: boolean): Promise<number> {
+    if (!active) return -(await model.deleteOne(key)).deletedCount;
+    try {
+      const result = await model.updateOne(key, { $setOnInsert: { createdAt: new Date() } }, { upsert: true });
+      return result.upsertedCount;
+    } catch (error) {
+      if (!isDuplicateKey(error)) throw error; // a concurrent request by the same user inserted it first
+      return 0;
+    }
+  }
+
+  /**
+   * Applies a membership change to its counter in one atomic `$inc`, so every successful change is
+   * counted exactly once however requests overlap, and returns the new value (null if the target is
+   * gone). No clamp: it would discard real decrements. A negative result can only come from drift
+   * in old data, and is repaired by recounting the memberships.
+   */
+  private async incrementCounter<T>(
+    model: Model<T>,
+    filter: FilterQuery<T>,
+    path: 'counts.likes' | 'counts.bookmarks',
+    delta: number,
+    recount: () => Promise<number>,
+  ): Promise<number | null> {
+    const updated = await model
+      .findOneAndUpdate(filter, { $inc: { [path]: delta } } as never, { new: true, projection: { counts: 1 } })
+      .lean()
+      .exec();
+    if (!updated) return null;
+    const counts = (updated as { counts?: Record<string, number> }).counts ?? {};
+    const value = counts[path.split('.')[1]] ?? 0;
+    if (value >= 0) return value;
+    const actual = await recount();
+    await model.updateOne(filter, { $set: { [path]: actual } } as never);
+    return actual;
   }
 
   private async recordUniqueView(threadId: Types.ObjectId, userId: Types.ObjectId): Promise<number> {
@@ -618,6 +681,40 @@ export class ForumService implements OnModuleInit {
       user: rename(i.user),
       ...(i.lastReply ? { lastReply: rename(i.lastReply) } : {}),
     }));
+  }
+
+  /**
+   * Authors whose name, as the forum shows it, matches a search:
+   * - `live`: existing users whose current display name matches (the ULB name, "State DMA, <State>",
+   *   "MoHUA", or the account name / email for other roles).
+   * - `orphaned`: authors whose user account no longer exists; for them only the name stored on the
+   *   post is known, so the caller matches that instead.
+   */
+  private async authorsMatching(pattern: RegExp): Promise<{ live: Types.ObjectId[]; orphaned: Types.ObjectId[] }> {
+    const [ulbIds, stateIds, storedNameAuthors] = await Promise.all([
+      this.ulbModel.find({ name: pattern }).distinct('_id'),
+      this.stateModel.find({ name: pattern }).distinct('_id'),
+      this.threadModel.distinct('user.userId', { 'user.name': pattern, ...VISIBLE_THREAD }),
+    ]);
+    // Anyone who could carry a matching display name; each is then checked with the real rule.
+    const candidates = await this.userModel
+      .find({
+        $or: [
+          { role: { $in: FORUM_ULB_ROLES }, ulb: { $in: ulbIds } },
+          { role: { $in: FORUM_STATE_ROLES }, state: { $in: stateIds } },
+          ...(pattern.test(FORUM_MOHUA_NAME) ? [{ role: 'MoHUA' }] : []),
+          { name: pattern },
+          { email: pattern },
+        ],
+      })
+      .distinct('_id');
+    const names = await this.displayNames(candidates.map(String));
+    const live = [...names].filter(([, name]) => pattern.test(name)).map(([id]) => new Types.ObjectId(id));
+    const existing = new Set(
+      (await this.userModel.find({ _id: { $in: storedNameAuthors } }).distinct('_id')).map(String),
+    );
+    const orphaned = storedNameAuthors.filter((id) => !existing.has(String(id)));
+    return { live, orphaned };
   }
 
   /** userId → forum display name, in 3 queries (users, then their ULBs and States) whatever the count. */

@@ -34,6 +34,14 @@ export class ForumComment {
   @Prop({ type: Types.ObjectId, ref: 'User', default: null })
   deletedBy?: Types.ObjectId | null;
 
+  /**
+   * Shared by every comment one soft-delete removed (the comment and the replies it cascaded to).
+   * Restoring a comment brings back only its own batch, so a reply deleted separately, before or
+   * after, stays deleted. Null while visible, and on comments deleted before this field existed.
+   */
+  @Prop({ type: Types.ObjectId, default: null })
+  deletionBatch?: Types.ObjectId | null;
+
   @Prop({ type: Date, required: true })
   createdAt!: Date;
 

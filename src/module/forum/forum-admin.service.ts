@@ -150,7 +150,8 @@ export class ForumAdminService {
         reason: r.reason,
         reporter: { userId: reporterId, name: nameOf(reporterId, r.reporter.name), role: r.reporter.role },
         createdAt: r.createdAt.toISOString(),
-        isHidden: r.targetType === 'thread' ? threadHidden : !post || !!post.deletedAt,
+        // A reply in an unpublished / deleted thread is hidden too: nobody can reach it there.
+        isHidden: r.targetType === 'thread' ? threadHidden : threadHidden || !post || !!post.deletedAt,
       };
     });
   }
