@@ -868,7 +868,6 @@ export class DevolutionFormulaExcelService {
         rows,
         'ULB-wise Allocation',
         this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
-        { protectLockedColumns: true },
       );
     }
 
@@ -886,7 +885,6 @@ export class DevolutionFormulaExcelService {
       rows,
       'ULB-wise Allocation',
       this.buildDfTemplateValidations(maxFormulaLength, maxGrantAllocation),
-      { protectLockedColumns: true },
     );
   }
 
@@ -907,6 +905,7 @@ export class DevolutionFormulaExcelService {
 
   private buildDfTemplateValidations(maxFormulaLength: number, totalMoHUAAllocation?: number): ExcelColumnValidation[] {
     const maxText = totalMoHUAAllocation !== undefined ? `, and cannot exceed ₹${totalMoHUAAllocation}` : '';
+    // The instalment columns' read-only rule comes from their `readOnly` header (ExcelService).
     return [
       {
         key: 'totalGrantAllocation',
@@ -919,7 +918,7 @@ export class DevolutionFormulaExcelService {
             allowBlank: true,
             formulae: [`OR(${cell}="",AND(ISNUMBER(${cell}),MOD(${cell},1)=0,${cell}>=0${maxClause}))`],
             showErrorMessage: true,
-            errorStyle: 'error',
+            errorStyle: 'stop',
             errorTitle: 'Invalid Total Grant Allocation',
             error: `Total Grant Allocation must be a whole number (no decimals), ≥ 0${maxText}. Installment 1 and Installment 2 are calculated as half of it.`,
           };
@@ -935,7 +934,7 @@ export class DevolutionFormulaExcelService {
             allowBlank: false,
             formulae: [`AND(${cellLetter}${row}<>"",LEN(${cellLetter}${row})<=${maxFormulaLength})`],
             showErrorMessage: true,
-            errorStyle: 'error',
+            errorStyle: 'stop',
             errorTitle: 'Allocation Formula Required',
             error: `Allocation Formula is required and must not exceed ${maxFormulaLength} characters.`,
           };
