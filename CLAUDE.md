@@ -214,7 +214,11 @@ src/
 │                        # live in schemas/forum/. Data is in its own database `FORUM_DB_NAME` (default `forum_db`,
 │                        # same server, connection `forum_db` via `ForumDbModule`/`useDb`); users stay in the main
 │                        # DB. Collections keep the old standalone-app names (threads, comments, ...), so existing
-│                        # forum_db data is read in place. The 3 canonical categories are upserted on boot.
+│                        # forum_db data is read in place. The 3 canonical categories are inserted on boot only
+│                        # when missing, so ADMIN edits to them persist. A comment soft-delete stamps one
+│                        # `deletionBatch` on everything it removes; restore undoes only that batch, so a reply
+│                        # deleted on its own stays deleted. Like / bookmark counters change by `$inc` of the
+│                        # exact membership change (no read-then-write), so concurrent clicks cannot drift them.
 │                        # Authors show as a forum display name, not the account name: the ULB name, "State DMA,
 │                        # <State>" or "MoHUA" (`common/utils/forum-display-name.util.ts` — the one rule, also
 │                        # returned as `forumDisplayName` in the login/refresh user payload). It is resolved live
