@@ -19,6 +19,8 @@ A history row (`ClaimLetterHistoryService.recordTransition`) is written **only**
 - The MoHUA Section Officer's approve (`UNDER_REVIEW_BY_SO` → `UNDER_REVIEW_BY_MOHUA`, 15 → 5) and return
   (15 → `RETURNED_BY_SO`, 16), in `mohua/claim-letters`. The return's row lists every reopened form, row
   and rejected exemption in `rejectedSourceRefs`. See ADR 0007.
+- A letter returned with another letter's State form (15 → 16, `DEPENDENCY_INVALIDATION`), written in that
+  return's transaction with the reopened forms in `rejectedSourceRefs` (ADR 0009).
 - Abandon (`IN_PROGRESS` → `IN_PROGRESS`, a same-status transition recorded purely for audit
   purposes, in `ClaimLetterAssemblyService.abandonDraftRaw`).
 
@@ -39,14 +41,17 @@ It is **never** written for:
 - A letter-details change does the same, but only with `confirmSignedFileRemoval: true` (409
   `SIGNED_FILE_REMOVAL_NOT_CONFIRMED` otherwise, so the UI can warn first). An unchanged save never
   clears it.
+- An SO return that reopens a State form clears every draft's signed letter and merged final PDF, with a
+  `stateFormReturnNotice` the State sees until its next upload (ADR 0009).
 
 **Submit preconditions**, checked before its transaction: not abandoned (409; abandon keeps
 `IN_PROGRESS`, so the filter also requires `isAbandoned: false`); signed file present; letter details
-complete (formjson-required fields); this is the active batch (ADR 0004); fresh State gate and
+complete (formjson-required fields); fresh State gate and
 per-ULB eligibility of every batch ULB (failing ULBs named); every non-optional enclosure in
 `meta.mergeDocuments` present (400 `FINAL_PDF_INCOMPLETE`); and the `finalPdfSourceKey` the State
-reviewed still matches the current merge sources (409 `FINAL_PDF_OUTDATED`); and, for the last batch
-slot (`CLAIM_LETTER_MAX_BATCH_NUMBER`), no expected ULB left out of every batch. The update filter also
+reviewed still matches the current merge sources (409 `FINAL_PDF_OUTDATED`); and, once open letters fill every place under the cap, no expected ULB left out of
+every letter (ADR 0009). Inside the transaction, after the per-State guard, the State forms the letter relied on
+must still be at 15, 5 or 7. The update filter also
 pins `signedClaimFile.path`, `letterDetailsUpdatedAt` and `finalClaimPdf.sourceKey` as read, so a
 re-upload, a letter-details save or an older merge finishing late makes it fail (the last one as 409
 `FINAL_PDF_OUTDATED`) instead of submitting content nobody reviewed. The submitted

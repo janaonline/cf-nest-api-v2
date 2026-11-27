@@ -13,7 +13,7 @@ export interface ClaimLetterContentHashInput {
   state: string;
   year: string;
   installment: 1 | 2;
-  batchNumber: 1 | 2 | 3;
+  batchNumber: number;
   version: number;
   children: ClaimLetterContentHashChildInput[];
 }

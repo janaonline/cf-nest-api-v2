@@ -10,7 +10,8 @@ the generated PDF through e-Office for signature and uploads the signed PDF back
   claim letter's ULB rows by `copyClaimLetterUlbsToOm` (`om-ulbs.helper.ts`) inside the SO's approve transaction
   (`mohua/claim-letters` `approve()`). Generate stamps `om` on them. The unique `{state, year, installment, ulbId}`
   index is the OM lock. A letter verified before this collection existed gets its rows on Generate (same helper, no
-  backfill script needed).
+  backfill script needed). Nothing deletes these rows: a ULB that already holds one from another letter (stale data)
+  makes the approve a 409 naming the ULBs and that letter (`findOmUlbsHeldElsewhere`), read only on that failure.
 - `xvifc_oms` (`schemas/xvi-fc/mohua/om.schema.ts`): status DRAFT (MoHUA filling the boxes) → GENERATED → SIGNED_UPLOADED.
   One per claim letter (unique). On Generate it gets `sequence` (per State + year) and `refNo` `OM/<STATE>/<FY>/<n>`,
   and `content` is frozen: every later download re-renders that frozen content, so no file is stored.
@@ -62,4 +63,5 @@ Submissions figure) next to `totalAmount`, the amount claimed.
 ## Not built yet
 
 DoE status (dropped from the history until DoE tracking exists), excluding cities from an OM (an OM always covers
-every ULB on its letter), moving the claim letter past 5.
+every ULB on its letter), moving the claim letter past 5. MoHUA's return of a verified letter (5 -> 6), when built,
+must delete that letter's `xvifc_om_ulbs` rows, or its ULBs can never be approved again this installment.

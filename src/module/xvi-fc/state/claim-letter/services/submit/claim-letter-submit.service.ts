@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, Model, Types } from 'mongoose';
+import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { FORM_STATUS, getFormStatusLabel } from 'src/common/constants/form-status.constants';
 import type { AuthUser } from 'src/module/auth/auth-user.interface';
 import { ExpectedUlbSetService } from 'src/module/xvi-fc/common/services/expected-ulb-set.service';
@@ -16,16 +16,26 @@ import {
   type ClaimLetterFinalPdf,
   type ClaimLetterInstallment,
 } from 'src/schemas/xvi-fc/state/claim-letter-batch.schema';
+import { PmuUndoEligibilityService } from 'src/module/xvi-fc/common/services/pmu-undo-eligibility.service';
 import {
   CLAIM_LETTER_ABANDONED_MESSAGE,
   CLAIM_LETTER_EDIT_LOCK_LEASE_MINUTES,
-  CLAIM_LETTER_MAX_BATCH_NUMBER,
 } from '../../constants/claim-letter.constants';
+import {
+  countOpenLetters,
+  isEveryPlaceTaken,
+  isLastDraft,
+  openLettersFilter,
+  type OpenLetterStatus,
+  ulbsLeftOutMessage,
+} from '../../helpers/claim-letter-cap.helpers';
+import { toClaimLetterBusyConflict } from '../../helpers/claim-letter-concurrency.helpers';
 import { mapClaimLetterBatchDocToSummary } from '../../helpers/claim-letter-summary.helpers';
 import type { ClaimLetterBatchSummary } from '../../types/claim-letter.types';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 import { ClaimLetterEligibilityService } from '../eligibility/claim-letter-eligibility.service';
 import { ClaimLetterFinalPdfService, finalPdfOutdatedError } from '../final-pdf/claim-letter-final-pdf.service';
+import { ClaimLetterFormJsonService } from '../form-json/claim-letter-form-json.service';
+import { ClaimLetterFormStatusService } from '../form-status/claim-letter-form-status.service';
 import { ClaimLetterHistoryService } from '../history/claim-letter-history.service';
 import { ClaimLetterLetterDetailsService } from '../letter-details/claim-letter-letter-details.service';
 
@@ -47,6 +57,9 @@ type SubmitBatch = {
   editLockAcquiredAt?: Date | null;
 };
 
+/** A submit that passed the last-draft rule only because another draft was open, re-checked in the transaction. */
+type LeftOutRecheck = { maxClaimLetters: number; message: string };
+
 /** Submitted already: with the SO (15), or moved on by the SO to MoHUA review (5) or approved (7). */
 const ALREADY_SUBMITTED_STATUSES: number[] = [
   FORM_STATUS.UNDER_REVIEW_BY_SO,
@@ -62,8 +75,10 @@ export class ClaimLetterSubmitService {
     private readonly expectedUlbSetService: ExpectedUlbSetService,
     private readonly historyService: ClaimLetterHistoryService,
     private readonly letterDetailsService: ClaimLetterLetterDetailsService,
-    private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly finalPdfService: ClaimLetterFinalPdfService,
+    private readonly formJsonConfigService: ClaimLetterFormJsonService,
+    private readonly formStatusService: ClaimLetterFormStatusService,
+    private readonly undoEligibility: PmuUndoEligibilityService,
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(ClaimLetterBatch.name)
     private readonly batchModel: Model<ClaimLetterBatchDocument>,
@@ -102,18 +117,21 @@ export class ClaimLetterSubmitService {
       { state: parent.state, year: parent.year, letterDetails: parent.letterDetails },
       'submitting',
     );
-    await this.activeBatchService.assertActive(parent);
     await this.assertBatchStillEligible(parent);
     await this.finalPdfService.assertReviewedKey(parent, finalPdfSourceKey);
-    if (parent.batchNumber === CLAIM_LETTER_MAX_BATCH_NUMBER) {
-      await this.assertFinalBatchIsComplete(String(parent.state), String(parent.year), parent.installment);
-    }
+    const leftOutRecheck = await this.assertNoUlbLeftOut(parent);
 
     const userOid = new Types.ObjectId(user._id);
     const session = await this.connection.startSession();
     let updated: SubmitBatch | null = null;
     try {
       session.startTransaction();
+
+      // One State's submits and SO decisions run one at a time; a State form returned since the gate check above
+      // refuses the submit here (ADR 0009).
+      await this.undoEligibility.touchClaimUndoGuard(parent.state, parent.year, session);
+      await this.formStatusService.assertStateFormsStillReady(parent._id, session);
+      if (leftOutRecheck) await this.assertStillNotLastDraft(parent, leftOutRecheck, session);
 
       updated = await this.batchModel
         .findOneAndUpdate(
@@ -168,7 +186,7 @@ export class ClaimLetterSubmitService {
       await session.commitTransaction();
     } catch (err) {
       await session.abortTransaction();
-      throw err;
+      throw toClaimLetterBusyConflict(err);
     } finally {
       await session.endSession();
     }
@@ -221,9 +239,27 @@ export class ClaimLetterSubmitService {
     );
   }
 
-  /** The last batch slot is the State's last chance this installment: refuse it while any expected ULB
-   *  is in no batch, eligible or not, so none is stranded. */
-  private async assertFinalBatchIsComplete(stateId: string, yearId: string, installment: number): Promise<void> {
+  /**
+   * Once open letters (drafts, under review, approved) take every place under the cap, a ULB in no letter can only go
+   * into a draft, so the last draft is not submitted while one remains, eligible or not (ADR 0009). A ULB a draft
+   * holds counts as in a letter; if that draft later drops it, its own submit is refused here.
+   * Returns the check to repeat inside the transaction when another draft let this one pass, else null.
+   */
+  private async assertNoUlbLeftOut(parent: SubmitBatch): Promise<LeftOutRecheck | null> {
+    const stateId = String(parent.state);
+    const yearId = String(parent.year);
+    const installment = parent.installment;
+    const [maxClaimLetters, openLetters] = await Promise.all([
+      this.formJsonConfigService.loadMaxClaimLetters(yearId),
+      this.batchModel
+        .find(openLettersFilter({ state: parent.state, year: parent.year, installment }))
+        .select('_id currentFormStatus')
+        .lean<OpenLetterStatus[]>()
+        .exec(),
+    ]);
+    const { openLetterCount, otherDraftCount } = countOpenLetters(openLetters, String(parent._id));
+    if (!isEveryPlaceTaken(openLetterCount, maxClaimLetters)) return null;
+
     const expectedUlbs = await this.expectedUlbSetService.resolve(stateId, yearId);
     const remainingUlbIds = await this.eligibilityService.resolveRemainingUlbIds(
       stateId,
@@ -231,18 +267,34 @@ export class ClaimLetterSubmitService {
       installment,
       expectedUlbs.map((u) => u.ulbId),
     );
-    if (remainingUlbIds.length === 0) return;
+    if (remainingUlbIds.length === 0) return null;
 
     const remainingUlbIdSet = new Set(remainingUlbIds);
     const remainingNames = expectedUlbs.filter((u) => remainingUlbIdSet.has(u.ulbId)).map((u) => u.name);
-    const shown = remainingNames.slice(0, 10);
-    const suffix = remainingNames.length > shown.length ? ` and ${remainingNames.length - shown.length} more` : '';
+    const message = ulbsLeftOutMessage(maxClaimLetters, remainingNames);
+    if (isLastDraft(openLetterCount, otherDraftCount, maxClaimLetters)) throw new BadRequestException(message);
+    return { maxClaimLetters, message };
+  }
 
-    throw new BadRequestException(
-      `This is the final claim batch (Batch ${CLAIM_LETTER_MAX_BATCH_NUMBER} of ${CLAIM_LETTER_MAX_BATCH_NUMBER}) — ` +
-        `${remainingNames.length} ULB(s) are not yet included in any batch and must be added before this batch can ` +
-        `be submitted: ${shown.join(', ')}${suffix}.`,
-    );
+  /**
+   * Two drafts submitted one after the other could each count the other as still open. After the per-State guard,
+   * this read sees an earlier submit (or the guard conflicts), so the last draft cannot pass that way.
+   */
+  private async assertStillNotLastDraft(
+    parent: SubmitBatch,
+    recheck: LeftOutRecheck,
+    session: ClientSession,
+  ): Promise<void> {
+    const openLetters = await this.batchModel
+      .find(openLettersFilter(parent))
+      .select('_id currentFormStatus')
+      .session(session)
+      .lean<OpenLetterStatus[]>()
+      .exec();
+    const { openLetterCount, otherDraftCount } = countOpenLetters(openLetters, String(parent._id));
+    if (isLastDraft(openLetterCount, otherDraftCount, recheck.maxClaimLetters)) {
+      throw new BadRequestException(recheck.message);
+    }
   }
 
   /** Mirrors ClaimLetterAssemblyService's lease cutoff. */

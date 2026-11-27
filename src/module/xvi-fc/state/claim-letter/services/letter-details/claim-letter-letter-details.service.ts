@@ -22,7 +22,6 @@ import { buildClaimLetterPermissions, canEditClaimLetter } from '../../helpers/c
 import { resolveSfcExemptionStatus } from '../../helpers/claim-letter-sfc-exemption.helpers';
 import type { SaveClaimLetterLetterDetailsDto } from '../../dto/save-claim-letter-letter-details.dto';
 import { ClaimLetterFormJsonService, type ClaimLetterFormConfig } from '../form-json/claim-letter-form-json.service';
-import { ClaimLetterActiveBatchService } from '../active-batch/claim-letter-active-batch.service';
 
 export const SIGNED_FILE_REMOVAL_NOT_CONFIRMED = 'SIGNED_FILE_REMOVAL_NOT_CONFIRMED';
 export const LETTER_DETAILS_CHANGED = 'LETTER_DETAILS_CHANGED';
@@ -89,17 +88,15 @@ export class ClaimLetterLetterDetailsService {
     private readonly formJsonConfigService: ClaimLetterFormJsonService,
     private readonly validation: DynamicFormValidationService,
     private readonly hydrator: FormQuestionHydratorService,
-    private readonly activeBatchService: ClaimLetterActiveBatchService,
     private readonly exemptionResolver: ExemptionResolverService,
     @InjectModel(ClaimLetterBatch.name) private readonly batchModel: Model<ClaimLetterBatchDocument>,
   ) {}
 
   async get(claimLetterId: string, user: AuthUser): Promise<XviFcApiResponse<ClaimLetterLetterDetailsView>> {
     const parent = await this.loadParent(claimLetterId, user);
-    const [formConfig, previous, blockedBy, sfcExempted] = await Promise.all([
+    const [formConfig, previous, sfcExempted] = await Promise.all([
       this.formJsonConfigService.loadFormConfig(String(parent.year)),
       this.findPrevious(parent),
-      this.activeBatchService.resolveBlockingBatchNumber(parent),
       this.isSfcExempted(parent),
     ]);
     const saved = parent.letterDetails ?? {};
@@ -109,7 +106,7 @@ export class ClaimLetterLetterDetailsService {
     const view: ClaimLetterLetterDetailsView = {
       ...this.toState(parent, saved, formConfig, questions),
       fields: this.hydrator.hydrate(questions, saved),
-      canEdit: canEdit && blockedBy === null,
+      canEdit,
       previous: previous && this.toPrevious(previous, formConfig),
     };
     return xviFcSuccess('Claim letter details fetched.', view);
@@ -126,7 +123,6 @@ export class ClaimLetterLetterDetailsService {
         `Letter details cannot be edited when status is ${getFormStatusLabel(parent.currentFormStatus)}.`,
       );
     }
-    await this.activeBatchService.assertActive(parent);
     const [formConfig, sfcExempted] = await Promise.all([
       this.formJsonConfigService.loadFormConfig(String(parent.year)),
       this.isSfcExempted(parent),

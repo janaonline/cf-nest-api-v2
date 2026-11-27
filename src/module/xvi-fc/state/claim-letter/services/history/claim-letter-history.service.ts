@@ -44,35 +44,40 @@ export class ClaimLetterHistoryService {
   ) {}
 
   async recordTransition(input: RecordClaimLetterTransitionInput, session?: ClientSession): Promise<void> {
-    await this.historyModel.create(
-      [
-        {
-          claimLetter: input.claimLetter,
-          state: input.state,
-          year: input.year,
-          installment: input.installment,
-          batchNumber: input.batchNumber,
-          version: input.version,
-          fromStatus: input.fromStatus,
-          toStatus: input.toStatus,
-          actionSource: input.actionSource,
-          reason: input.reason ?? null,
-          submittedFiles: input.submittedFiles ?? null,
-          rejectedSourceRefs: input.rejectedSourceRefs ?? [],
-          changedBy: input.changedBy,
-          requestId: input.requestId,
-          ipAddress: input.ipAddress ?? null,
-          userAgent: input.userAgent ?? null,
-        },
-      ],
+    await this.recordTransitions([input], session);
+  }
+
+  /** One insert for several letters' transitions (a return that also returns the State's other letters). */
+  async recordTransitions(inputs: readonly RecordClaimLetterTransitionInput[], session?: ClientSession): Promise<void> {
+    if (!inputs.length) return;
+    await this.historyModel.insertMany(
+      inputs.map((input) => ({
+        claimLetter: input.claimLetter,
+        state: input.state,
+        year: input.year,
+        installment: input.installment,
+        batchNumber: input.batchNumber,
+        version: input.version,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        actionSource: input.actionSource,
+        reason: input.reason ?? null,
+        submittedFiles: input.submittedFiles ?? null,
+        rejectedSourceRefs: input.rejectedSourceRefs ?? [],
+        changedBy: input.changedBy,
+        requestId: input.requestId,
+        ipAddress: input.ipAddress ?? null,
+        userAgent: input.userAgent ?? null,
+      })),
       { session: session ?? null },
     );
   }
 
-  /** The letter's latest return (SO or MoHUA): its remark, what it reopened and who did it (name populated). */
+  /** The letter's latest return (SO or MoHUA, or with another letter's State form): its remark, what it reopened
+   *  and who did it (name populated). */
   async findLatestRejection(claimLetter: Types.ObjectId): Promise<ClaimLetterRejection | null> {
     return this.historyModel
-      .findOne({ claimLetter, actionSource: 'CLAIM_LETTER_REJECTION' })
+      .findOne({ claimLetter, actionSource: { $in: ['CLAIM_LETTER_REJECTION', 'DEPENDENCY_INVALIDATION'] } })
       .sort({ changedAt: -1 })
       .select('reason rejectedSourceRefs changedBy changedAt')
       .populate<{ changedBy: { name?: string } | null }>('changedBy', 'name')

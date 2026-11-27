@@ -1,5 +1,6 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Schema as MongooseSchema, Types } from 'mongoose';
+import { CLAIM_LETTER_MAX_LETTERS_LIMIT } from 'src/module/xvi-fc/state/claim-letter/constants/claim-letter.constants';
 import {
   ClaimLetterEligibilitySourceSnapshot,
   ClaimLetterEligibilitySourceSnapshotSchema,
@@ -110,7 +111,7 @@ export class ClaimLetterBatchUlb {
   @Prop({ type: Number, enum: [1, 2], required: true, immutable: true })
   installment!: ClaimLetterInstallment;
 
-  @Prop({ type: Number, enum: [1, 2, 3], required: true, immutable: true })
+  @Prop({ type: Number, min: 1, max: CLAIM_LETTER_MAX_LETTERS_LIMIT, required: true, immutable: true })
   batchNumber!: ClaimLetterBatchNumber;
 
   @Prop({ type: Number, required: true, immutable: true })

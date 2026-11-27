@@ -1,7 +1,11 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { FormJsonService } from 'src/master/form-json/form-json.service';
 import type { FieldConfig } from 'src/module/xvi-fc/common/types/field-config.type';
-import { CLAIM_LETTER_FORM_ID } from '../../constants/claim-letter.constants';
+import {
+  CLAIM_LETTER_DEFAULT_MAX_LETTERS,
+  CLAIM_LETTER_FORM_ID,
+  CLAIM_LETTER_MAX_LETTERS_LIMIT,
+} from '../../constants/claim-letter.constants';
 import {
   CLAIM_LETTER_CLAIM_AMOUNT_EDITABLE_META_KEY,
   CLAIM_LETTER_VARIANCE_LOWER_META_KEY,
@@ -26,6 +30,17 @@ export interface ClaimLetterFormConfig {
   letterConfigured: boolean;
   /** Documents merged after the signed letter into the final claim letter, in order (`meta.mergeDocuments`). */
   mergeDocuments: ClaimLetterMergeDocument[];
+  /** Claim letters a State may hold per installment (`meta.maxClaimLetters`, 1-10, default 3; ADR 0009). */
+  maxClaimLetters: number;
+}
+
+/** The claim-amount switch and band of a loaded config. */
+export function claimAmountConfigOf(config: ClaimLetterFormConfig): ClaimLetterClaimAmountConfig {
+  return {
+    editable: config.claimAmountEditable,
+    lowerPercent: config.varianceLowerPercent,
+    upperPercent: config.varianceUpperPercent,
+  };
 }
 
 /** One supporting document of the final PDF: read from form `formId`, first `fileKeys` entry set. */
@@ -39,6 +54,7 @@ export interface ClaimLetterMergeDocument {
 const LETTER_KEYS_META_KEY = 'letterDetailKeys';
 const LETTER_SKIP_PREFILL_META_KEY = 'letterDetailSkipPrefill';
 const MERGE_DOCUMENTS_META_KEY = 'mergeDocuments';
+const MAX_CLAIM_LETTERS_META_KEY = 'maxClaimLetters';
 const SIGNED_FILE_KEY = 'signedClaimFile';
 
 @Injectable()
@@ -71,6 +87,7 @@ export class ClaimLetterFormJsonService {
         letterSkipPrefill: this.resolveStringSet(formJson.meta?.[LETTER_SKIP_PREFILL_META_KEY]),
         letterConfigured: letterQuestions.length > 0,
         mergeDocuments: this.resolveMergeDocuments(formJson.meta?.[MERGE_DOCUMENTS_META_KEY]),
+        maxClaimLetters: this.resolveMaxClaimLetters(formJson.meta?.[MAX_CLAIM_LETTERS_META_KEY]),
       };
     } catch (err) {
       if (err instanceof NotFoundException) {
@@ -84,6 +101,7 @@ export class ClaimLetterFormJsonService {
           letterSkipPrefill: new Set(),
           letterConfigured: false,
           mergeDocuments: [],
+          maxClaimLetters: CLAIM_LETTER_DEFAULT_MAX_LETTERS,
         };
       }
       throw err;
@@ -92,8 +110,25 @@ export class ClaimLetterFormJsonService {
 
   /** Convenience wrapper over loadFormConfig for callers that only need the claim-amount switch and band. */
   async loadClaimAmountConfig(yearId: string): Promise<ClaimLetterClaimAmountConfig> {
-    const { claimAmountEditable, varianceLowerPercent, varianceUpperPercent } = await this.loadFormConfig(yearId);
-    return { editable: claimAmountEditable, lowerPercent: varianceLowerPercent, upperPercent: varianceUpperPercent };
+    return claimAmountConfigOf(await this.loadFormConfig(yearId));
+  }
+
+  /** Convenience wrapper over loadFormConfig for callers that only need the letter cap. */
+  async loadMaxClaimLetters(yearId: string): Promise<number> {
+    return (await this.loadFormConfig(yearId)).maxClaimLetters;
+  }
+
+  /** Missing means the default; anything but a whole number 1-10 is logged and ignored. */
+  private resolveMaxClaimLetters(raw: unknown): number {
+    if (raw === undefined) return CLAIM_LETTER_DEFAULT_MAX_LETTERS;
+    if (typeof raw === 'number' && Number.isInteger(raw) && raw >= 1 && raw <= CLAIM_LETTER_MAX_LETTERS_LIMIT) {
+      return raw;
+    }
+    this.logger.warn(
+      `Claim letter meta.${MAX_CLAIM_LETTERS_META_KEY} must be a whole number 1-${CLAIM_LETTER_MAX_LETTERS_LIMIT}; ` +
+        `got ${JSON.stringify(raw)}, using ${CLAIM_LETTER_DEFAULT_MAX_LETTERS}.`,
+    );
+    return CLAIM_LETTER_DEFAULT_MAX_LETTERS;
   }
 
   private resolvePercent(meta: Record<string, unknown> | undefined, key: string, fallback: number): number {

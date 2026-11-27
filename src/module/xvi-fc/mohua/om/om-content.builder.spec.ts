@@ -14,7 +14,9 @@ const letter = {
       {
         key: 'C.',
         condition: [{ runs: [{ text: 'Number of duly constituted ULBs' }] }],
-        status: [{ runs: [{ text: '<SFC>', placeholder: true, field: 'sfcName', hint: 'x' }, { text: '107/123 (87%)' }] }],
+        status: [
+          { runs: [{ text: '<SFC>', placeholder: true, field: 'sfcName', hint: 'x' }, { text: '107/123 (87%)' }] },
+        ],
       },
     ],
   },
@@ -57,7 +59,9 @@ describe('buildOmContent', () => {
       'Rs. 1,56,200.00 lakh for the FY 2026-27',
       '1st installment of Rs. 5,000.00 lakh may be recommended for FY 2026-27 for 12 eligible ULBs.',
     ]);
-    expect(text(c.closing[0])).toContain('Rs. 5,000.00 lakh is recommended for 12 eligible ULBs out of the total 123 ULBs');
+    expect(text(c.closing[0])).toContain(
+      'Rs. 5,000.00 lakh is recommended for 12 eligible ULBs out of the total 123 ULBs',
+    );
     expect(c.claimLetterRefNo).toBe('CL/AP/2026-27/1-2');
   });
 
@@ -82,7 +86,7 @@ describe('buildOmContent', () => {
           {
             text:
               'The table below lists eligible ULBs included in the current claim batch. Other eligible ULBs may be ' +
-              'included in subsequent claims.',
+              'included in other claim letters.',
           },
         ],
       },
@@ -99,7 +103,7 @@ describe('buildOmContent', () => {
     expect(text(content({ yearAllocation: null }).recommendation[1])).toBe('Not available');
   });
 
-  it("dates today in IST", () => {
+  it('dates today in IST', () => {
     expect(todayIso(new Date('2026-11-03T20:00:00.000Z'))).toBe('2026-11-04');
   });
 });
