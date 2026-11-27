@@ -37,6 +37,8 @@ import { AdcModule } from './master/adc/adc.module';
 import { XvFcReviewModule } from './module/xv-fc/xv-fc-review/ulb/xv-fc-review.module';
 import { XvFcReviewAdminModule } from './module/xv-fc/xv-fc-review/admin/xv-fc-review-admin.module';
 import { DigitizationDbModule } from './core/database/digitization-db.module';
+import { ForumDbModule } from './core/database/forum-db.module';
+import { ForumModule } from './module/forum/forum.module';
 /** Fails app startup before Mongoose ever attempts a connection if MONGO_URI/MONGO_DB_NAME are
  *  missing or blank — MongooseModule.forRootAsync below would otherwise pass `undefined` through
  *  silently and only surface the problem once something tries to read/write. */
@@ -110,6 +112,7 @@ function getQueryCaller(): string {
     // digitization_db shares the same physical connection as the default one above
     // (same server, different db name) via Connection#useDb — see DigitizationDbModule.
     DigitizationDbModule,
+    ForumDbModule,
     UsersModule,
     ResourcesSectionModule,
     NodeMailerModule,
@@ -135,6 +138,7 @@ function getQueryCaller(): string {
     XvFcReviewModule,
     XvFcReviewAdminModule,
     DataCollectionModule,
+    ForumModule,
   ],
   controllers: [AppController],
   providers: [
