@@ -36,14 +36,18 @@ export const ULB_VISIBLE_STATE_FORM_STATUSES: readonly number[] = [...MOHUA_STAT
 /** Shown as the SFC value when the State is exempt from SFC rather than filing it. */
 const SFC_EXEMPTED_VALUE = 'Exempted';
 
+/** The ULB sees only whether it has a 14th FC unspent balance, never the amount the State filed. */
+const FC_UNSPENT_YES = 'Yes';
+const FC_UNSPENT_NO = 'No';
+
 /** One State-supplied condition as the ULB sees it. `value`/`amount` are null unless `visible`. */
 export interface UlbStateCondition {
   form_status: string;
   form_status_id: number;
   visible: boolean;
-  /** Text answer (SFC, Elected Body). */
+  /** Text answer (SFC, Elected Body, FC Unspent Yes / No). */
   value: string | null;
-  /** Whole rupees (FC Unspent, ULB-wise allocation). */
+  /** Whole rupees (ULB-wise allocation). */
   amount: number | null;
 }
 
@@ -55,6 +59,7 @@ export interface UlbStateConditions {
 }
 
 type LeanForm = { _id: Types.ObjectId; currentFormStatus?: number; activeDatasetVersion?: number };
+type LeanUnspentForm = LeanForm & { isFcUnspent?: boolean | null };
 type LeanSfc = { currentFormStatus?: number; data?: Record<string, unknown> };
 
 /**
@@ -93,7 +98,11 @@ export class UlbStateConditionsService {
         formType: DF_FORM_TYPE,
         isActive: true,
       }),
-      this.findForm(this.unspentFormModel, { ...live, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false }),
+      this.unspentFormModel
+        .findOne({ ...live, formType: FC_UNSPENT_STATE_FORM_TYPE, isDeleted: false })
+        .select('_id currentFormStatus isFcUnspent')
+        .lean<LeanUnspentForm>()
+        .exec(),
       this.findForm(this.gtcModel, {
         ...live,
         installment: MOHUA_OVERVIEW_INSTALMENT,
@@ -178,16 +187,25 @@ export class UlbStateConditionsService {
     return { ...condition, amount: typeof row?.totalGrantAllocation === 'number' ? row.totalGrantAllocation : null };
   }
 
-  private async fcUnspent(form: LeanForm | null, ulbId: Types.ObjectId, visible: boolean): Promise<UlbStateCondition> {
+  /**
+   * Yes when the State declared an unspent balance (isFcUnspent) and listed this ULB with an amount above 0; No
+   * otherwise (a nil declaration, the ULB not listed, or no amount). The amount itself is never sent to the ULB.
+   */
+  private async fcUnspent(
+    form: LeanUnspentForm | null,
+    ulbId: Types.ObjectId,
+    visible: boolean,
+  ): Promise<UlbStateCondition> {
     const condition = this.base(form?.currentFormStatus, visible);
     if (!form || !visible) return condition;
+    if (form.isFcUnspent !== true) return { ...condition, value: FC_UNSPENT_NO };
 
     const row = await this.unspentRowModel
       .findOne({ form: form._id, isActive: true, ulbId })
       .select('unspentAmount')
       .lean<{ unspentAmount?: number | null }>()
       .exec();
-    return { ...condition, amount: typeof row?.unspentAmount === 'number' ? row.unspentAmount : null };
+    return { ...condition, value: (row?.unspentAmount ?? 0) > 0 ? FC_UNSPENT_YES : FC_UNSPENT_NO };
   }
 
   private findForm<T>(model: Model<T>, filter: FilterQuery<T>): Promise<LeanForm | null> {

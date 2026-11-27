@@ -84,7 +84,7 @@ src/
 ├── module/xvi-fc/       # 16th Finance Commission forms (state/ULB/MoHUA roles)
 │   ├── ulb/             # annual_accounts (OCR via ANNUAL_ACCOUNT_PROCESSING_QUEUE), bank-account, unspent-balance-disclosure
 │   │                    # `GET xvi-fc/form-status/:ulbId/:yearId` also returns `stateConditions` — the State-filed SFC answer, Elected
-│   │                    # Body status, FC Unspent balance and ULB-wise allocation for that one ULB (`ulb-state-conditions.service.ts`). Each
+│   │                    # Body status, FC Unspent Yes/No (per ULB; the amount is not sent) and ULB-wise allocation for that one ULB (`ulb-state-conditions.service.ts`). Each
 │   │                    # entry is `visible: false` with no value until PMU has approved all 5 State forms (each in `ULB_VISIBLE_STATE_FORM_STATUSES`:
 │   │                    # 15, 5 and 7; a whole-State SFC exemption counts for SFC); a ULB user may only read its own ULB
 │   ├── state/           # sfc-status, elected-urban-local-bodies, devolution-formula, fc-unspent-declaration, gtc, dashboard,

@@ -29,6 +29,9 @@ describe('UlbStateConditionsService', () => {
   let service: UlbStateConditionsService;
 
   const form = (currentFormStatus: number) => q({ _id: formId, currentFormStatus, activeDatasetVersion: 3 });
+  /** The FC Unspent form at 5, on the Yes-branch (the State declared an unspent balance) or the nil declaration. */
+  const unspentDeclared = (isFcUnspent: boolean) =>
+    unspentForm.findOne.mockReturnValue(q({ _id: formId, currentFormStatus: 5, isFcUnspent }));
 
   /** Puts all five State forms at `status` (SFC with an answer). */
   const allAt = (status: number) => {
@@ -125,6 +128,7 @@ describe('UlbStateConditionsService', () => {
 
   it("returns each State-filed value once all are approved, reading only this ULB's row", async () => {
     allAt(5);
+    unspentDeclared(true);
     ebRow.findOne.mockReturnValue(q({ electedBodyStatus: 'Elected body in place' }));
     dfRow.findOne.mockReturnValue(q({ totalGrantAllocation: 1234567 }));
     unspentRow.findOne.mockReturnValue(q({ unspentAmount: 250000 }));
@@ -134,7 +138,8 @@ describe('UlbStateConditionsService', () => {
     expect(result.sfcStatus).toMatchObject({ visible: true, value: 'Yes' });
     expect(result.electedBody).toMatchObject({ visible: true, value: 'Elected body in place' });
     expect(result.devolution).toMatchObject({ visible: true, amount: 1234567 });
-    expect(result.fcUnspent).toMatchObject({ visible: true, amount: 250000 });
+    // Only whether this ULB has an unspent balance, never the amount.
+    expect(result.fcUnspent).toMatchObject({ visible: true, value: 'Yes', amount: null });
     for (const row of [ebRow, dfRow, unspentRow]) {
       expect(row.findOne).toHaveBeenCalledWith(expect.objectContaining({ form: formId, ulbId }));
     }
@@ -152,14 +157,35 @@ describe('UlbStateConditionsService', () => {
     expect(result.electedBody.visible).toBe(true);
   });
 
-  it("is visible but empty when the State's form has no row for this ULB", async () => {
+  it("is visible but empty when the State's form has no row for this ULB (FC Unspent reads No)", async () => {
     allAt(5);
+    unspentDeclared(true);
 
     const result = await service.resolve(stateId, ulbId, yearId);
 
     expect(result.electedBody).toMatchObject({ visible: true, value: null });
     expect(result.devolution).toMatchObject({ visible: true, amount: null });
-    expect(result.fcUnspent).toMatchObject({ visible: true, amount: null });
+    expect(result.fcUnspent).toMatchObject({ visible: true, value: 'No', amount: null });
+  });
+
+  it("reads FC Unspent as No for an amount of 0 on this ULB's row", async () => {
+    allAt(5);
+    unspentDeclared(true);
+    unspentRow.findOne.mockReturnValue(q({ unspentAmount: 0 }));
+
+    const result = await service.resolve(stateId, ulbId, yearId);
+
+    expect(result.fcUnspent).toMatchObject({ visible: true, value: 'No', amount: null });
+  });
+
+  it("reads FC Unspent as No on the State's nil declaration, without looking up any row", async () => {
+    allAt(5);
+    unspentDeclared(false);
+
+    const result = await service.resolve(stateId, ulbId, yearId);
+
+    expect(result.fcUnspent).toMatchObject({ visible: true, value: 'No', amount: null });
+    expect(unspentRow.findOne).not.toHaveBeenCalled();
   });
 
   it('falls back to the stored SFC answer when its label config is unavailable', async () => {
